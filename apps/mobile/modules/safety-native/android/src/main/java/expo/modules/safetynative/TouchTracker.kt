@@ -1,0 +1,141 @@
+package expo.modules.safetynative
+
+import android.app.Activity
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.util.Log
+import android.view.KeyEvent
+import android.view.KeyboardShortcutGroup
+import android.view.Menu
+import android.view.MotionEvent
+import android.view.Window
+import androidx.core.content.ContextCompat
+import uniffi.safety.UserAction
+import java.lang.ref.WeakReference
+
+/**
+ * Tracks `Context.last_touch_ms` (CONTRACTS §6) and reports owner unlocks to the engine.
+ *
+ * Android does not let an app observe touches system-wide, so the signal is assembled from what is
+ * observable:
+ *  (a) touches/keys inside our own activities — a `Window.Callback` wrapper on the activity window
+ *      (installed via [attach]; every `dispatchTouchEvent` passes through it before the view tree);
+ *  (b) `ACTION_USER_PRESENT` (keyguard dismissed by the owner) and `ACTION_SCREEN_ON` while the device
+ *      is not locked (a notification lighting a locked screen is NOT counted);
+ *  (c) `KeyguardManager.isDeviceLocked` transitions locked → unlocked, polled from the tick loops and
+ *      on screen events (covers smart-lock / no-credential devices that never broadcast USER_PRESENT).
+ * (b) and (c) also push `UserAction.PHONE_UNLOCKED` (deduplicated within a few seconds), which clears a
+ * grab inside its 2-minute window.
+ */
+class TouchTracker(private val rt: SafetyRuntime) {
+  companion object {
+    private const val TAG = "TouchTracker"
+    private const val PERSIST_EVERY_MS = 60_000L
+    private const val UNLOCK_DEDUPE_MS = 3_000L
+  }
+
+  /** Wall-clock ms of the last observed touch / interactive unlock; 0 = never (unknown). */
+  @Volatile var lastTouchMs: Long = rt.prefs.lastTouchMs
+    private set
+
+  private val keyguard: KeyguardManager? get() = rt.app.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+  @Volatile private var lastPersistMs = 0L
+  @Volatile private var lastUnlockPushMs = 0L
+  @Volatile private var wasLocked: Boolean? = null
+  private var started = false
+  private var attached: WeakReference<Activity>? = null
+
+  /** Registers the unlock/screen receivers on the application context. Idempotent. */
+  @Synchronized
+  fun start() {
+    if (started) return
+    runCatching {
+      ContextCompat.registerReceiver(
+        rt.app, receiver,
+        IntentFilter().apply { addAction(Intent.ACTION_USER_PRESENT); addAction(Intent.ACTION_SCREEN_ON); addAction(Intent.ACTION_SCREEN_OFF) },
+        ContextCompat.RECEIVER_NOT_EXPORTED,
+      )
+      wasLocked = isLocked()
+      started = true
+    }.onFailure { Log.w(TAG, "registerReceiver failed", it) }
+  }
+
+  fun isLocked(): Boolean = runCatching { keyguard?.isDeviceLocked ?: false }.getOrDefault(false)
+
+  /** Any user interaction we can see. */
+  fun touched(now: Long = rt.now()) {
+    lastTouchMs = now
+    if (now - lastPersistMs >= PERSIST_EVERY_MS) {
+      lastPersistMs = now
+      runCatching { rt.prefs.lastTouchMs = now }
+    }
+  }
+
+  /** Owner unlocked the device (USER_PRESENT or keyguard locked → unlocked). */
+  fun unlocked(now: Long = rt.now()) {
+    touched(now)
+    if (now - lastUnlockPushMs < UNLOCK_DEDUPE_MS) return
+    lastUnlockPushMs = now
+    runCatching { rt.pushAction(UserAction.PHONE_UNLOCKED) }.onFailure { Log.w(TAG, "pushAction(PHONE_UNLOCKED) failed", it) }
+  }
+
+  /** Cheap keyguard poll; call from the 1 s / 60 s tick loops and on screen events. */
+  fun poll(now: Long = rt.now()) {
+    val locked = isLocked()
+    val prev = wasLocked
+    wasLocked = locked
+    if (prev == true && !locked) unlocked(now)
+  }
+
+  // ---- in-app touches -------------------------------------------------------
+
+  /** Wraps the activity window's callback so every touch/key event updates [lastTouchMs]. Idempotent. */
+  fun attach(activity: Activity) {
+    if (attached?.get() === activity) return
+    activity.runOnUiThread {
+      val window = activity.window ?: return@runOnUiThread
+      val current = window.callback ?: return@runOnUiThread
+      if (current is TouchCallback) { attached = WeakReference(activity); return@runOnUiThread }
+      window.callback = TouchCallback(current)
+      attached = WeakReference(activity)
+      Log.d(TAG, "touch hook attached to ${activity.javaClass.simpleName}")
+    }
+  }
+
+  private inner class TouchCallback(private val base: Window.Callback) : Window.Callback by base {
+    override fun dispatchTouchEvent(event: MotionEvent?): Boolean {
+      if (event != null && event.actionMasked == MotionEvent.ACTION_DOWN) touched()
+      return base.dispatchTouchEvent(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
+      if (event != null && event.action == KeyEvent.ACTION_DOWN) touched()
+      return base.dispatchKeyEvent(event)
+    }
+
+    // Java default methods are not generated by Kotlin's `by` delegation; forward them explicitly.
+    override fun onProvideKeyboardShortcuts(data: MutableList<KeyboardShortcutGroup>?, menu: Menu?, deviceId: Int) {
+      base.onProvideKeyboardShortcuts(data, menu, deviceId)
+    }
+
+    override fun onPointerCaptureChanged(hasCapture: Boolean) {
+      base.onPointerCaptureChanged(hasCapture)
+    }
+  }
+
+  // ---- screen / unlock broadcasts ----------------------------------------------
+
+  private val receiver = object : BroadcastReceiver() {
+    override fun onReceive(c: Context?, i: Intent) {
+      val now = rt.now()
+      when (i.action) {
+        Intent.ACTION_USER_PRESENT -> { wasLocked = false; unlocked(now) }
+        Intent.ACTION_SCREEN_ON -> { if (!isLocked()) touched(now); poll(now) }
+        Intent.ACTION_SCREEN_OFF -> poll(now)
+      }
+    }
+  }
+}

@@ -42,6 +42,7 @@ class CheckInActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     rt = SafetyRuntime.get(this)
+    rt.touch.attach(this)
     phrase = intent.getStringExtra(EXTRA_PHRASE) ?: ""
     if (Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(true); setTurnScreenOn(true) } else {
       @Suppress("DEPRECATION")

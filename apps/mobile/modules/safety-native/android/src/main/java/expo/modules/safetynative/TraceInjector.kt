@@ -11,7 +11,8 @@ import uniffi.safety.MotionSample
 
 /**
  * Debug-only replay of a recorded trace through the real engine:
- * `{ "speed": 10, "motion": [{tMs,ax,ay,az,gx,gy,gz}], "context": [{tMs,awayFromHome,separated,hourLocal,screenOn,activity,batteryPct,speedMps}], "audio": [{tMs,scream,shout,glass}] }`
+ * `{ "speed": 10, "motion": [{tMs,ax,ay,az,gx,gy,gz,rx?,ry?,rz?}], "context": [{tMs,awayFromHome,separated,hourLocal,screenOn,activity,batteryPct,speedMps,lastTouchMs?,distanceHomeM?,samplingFull?}], "audio": [{tMs,scream,shout,glass}] }`
+ * (rx/ry/rz default to 0 = no gyro; lastTouchMs 0 = unknown; distanceHomeM -1 = unknown; samplingFull defaults to true.)
  * Timestamps are re-based to "now"; `speed` > 1 replays faster than wall clock. Events are dispatched
  * exactly like live ones (notifications, uploads), so use a test backend.
  */
@@ -37,17 +38,28 @@ class TraceInjector(private val rt: SafetyRuntime) {
         val batch = ArrayList<MotionSample>()
         while (mi < motion.length() && motion.getJSONObject(mi).getLong("tMs") - t0 + base <= simNow) {
           val m = motion.getJSONObject(mi++)
-          batch.add(MotionSample((m.getLong("tMs") - t0 + base).toULong(), m.getDouble("ax").toFloat(), m.getDouble("ay").toFloat(), m.getDouble("az").toFloat(),
-            m.optDouble("gx", 0.0).toFloat(), m.optDouble("gy", 0.0).toFloat(), m.optDouble("gz", 1.0).toFloat()))
+          batch.add(
+            MotionSample(
+              tMs = (m.getLong("tMs") - t0 + base).toULong(),
+              ax = m.getDouble("ax").toFloat(), ay = m.getDouble("ay").toFloat(), az = m.getDouble("az").toFloat(),
+              gx = m.optDouble("gx", 0.0).toFloat(), gy = m.optDouble("gy", 0.0).toFloat(), gz = m.optDouble("gz", 1.0).toFloat(),
+              rx = m.optDouble("rx", 0.0).toFloat(), ry = m.optDouble("ry", 0.0).toFloat(), rz = m.optDouble("rz", 0.0).toFloat(),
+            ),
+          )
         }
         if (batch.isNotEmpty()) engine.pushMotion(batch)
         while (ci < context.length() && context.getJSONObject(ci).getLong("tMs") - t0 + base <= simNow) {
           val c = context.getJSONObject(ci++)
-          engine.pushContext(Context(
-            (c.getLong("tMs") - t0 + base).toULong(), c.optBoolean("awayFromHome", true), c.optBoolean("separated", false),
-            c.optInt("hourLocal", 1).toUByte(), c.optBoolean("screenOn", false), activity(c.optString("activity", "unknown")),
-            c.optInt("batteryPct", 80).toUByte(), c.optDouble("speedMps", -1.0).toFloat(),
-          ))
+          val touch = c.optLong("lastTouchMs", 0L)
+          engine.pushContext(
+            Context(
+              tMs = (c.getLong("tMs") - t0 + base).toULong(), awayFromHome = c.optBoolean("awayFromHome", true), separated = c.optBoolean("separated", false),
+              hourLocal = c.optInt("hourLocal", 1).toUByte(), screenOn = c.optBoolean("screenOn", false), activity = activity(c.optString("activity", "unknown")),
+              batteryPct = c.optInt("batteryPct", 80).toUByte(), speedMps = c.optDouble("speedMps", -1.0).toFloat(),
+              lastTouchMs = (if (touch > 0L) touch - t0 + base else 0L).toULong(),
+              distanceHomeM = c.optDouble("distanceHomeM", -1.0).toFloat(), samplingFull = c.optBoolean("samplingFull", true),
+            ),
+          )
         }
         while (ai < audio.length() && audio.getJSONObject(ai).getLong("tMs") - t0 + base <= simNow) {
           val a = audio.getJSONObject(ai++)

@@ -89,4 +89,8 @@ class Prefs(context: Context) {
   var learningEnabled: Boolean
     get() = getBool("learning", true)
     set(v) = putBool("learning", v)
+  /** Last observed touch / interactive unlock (wall-clock ms; 0 = never). Written at most once a minute by TouchTracker. */
+  var lastTouchMs: Long
+    get() = getLong("last_touch", 0L)
+    set(v) = putLong("last_touch", v)
 }

@@ -8,14 +8,17 @@ import android.os.BatteryManager
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import uniffi.safety.EngineEvent
 import uniffi.safety.EscalationLevel
 import uniffi.safety.HmmState
-import uniffi.safety.Placement
+import uniffi.safety.IncidentRecord
 import uniffi.safety.Snapshot
 import uniffi.safety.UserAction
 
@@ -31,6 +34,7 @@ interface RuntimeEventSink {
 class SafetyRuntime private constructor(val app: Context) {
   companion object {
     private const val TAG = "SafetyRuntime"
+    private const val SIGNAL_RING_MAX = 64
     @Volatile private var instance: SafetyRuntime? = null
     fun get(context: Context): SafetyRuntime =
       instance ?: synchronized(this) { instance ?: SafetyRuntime(context.applicationContext).also { instance = it } }
@@ -39,6 +43,7 @@ class SafetyRuntime private constructor(val app: Context) {
 
   val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   val prefs = Prefs(app)
+  val touch = TouchTracker(this)
   val engine = EngineHolder(app, prefs)
   val supabase = SupabaseRest(prefs)
   val alerts = AlertManager(app, this)
@@ -60,6 +65,16 @@ class SafetyRuntime private constructor(val app: Context) {
   @Volatile var separated = false
   @Volatile var baselineWalkStartMs = 0L
   @Volatile var awayFromHome = false
+  /** Sampling mode requested by the engine (EngineEvent.SamplingRateChanged): true = 50 Hz + gyro. */
+  @Volatile var samplingFull = false
+  /** The live foreground service, if any (set in onCreate/onDestroy), so engine events can reconfigure sensors. */
+  @Volatile var sensing: SensingService? = null
+
+  /** Native-side copy of the last SignalIncident records (newest last, capped); the engine keeps the authoritative log. */
+  private val signalRing = ArrayDeque<IncidentRecord>()
+  private var dashboardJob: Job? = null
+
+  init { touch.start() }
 
   val isDebuggable: Boolean get() = (app.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
   val configured: Boolean get() = prefs.serverConfig != null
@@ -97,11 +112,34 @@ class SafetyRuntime private constructor(val app: Context) {
     "riskBand" to (s?.riskBand?.toInt() ?: 0),
     "evidence" to (s?.evidence ?: ""),
     "baselineSeconds" to (s?.baselineSeconds?.toLong() ?: 0L),
-    "placement" to when (s?.placement) {
-      Placement.POCKET -> "pocket"; Placement.HAND -> "hand"; Placement.BAG -> "bag"; else -> "unknown"
-    },
+    "placement" to placementName(s?.placement),
     "nightMode" to (s?.nightMode ?: false),
   )
+
+  // ---- dashboard (CONTRACTS §6) ---------------------------------------------
+
+  fun recentSignals(): List<IncidentRecord> = synchronized(signalRing) { signalRing.toList() }
+
+  /** `{ metrics: LiveMetrics, incidents: IncidentRecord[] }` from the engine; falls back to the native ring if the engine is unavailable. */
+  fun dashboardMap(): Map<String, Any?> {
+    val e = try { engine.get() } catch (t: Throwable) { null }
+    val metrics = runCatching { e?.metrics()?.toMap() }.getOrNull() ?: emptyMetricsMap(now())
+    val incidents = runCatching { e?.incidentLog()?.map { it.toMap() } }.getOrNull() ?: recentSignals().map { it.toMap() }
+    return mapOf("metrics" to metrics, "incidents" to incidents)
+  }
+
+  /** While on, emits `dashboard` once a second (only while the JS sink is attached). */
+  @Synchronized
+  fun setDashboardStreaming(on: Boolean) {
+    if (!on) { dashboardJob?.cancel(); dashboardJob = null; return }
+    if (dashboardJob?.isActive == true) return
+    dashboardJob = scope.launch {
+      while (isActive) {
+        if (sink != null) runCatching { emit("dashboard", dashboardMap()) }.onFailure { Log.w(TAG, "dashboard emit failed", it) }
+        delay(1_000L)
+      }
+    }
+  }
 
   fun hmmName(s: HmmState) = when (s) {
     HmmState.NORMAL -> "normal"; HmmState.IMPAIRED -> "impaired"; HmmState.INCIDENT -> "incident"; HmmState.UNRESPONSIVE -> "unresponsive"
@@ -130,6 +168,8 @@ class SafetyRuntime private constructor(val app: Context) {
         emit("checkRequested", mapOf("phrase" to ev.phrase, "deadlineMs" to ev.deadlineMs.toLong()))
       }
       is EngineEvent.HeadsUp -> {
+        // Also emitted immediately on a grab (v1.1). Deliberately NO key release and NO location here:
+        // the engine follows up with UnlockLocation after 2 min unless PhoneUnlocked/BiometricDismiss.
         alerts.cancelCheckIn()
         scope.launch {
           val id = openIncident("heads_up", ev.summary)
@@ -176,6 +216,24 @@ class SafetyRuntime private constructor(val app: Context) {
         alerts.pushToGroup(id, "battery_dying", "${displayName()}'s phone is dying", "Battery almost empty during night mode", critical = false)
       }
       is EngineEvent.LocationIntervalChanged -> locationUploader.setIntervalSeconds(ev.seconds.toLong())
+      is EngineEvent.SamplingRateChanged -> {
+        val full = ev.gyro || ev.hz.toInt() > 15
+        Log.i(TAG, "sampling → ${ev.hz} Hz gyro=${ev.gyro} (full=$full)")
+        samplingFull = full
+        sensing?.applySampling()
+      }
+      is EngineEvent.SignalIncident -> {
+        synchronized(signalRing) { signalRing.addLast(ev.record); while (signalRing.size > SIGNAL_RING_MAX) signalRing.removeFirst() }
+        emit("signalIncident", ev.record.toMap())
+      }
+      is EngineEvent.CallOptionAvailable -> {
+        scope.launch {
+          // Attach to the running incident (heads-up/unlock already opened it); open one only if somehow missing.
+          val id = currentIncidentId ?: openIncident("heads_up", ev.summary)
+          alerts.pushToGroup(id, "call_option", "No response for 10 minutes", ev.summary, critical = true)
+        }
+        emit("callOption", mapOf("summary" to ev.summary))
+      }
     }
   }
 

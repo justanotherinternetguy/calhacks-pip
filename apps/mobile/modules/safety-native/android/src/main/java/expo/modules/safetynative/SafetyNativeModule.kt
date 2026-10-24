@@ -68,16 +68,26 @@ class SafetyNativeModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("SafetyNative")
-    Events("statusChanged", "checkRequested", "escalation", "snatch", "sos")
+    Events("statusChanged", "checkRequested", "escalation", "snatch", "sos", "dashboard", "signalIncident", "callOption")
 
     OnCreate {
       runCatching {
         rt.sink = object : RuntimeEventSink {
           override fun emit(name: String, payload: Map<String, Any?>) { this@SafetyNativeModule.sendEvent(name, payload) }
         }
+        appContext.currentActivity?.let { rt.touch.attach(it) }
       }
     }
-    OnDestroy { SafetyRuntime.peek()?.sink = null }
+    // The activity may be recreated while the module lives on; re-hook the window callback each time it comes to the front.
+    OnActivityEntersForeground {
+      runCatching {
+        appContext.currentActivity?.let { rt.touch.attach(it) }
+        rt.touch.touched()   // bringing the app forward is an interaction in itself
+      }
+    }
+    OnDestroy {
+      SafetyRuntime.peek()?.let { it.sink = null; it.setDashboardStreaming(false) }
+    }
 
     // ---- setup -----------------------------------------------------------
 
@@ -144,6 +154,11 @@ class SafetyNativeModule : Module() {
     }
 
     AsyncFunction("getStatus") { rt.statusMap() }
+
+    // ---- dashboard (CONTRACTS §6) --------------------------------------------
+
+    AsyncFunction("getDashboard") { rt.dashboardMap() }
+    AsyncFunction("setDashboardStreaming") { on: Boolean -> rt.setDashboardStreaming(on) }
 
     // ---- check-in / SOS ------------------------------------------------------
 

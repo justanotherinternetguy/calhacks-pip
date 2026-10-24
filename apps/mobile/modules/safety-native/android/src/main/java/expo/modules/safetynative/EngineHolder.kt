@@ -24,12 +24,14 @@ import javax.crypto.spec.GCMParameterSpec
  * files/model.toml) or falls back to the bundled assets/model-v1.toml. The baseline blob is
  * stored AES-GCM encrypted under an Android Keystore key that does not require user
  * authentication, so it can be read while the phone is locked (e.g. after a reboot at 3 am).
+ * Since v1.1 the blob also carries the engine's incident log, so it is autosaved every 5 min and
+ * explicitly on night-session stop (SensingService.stopNightSession → saveNow).
  */
 class EngineHolder(private val context: Context, private val prefs: Prefs) {
   companion object {
     private const val TAG = "EngineHolder"
     private const val KEY_ALIAS = "safe.baseline.aesgcm"
-    private const val AUTOSAVE_MS = 10 * 60 * 1000L
+    private const val AUTOSAVE_MS = 5 * 60 * 1000L
   }
 
   private val modelFile = File(context.filesDir, "model.toml")
