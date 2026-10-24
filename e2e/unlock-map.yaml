@@ -1,0 +1,22 @@
+# Unlock: P(danger) ≥ T_unlock, no dismiss → epoch key released, map visible on the friend screen (web mock friend).
+# appId must match apps/mobile/app.json (android.package / ios.bundleIdentifier).
+appId: com.safe.mobile
+tags: [debug]
+---
+- launchApp:
+    clearState: false
+- openLink: "safe://debug/inject?trace=unlock-map"
+- extendedWaitUntil:
+    visible: "You okay?"
+    timeout: 60000
+- extendedWaitUntil:
+    visible: "Location shared with your friends"
+    timeout: 180000
+# debug builds expose a local friend view of the same incident
+- openLink: "safe://debug/friend-view"
+- extendedWaitUntil:
+    visible:
+      id: "incident-map"
+    timeout: 30000
+- assertVisible: "I'm going"
+- assertVisible: "Ring phone"

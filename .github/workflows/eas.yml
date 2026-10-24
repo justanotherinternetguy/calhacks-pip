@@ -1,0 +1,40 @@
+name: eas build
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform
+        type: choice
+        default: android
+        options: [android, ios, all]
+      profile:
+        description: EAS build profile (eas.json)
+        type: choice
+        default: development
+        options: [development, preview, production]
+
+jobs:
+  eas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: pnpm install --frozen-lockfile || pnpm install
+      - name: eas build
+        working-directory: apps/mobile
+        run: >
+          eas build
+          --platform ${{ inputs.platform }}
+          --profile ${{ inputs.profile }}
+          --non-interactive --no-wait

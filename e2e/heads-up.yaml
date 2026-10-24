@@ -1,0 +1,16 @@
+# Heads-up: check-in ignored for 90 s → friends get a no-location heads-up.
+# appId must match apps/mobile/app.json (android.package / ios.bundleIdentifier).
+appId: com.safe.mobile
+tags: [debug]
+---
+- launchApp:
+    clearState: false
+- openLink: "safe://debug/inject?trace=heads-up"
+- extendedWaitUntil:
+    visible: "You okay?"
+    timeout: 60000
+# do nothing; the check-in times out
+- extendedWaitUntil:
+    visible: "Friends have been given a heads-up"
+    timeout: 120000
+- assertVisible: "No location shared yet"

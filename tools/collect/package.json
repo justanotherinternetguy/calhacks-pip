@@ -1,0 +1,21 @@
+{
+  "name": "collect",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Consented data-collection export + labeling for the safe sim harness",
+  "bin": {
+    "safe-export": "./src/export.ts",
+    "safe-label": "./src/label.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "export": "node src/export.ts",
+    "label": "node src/label.ts"
+  },
+  "engines": { "node": ">=24" },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^5.9.0"
+  }
+}

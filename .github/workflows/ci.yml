@@ -1,0 +1,108 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: rust (test + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: cargo test
+        run: cargo test --workspace --manifest-path core/Cargo.toml
+      - name: cargo clippy -D warnings
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets --manifest-path core/Cargo.toml -- -D warnings
+
+  sim-gate:
+    name: sim regression gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: replay traces
+        run: cargo run --manifest-path core/Cargo.toml -p sim -- batch core/traces
+
+  functions:
+    name: edge functions (deno test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: supabase
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: deno test --allow-all functions
+
+  mobile:
+    name: mobile + tools typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile || pnpm install
+      - run: pnpm --filter mobile typecheck
+      - run: pnpm --filter collect typecheck
+
+  android-bindings:
+    name: android .so + kotlin bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+          add-to-path: false
+      - name: cache cargo-ndk
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-${{ runner.os }}-v1
+      - name: install cargo-ndk
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: cargo install --locked cargo-ndk
+      - name: build
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: core/build-mobile.sh --android-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: safety-ffi-android
+          path: core/target/mobile/android
+          if-no-files-found: error

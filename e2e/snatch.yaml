@@ -1,0 +1,16 @@
+# Snatch: jerk while in hand → running cadence → separated. Immediate alert with snatch-moment location; biometric-only dismiss.
+# appId must match apps/mobile/app.json (android.package / ios.bundleIdentifier).
+appId: com.safe.mobile
+tags: [debug]
+---
+- launchApp:
+    clearState: false
+- openLink: "safe://debug/inject?trace=snatch"
+- extendedWaitUntil:
+    visible: "phone may have been snatched"
+    timeout: 60000
+- assertVisible: "Don't chase"
+- tapOn: "I have my phone"
+- extendedWaitUntil:
+    visible: "Confirm it's you"
+    timeout: 10000
