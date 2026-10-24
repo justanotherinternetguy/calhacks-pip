@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(28);
+select plan(34);
 
 -- ------------------------------------------------------------ fixtures
 -- alice = subject (group owner), bob + carol = active group-mates, dave = outsider
@@ -176,6 +176,23 @@ select is((select count(*) from public.devices where id = '22222222-2222-2222-22
 reset role;
 select is((select battery_pct from public.devices where id = '22222222-2222-2222-2222-22222222222b'), 50,
           'heartbeat left the other user''s device untouched');
+
+-- ------------------------------------------------------------ 5. telemetry topic parsing (0010)
+-- The realtime.messages policies cannot run on bare postgres (no realtime
+-- schema); the parser they rely on can.
+select is(public.telemetry_topic_subject('telemetry:00000000-0000-0000-0000-00000000000a'),
+          '00000000-0000-0000-0000-00000000000a'::uuid, 'telemetry topic yields the subject uuid');
+select is(public.telemetry_topic_subject('telemetry:------------------------------------'), null::uuid,
+          '36 dash-only chars is not a uuid: null, no cast error');
+select is(public.telemetry_topic_subject('telemetry:00000000-0000-0000-0000-00000000000a-x'), null::uuid,
+          'trailing garbage is rejected');
+select is(public.telemetry_topic_subject('telemetry:00000000-0000-0000-0000-00000000000A'), null::uuid,
+          'uppercase uuid is rejected (topics are built from auth.uid()::text, always lowercase)');
+select is(public.telemetry_topic_subject('incidents'), null::uuid, 'unrelated topic yields null');
+select pg_temp.login('00000000-0000-0000-0000-00000000000d');
+select lives_ok($$select public.telemetry_topic_subject('telemetry:zzz')$$,
+                'authenticated role may execute the parser (policies call it)');
+reset role;
 
 select * from finish();
 rollback;

@@ -11,6 +11,8 @@ migrations/
                        accept_invite, open_unlock_request, purge_old_data, watchdog_tick),
                        pg_cron schedules, realtime publication
   0004_seed_model.sql  model_configs 'v1' placeholder (signature 'unsigned-dev')
+  0005–0009            v1.1 groups / epochs policy fixes, model config updates
+  0010_telemetry_channel.sql  RLS on realtime.messages for private `telemetry:{uuid}` broadcast channels
 functions/
   _shared/supabase.ts  service / user clients, auth helpers, JSON responses
   _shared/push.ts      APNs + FCM v1 builders, ES256 / RS256 JWTs, fail-soft fan-out
@@ -117,6 +119,64 @@ Friends' screens subscribe via Realtime to `incidents`, `incident_events`,
 `unlock_approvals` (all in the `supabase_realtime` publication; RLS applies).
 Group-mates read coarse device state from the `device_status` view, never from
 `devices` (push tokens stay private).
+
+## Telemetry channel (CONTRACTS §7)
+
+Live ticks travel over a **private Realtime broadcast channel**, topic
+`telemetry:{subjectUserId}`, event `tick`. No table, no rows. Access is
+Supabase Realtime authorization = RLS on `realtime.messages`
+(`migrations/0010_telemetry_channel.sql`):
+
+| Policy | Who | Rule |
+|---|---|---|
+| `telemetry_select` (subscribe) | authenticated | `extension = 'broadcast'`, topic is exactly `telemetry:<uuid>` and the uuid is `auth.uid()` or `shares_group_with(uuid)` |
+| `telemetry_insert` (publish) | authenticated | `extension = 'broadcast'` and `topic = 'telemetry:' || auth.uid()` |
+
+`public.telemetry_topic_subject(text)` does the parsing: it regex-checks the
+canonical uuid form *before* casting, so garbage topics yield `null` instead of
+a cast error. The policies are created inside an `if exists realtime.messages`
+guard, so the migration is a no-op on bare postgres (pgTAP run).
+
+Publish (Android native does this at 4 Hz; same request from curl):
+
+```sh
+curl -i -X POST "$SUPABASE_URL/realtime/v1/api/broadcast" \
+  -H "apikey: $ANON_KEY" -H "Authorization: Bearer $USER_JWT" -H "Content-Type: application/json" \
+  -d '{"messages":[{"topic":"telemetry:'"$USER_ID"'","event":"tick","private":true,"payload":{"v":1,"t":1}}]}'
+# HTTP/2 202
+```
+
+Subscribe (web monitor, supabase-js v2):
+
+```ts
+const supabase = createClient(url, anonKey, { accessToken: async () => userJwt });
+await supabase.realtime.setAuth(userJwt);
+supabase
+  .channel(`telemetry:${subjectId}`, { config: { private: true, broadcast: { ack: false } } })
+  .on('broadcast', { event: 'tick' }, ({ payload }) => render(payload as TelemetryTick))
+  .subscribe((status, err) => console.log(status, err?.message));
+// SUBSCRIBED            -> you are the subject or an active group-mate
+// CHANNEL_ERROR          -> "Unauthorized: You do not have permissions to read from this Channel topic: ..."
+```
+
+**The REST endpoint always answers 202**, even when the caller may not write
+to that topic: Realtime validates the batch, then evaluates `telemetry_insert`
+per message and silently drops unauthorized ones (logged server-side as
+`UnauthorizedBroadcast`). Do not use the status code as proof of delivery;
+verify with a subscriber. Verified against the hosted project with two
+anonymous users A and B (no shared group):
+
+| Step | Result |
+|---|---|
+| A `POST /realtime/v1/api/broadcast` to `telemetry:A` | 202, delivered to A's subscriber socket |
+| B `POST` to `telemetry:A` | 202, **not** delivered (dropped by `telemetry_insert`) |
+| B subscribes to `telemetry:A` | `CHANNEL_ERROR` Unauthorized |
+| B subscribes to `telemetry:B`, A to `telemetry:A` | `SUBSCRIBED` |
+| anon key only (no user JWT) `POST` to `telemetry:A` | 202, not delivered |
+
+A client does not receive its own websocket `channel.send()` unless the channel
+is created with `broadcast: { self: true }`; REST publishes are delivered to
+every subscriber socket, including other sessions of the subject.
 
 ## Deploy
 
