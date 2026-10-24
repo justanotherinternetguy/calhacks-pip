@@ -223,11 +223,7 @@ class EscrowManager(private val rt: SafetyRuntime) {
           key.fill(0)
         }
         rt.supabase.insertMany("released_keys", rows)
-        rt.supabase.insert(
-          "audit_log",
-          JSONObject().put("subject_user_id", cfg.userId).put("actor_id", cfg.userId).put("kind", "release")
-            .put("payload", JSONObject().put("epochId", epoch.epochId).put("hours", JSONArray(listOf(h, h + 1)))),
-        )
+        // audit_log rows are written by the DB trigger on released_keys (clients cannot insert into audit_log).
       }.onFailure { Log.e(TAG, "releaseHourKeys failed", it) }
     }
   }
