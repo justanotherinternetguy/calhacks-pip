@@ -462,7 +462,7 @@ final class SensingCoordinator {
             engine.pushAction(a: v.accepted ? .dismissOk : .dismissWrongPhrase, nowMs: now)
             if v.accepted { pendingCheck = nil; alerts.clearCheckIn() }
             tick()
-            return ["accepted": v.accepted, "zScore": v.zScore, "reason": v.reason]
+            return ["accepted": v.accepted, "zScore": num(v.zScore), "reason": v.reason]
         }
     }
 
@@ -556,7 +556,7 @@ final class SensingCoordinator {
             return ["pDanger": 0, "hmmState": "normal", "escalation": "idle", "riskBand": 0, "evidence": "",
                     "baselineSeconds": 0, "placement": "unknown", "nightMode": false]
         }
-        return ["pDanger": s.pDanger, "hmmState": s.hmmState.key, "escalation": s.escalation.key, "riskBand": Int(s.riskBand),
+        return ["pDanger": num(s.pDanger), "hmmState": s.hmmState.key, "escalation": s.escalation.key, "riskBand": Int(s.riskBand),
                 "evidence": s.evidence, "baselineSeconds": Int(s.baselineSeconds), "placement": s.placement.key, "nightMode": s.nightMode]
     }
 

@@ -163,7 +163,7 @@ public class SafetyNativeModule: Module {
         AsyncFunction("decryptLocations") { (subjectUserId: String, blobs: [BlobRecord]) -> [[String: Any]] in
             let refs = blobs.map { EscrowManager.BlobRef(epochId: $0.epochId, seq: UInt64(max(0, $0.seq)), hourIndex: $0.hourIndex, ciphertextB64: $0.ciphertextB64) }
             return self.c.escrow.decryptLocations(subjectUserId: subjectUserId, blobs: refs).map {
-                ["lat": $0.lat, "lng": $0.lng, "accuracyM": $0.accuracyM, "tMs": $0.tMs]
+                ["lat": $0.lat, "lng": $0.lng, "accuracyM": Double($0.accuracyM), "tMs": $0.tMs]   // accuracyM is Float in the FFI
             }
         }
 

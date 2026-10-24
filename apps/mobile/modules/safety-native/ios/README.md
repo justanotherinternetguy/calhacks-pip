@@ -59,27 +59,34 @@ API facts the Swift side relies on (verified against `Generated/safety.swift`, 2
 - Integer widths: `UInt64` for `tMs` / `nowMs` / `seq` / `deadlineMs` / `durationMs` / `keyTimesMs`;
   `UInt8` for `hourLocal`, `batteryPct`, `riskBand`, `Share.index`, `k`, `n`; `UInt32` for `hourIndex`,
   `baselineSeconds`, `backspaces`, `locationIntervalChanged(seconds:)`.
-- `SafetyEngineProtocol`: `pushMotion(samples:)`, `pushContext(ctx:)`, `pushAudio(s:)`,
-  `pushTyping(s:nowMs:) -> TypingVerdict`, `pushAction(a:nowMs:)`, `setNightMode(active:nowMs:)`,
-  `setLearning(enabled:)`, `tick(nowMs:) -> [EngineEvent]`, `snapshot() -> Snapshot`, `exportBaseline() -> Data`.
+- `SafetyEngineProtocol` (no method throws; only the initialiser does): `pushMotion(samples:)`, `pushContext(ctx:)`,
+  `pushAudio(s:)`, `pushTyping(s:nowMs:) -> TypingVerdict`, `pushAction(a:nowMs:)`, `setNightMode(active:nowMs:)`,
+  `setLearning(enabled:)`, `tick(nowMs:) -> [EngineEvent]`, `snapshot() -> Snapshot`, `exportBaseline() -> Data`,
+  `metrics() -> LiveMetrics`, `incidentLog() -> [IncidentRecord]` (newest last; entries expire after 8 h).
 - Enum cases are lowerCamel: `Activity.{unknown,stationary,walking,running,vehicle}`,
   `Placement.{unknown,pocket,hand,bag}`, `HmmState.{normal,impaired,incident,unresponsive}`,
   `EscalationLevel.{idle,check,headsUp,unlocked,snatch,resolved}`,
-  `UserAction.{dismissOk,dismissWrongPhrase,needHelp,manualSos,biometricDismiss,friendMarkedSafe,checkTimeout}`,
+  `IncidentKind.{gaitDrift,impact,grab,stillness,separated,typingOff}`,
+  `UserAction.{dismissOk,dismissWrongPhrase,needHelp,manualSos,biometricDismiss,friendMarkedSafe,checkTimeout,phoneUnlocked}`,
   `EngineEvent.{checkRequested(phrase:deadlineMs:), headsUp(summary:), unlockLocation(summary:),
-  snatchDetected(summary:), resolved, riskBandChanged(band:), batteryDying, locationIntervalChanged(seconds:)}`.
-- Records are structs with labelled memberwise inits, e.g. `MotionSample(tMs:ax:ay:az:gx:gy:gz:rx:ry:rz:)`,
+  snatchDetected(summary:), resolved, riskBandChanged(band: UInt8), batteryDying, locationIntervalChanged(seconds: UInt32),
+  samplingRateChanged(hz: UInt32, gyro: Bool), signalIncident(record: IncidentRecord), callOptionAvailable(summary:)}`
+  (11 cases; `SensingCoordinator.handle` switches over them without a `default`, so a regenerated binding that adds
+  a case fails to compile on purpose). All enums are `Equatable`/`Hashable`.
+- Records are structs with labelled memberwise inits in Rust field order: `MotionSample(tMs:ax:ay:az:gx:gy:gz:rx:ry:rz:)`,
   `Context(tMs:awayFromHome:separated:hourLocal:screenOn:activity:batteryPct:speedMps:lastTouchMs:distanceHomeM:samplingFull:)`,
   `AudioScores(tMs:scream:shout:glass:)`, `TypingSample(phrase:typed:keyTimesMs:backspaces:durationMs:)`,
-  `Location(lat:lng:accuracyM:tMs:)`, `Share(index:data:)`; `Snapshot` has
-  `pDanger, hmmState, escalation, riskBand, evidence, baselineSeconds, placement, nightMode`.
-- **v1.1 (CONTRACTS §6; bindings regenerate after the Rust change)** — the Swift side already codes against:
-  `EngineEvent.{samplingRateChanged(hz: UInt32, gyro: Bool), signalIncident(record: IncidentRecord),
-  callOptionAvailable(summary:)}`, `UserAction.phoneUnlocked`,
-  `IncidentKind.{gaitDrift,impact,grab,stillness,separated,typingOff}`, `MetricBand`, `LiveMetrics`,
-  `IncidentRecord` (`id`/`sequenceId` are `UInt32`), `SafetyEngine.metrics() -> LiveMetrics` and
-  `incidentLog() -> [IncidentRecord]`. New record fields are appended in the order §6 lists them, which is the
-  order uniffi's memberwise init uses.
+  `Location(lat: Double, lng: Double, accuracyM: Float, tMs:)`, `Share(index:data:)`,
+  `MetricBand(name:value:mean:sd:sdDistance:inBand:)`,
+  `LiveMetrics(tMs:placement:samplingFull:activity:bands:pNormal:pImpaired:pIncident:pUnresponsive:baselineTrusted:baselineWalkDays:evidence:)`,
+  `IncidentRecord(id: UInt32, tMs:kind:summary:sdDistance:placement:rawJson:pNormal:pImpaired:pIncident:pUnresponsive:sequenceId: UInt32, watched:)`;
+  `Snapshot` has `pDanger, hmmState, escalation, riskBand: UInt8, evidence, baselineSeconds: UInt32, placement, nightMode`.
+- Every Rust `f32` is Swift `Float` (`pDanger`, `zScore`, all `p*`, `MetricBand` numbers, `sdDistance`,
+  `baselineWalkDays`, `speedMps`, `distanceHomeM`, `accuracyM`). Before a value enters a JS dictionary the
+  coordinator widens it with `num(_:)` (`Float` → `Double`, non-finite → 0, since `JSONSerialization` rejects NaN);
+  `UInt8`/`UInt32` counters become `Int`; `UInt64` timestamps are passed through (they fit JS numbers).
+- The uniffi contract-version / API-checksum check (`uniffiEnsureSafetyFfiInitialized`) runs inside every
+  generated call; nothing hand-written needs to invoke it.
 
 ## Module registration (app agent: `expo-module.config.json`)
 

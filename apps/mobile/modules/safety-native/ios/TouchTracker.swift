@@ -69,7 +69,9 @@ final class TouchTracker: NSObject, UIGestureRecognizerDelegate {
     private func unlockSignal() {
         recordTouch()
         let now = SafeClock.nowMs()
-        guard now - lastUnlockSignalMs >= 2000 else { return }   // protectedData + didBecomeActive arrive back-to-back
+        // protectedData + didBecomeActive arrive back-to-back → coalesce to one signal per 2 s. Wall clock may step
+        // backwards (NTP / time-zone fix), so never subtract UInt64s that could underflow.
+        guard now < lastUnlockSignalMs || now - lastUnlockSignalMs >= 2000 else { return }
         lastUnlockSignalMs = now
         onUnlock?()
     }
