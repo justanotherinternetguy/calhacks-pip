@@ -262,6 +262,11 @@ class SafetyRuntime private constructor(val app: Context) {
   fun dispatch(events: List<EngineEvent>) {
     for (ev in events) {
       synchronized(eventRing) { eventRing.addLast(eventName(ev)); while (eventRing.size > EVENT_RING_MAX) eventRing.removeFirst() }
+      when (ev) {
+        is EngineEvent.SamplingRateChanged, is EngineEvent.LocationIntervalChanged -> {}
+        is EngineEvent.SignalIncident -> Log.i(TAG, "incident: ${incidentKindName(ev.record.kind)} ${"%.1f".format(ev.record.sdDistance)} SD — ${ev.record.summary}")
+        else -> Log.i(TAG, "engine event: ${eventName(ev)}")
+      }
       try { handle(ev) } catch (e: Throwable) { Log.e(TAG, "event $ev failed", e) }
     }
     if (events.isNotEmpty()) emitStatus()

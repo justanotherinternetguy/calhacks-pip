@@ -582,6 +582,8 @@ impl Engine {
             self.bands.bands.clone()
         };
         let held = self.spikes.held(now);
+        let act = self.activity();
+        let walking = matches!(act, Activity::Walking | Activity::Running);
         for (mi, b) in bands.iter_mut().enumerate() {
             if mi >= SPIKE_FIRST {
                 let (value, evaluable) = match held {
@@ -599,6 +601,10 @@ impl Engine {
                 b.value = 0.0;
                 b.sd_distance = 0.0;
                 b.in_band = true;
+            } else if !walking {
+                // Gait bands only mean something while walking; standing still is not "-11 SD of cadence".
+                b.sd_distance = 0.0;
+                b.in_band = true;
             }
         }
         let mut evidence = self.hmm.evidence();
@@ -608,6 +614,9 @@ impl Engine {
             }
             evidence.push_str(&s);
         };
+        if full && !walking {
+            note("not walking: gait bands idle".to_string());
+        }
         if full {
             if let Some((names, persist)) = self.drift.building(scfg, self.cfg.gait.hop_s, now) {
                 if !names.is_empty() {
@@ -622,7 +631,7 @@ impl Engine {
             t_ms: now,
             placement: self.placement,
             sampling_full: full,
-            activity: self.activity(),
+            activity: act,
             bands,
             p_normal: p[0],
             p_impaired: p[1],
