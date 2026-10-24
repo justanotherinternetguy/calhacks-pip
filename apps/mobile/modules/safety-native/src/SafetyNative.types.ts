@@ -6,14 +6,12 @@ export type NightModeStatus = {
   since?: number;
   reason: 'away_from_home' | 'manual' | 'window' | 'off';
 };
-export type HmmState = 'normal' | 'impaired' | 'incident' | 'unresponsive';
 export type EscalationLevel = 'idle' | 'check' | 'heads_up' | 'unlocked' | 'snatch' | 'resolved';
 export type EngineSnapshot = {
-  pDanger: number;
-  hmmState: HmmState;
   escalation: EscalationLevel;
-  riskBand: 0 | 1 | 2 | 3;
   evidence: string;
+  sensingFull: boolean; // 50 Hz + gyro, faster location (a watch incident has not cleared yet)
+  listening: boolean; // the microphone listening window is open (labels only, never audio)
   baselineSeconds: number;
   placement: 'unknown' | 'pocket' | 'hand' | 'bag';
   nightMode: boolean;
@@ -83,7 +81,16 @@ export type RecoverInput = {
 // ---- §6 addendum (spec v1.1): live signals, incident log, grab detection. camelCase mirrors of the Rust records.
 export type Placement = EngineSnapshot['placement'];
 export type Activity = 'unknown' | 'stationary' | 'walking' | 'running' | 'vehicle';
-export type IncidentKind = 'gait_drift' | 'impact' | 'grab' | 'stillness' | 'separated' | 'typing_off';
+export type IncidentKind =
+  | 'phone_drop' | 'possible_fall' | 'fall_recovered' | 'down_after_fall' | 'hard_impact'
+  | 'unsteady_gait' | 'stumble' | 'repeated_stumbles' | 'slowed_walk'
+  | 'phone_left_behind' | 'grab'
+  | 'separated' | 'stopped_on_way_home' | 'in_vehicle'
+  | 'battery_critical'
+  | 'check_in_missed' | 'typing_off'
+  | 'scream_shout' | 'snoring_while_down';
+/** context = logged only · watch = full sensing, counts toward a check-in · danger = asks "You okay?" on its own. */
+export type IncidentTier = 'context' | 'watch' | 'danger';
 /** One live metric vs its personal baseline band (mean ± 2.5 SD; 3.5 SD until the baseline is trusted). */
 export type MetricBand = {
   name: string; // cadence | stride_cv | regularity | sway | wobble | jerk | rotation | peak_g
@@ -99,10 +106,8 @@ export type LiveMetrics = {
   samplingFull: boolean; // true = 50 Hz + gyro, false = ~10 Hz accel only
   activity: Activity;
   bands: MetricBand[];
-  pNormal: number;
-  pImpaired: number;
-  pIncident: number;
-  pUnresponsive: number;
+  listening: boolean;
+  context: string[]; // situational chips, e.g. "away from home late", "in a vehicle"
   baselineTrusted: boolean;
   baselineWalkDays: number; // distinct local days with walking (trusted at 7)
   evidence: string;
@@ -111,14 +116,13 @@ export type IncidentRecord = {
   id: number;
   tMs: number;
   kind: IncidentKind;
+  tier: IncidentTier;
   summary: string;
   sdDistance: number;
   placement: Placement;
   rawJson: string;
-  pNormal: number;
-  pImpaired: number;
-  pIncident: number;
-  pUnresponsive: number;
+  clearedMs: number; // 0 = not yet cleared
+  acknowledged: boolean; // the owner answered a check-in before it cleared
   sequenceId: number; // 0 = none
   watched: boolean; // part of a sequence the engine is still watching (not yet escalated)
 };
@@ -127,15 +131,13 @@ export type Dashboard = { metrics: LiveMetrics; incidents: IncidentRecord[] };
 // ---- §7 live telemetry stream (Android → web monitor). Supabase Realtime broadcast, topic `telemetry:{userId}`, event `tick`.
 /** Engine events since the last tick, snake_case (CONTRACTS §7). Unknown names are tolerated by the UI. */
 export type TelemetryEventName =
-  | 'check_requested' | 'heads_up' | 'unlock_location' | 'snatch_detected' | 'resolved' | 'risk_band_changed'
-  | 'battery_dying' | 'sampling_rate_changed' | 'signal_incident' | 'call_option';
+  | 'check_requested' | 'heads_up' | 'unlock_location' | 'snatch_detected' | 'resolved'
+  | 'battery_dying' | 'sampling_rate_changed' | 'audio_listening' | 'signal_incident' | 'incident_cleared' | 'incident_log_cleared' | 'call_option';
 /** The engine / mode part of a tick: sent by the phone at least once a second and after every engine tick (§7 v2 `state`). */
 export type TelemetryState = {
   metrics: LiveMetrics;
-  hmm: HmmState;
   escalation: EscalationLevel;
-  riskBand: 0 | 1 | 2 | 3;
-  pDanger: number;
+  listening: boolean;
   nightMode: boolean;
   battery: number;
   activity: Activity;
@@ -158,7 +160,7 @@ export type TelemetryFrame = {
   gyro: number[]; // |ω| rad/s, same length (zeros in low-rate mode)
   st: number; // phone unix ms of the newest sample (0 when the frame carries none)
   sampleHz: number; // measured accelerometer delivery rate
-  incidents: IncidentRecord[]; // deltas: records with id > lastSentId (the whole live log again after a rejoin)
+  incidents: IncidentRecord[]; // deltas: new records plus ones whose clearedMs / acknowledged / sequenceId changed (upsert by id; the whole live log again after a rejoin)
   incidentCount: number;
   events: (TelemetryEventName | string)[];
   rttMs?: number; // phone → Realtime → phone round trip (self-echo), smoothed
@@ -174,7 +176,7 @@ export type TelemetryTick = TelemetryState & {
   gyro: number[]; // |ω| rad/s, same length (zeros in low-rate mode)
   st: number; // phone unix ms of the newest sample (v1: = t)
   sampleHz: number;
-  incidents: IncidentRecord[]; // deltas: records with id > lastSentId
+  incidents: IncidentRecord[]; // deltas, upserted by id
   incidentCount: number; // total live log size on the phone (gap detection)
   events: (TelemetryEventName | string)[];
   rttMs?: number;
@@ -198,7 +200,9 @@ export type SafetyNativeEvents = {
   snatch: { summary: string; lat?: number; lng?: number };
   sos: { active: boolean };
   dashboard: Dashboard; // every 1 s while setDashboardStreaming(true)
-  signalIncident: IncidentRecord;
+  signalIncident: IncidentRecord; // an incident opened (point kinds arrive already cleared)
+  incidentCleared: IncidentRecord; // an incident met its clearing rule (clearedMs set)
+  incidentLogCleared: Record<string, never>; // the user reset the incident log (resetIncidents)
   callOption: { summary: string }; // 10 min with no response: friends get the one-tap call option
   sessionRefreshed: NativeSession; // native rotated the JWT pair; JS must adopt it (supabase.auth.setSession)
 };
@@ -239,6 +243,8 @@ export interface SafetyNativeModuleType {
   // §6 personal dashboard
   getDashboard(): Promise<Dashboard>;
   setDashboardStreaming(on: boolean): Promise<void>; // while on, emit 'dashboard' every 1 s
+  /** Empty the incident log and put sensing back to rest (rule timers, mic window, incident-driven full rate). Baselines stay. */
+  resetIncidents(): Promise<void>;
   // §7 telemetry publisher (Android). 10 Hz while on (default on once configured) or while the dashboard streams; 1 Hz in night mode otherwise.
   setTelemetry(on: boolean): Promise<void>;
   getTelemetryStatus(): Promise<TelemetryStatus>;

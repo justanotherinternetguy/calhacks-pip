@@ -5,7 +5,7 @@ import { Card, Pill, Row } from '@/components/ui';
 import { colors, levelColor } from '@/lib/theme';
 import type { Profile, Uuid } from '@/lib/types';
 import type { DeviceStatus, FeedItem } from './useMonitorData';
-import { AUDIT_LABEL, EVENT_LABEL, heartbeatAge, riskColor } from './labels';
+import { AUDIT_LABEL, EVENT_LABEL, heartbeatAge } from './labels';
 
 /** Right-hand column when nothing is open: a calm summary of the freshest device plus the last 24 h of activity. */
 export function QuietPanel({ devices, profiles, me, feed, now }: {
@@ -32,7 +32,6 @@ export function QuietPanel({ devices, profiles, me, feed, now }: {
             <Text style={styles.body}><Text style={{ fontWeight: '700' }}>{name(latest.user_id)}</Text> · heartbeat {heartbeatAge(latest.last_heartbeat, now).text}</Text>
             <Row>
               <Pill text={latest.night_mode ? 'night mode on' : 'night mode off'} color={latest.night_mode ? colors.accent : colors.muted} />
-              <Pill text={`risk ${latest.risk_band}`} color={riskColor(latest.risk_band)} />
               <Pill text={latest.status_level.replace('_', ' ')} color={levelColor(latest.status_level)} />
             </Row>
           </Row>

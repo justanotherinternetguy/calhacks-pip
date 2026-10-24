@@ -13,8 +13,9 @@ pub const METRIC_FEATURE: [usize; 8] = [0, 1, 2, 4, 5, 6, 7, 8];
 /// Index of the first spike metric in `METRIC_NAMES` (jerk, rotation, peak_g follow).
 pub const SPIKE_FIRST: usize = 5;
 
-/// Which side of the band counts as "out" for GaitDrift: -1 below, +1 above, 0 either side, 2 = not a drift metric.
-pub const DRIFT_SIDE: [i8; 8] = [0, 1, -1, 1, 1, 2, 2, 2];
+/// Which side of the band counts as "unsteady": +1 above (stride variability, sway, wobble), -1 below (regularity),
+/// 2 = not an unsteadiness metric (cadence has its own slowed-walk rule; the spike metrics feed impact / grab).
+pub const UNSTEADY_SIDE: [i8; 8] = [2, 1, -1, 1, 1, 2, 2, 2];
 
 #[derive(Clone, Debug, Default)]
 pub struct Bands {
@@ -61,17 +62,15 @@ impl Bands {
         self.get(name).map(|b| b.mean + k * b.sd).unwrap_or(f32::MAX)
     }
 
-    /// Drift metrics currently out of band on the concerning side, with the worst signed sd distance.
-    pub fn drift_out(&self) -> (Vec<&str>, f32) {
+    /// Unsteadiness metrics currently out of band on the concerning side, with the worst signed sd distance.
+    pub fn unsteady_out(&self) -> (Vec<&str>, f32) {
         let mut names = Vec::new();
         let mut worst = 0.0f32;
         for (mi, b) in self.bands.iter().enumerate() {
             if b.in_band {
                 continue;
             }
-            let side = DRIFT_SIDE[mi];
-            let concerning = match side {
-                0 => true,
+            let concerning = match UNSTEADY_SIDE[mi] {
                 1 => b.sd_distance > 0.0,
                 -1 => b.sd_distance < 0.0,
                 _ => false,

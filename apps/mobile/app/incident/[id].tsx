@@ -6,7 +6,7 @@ import { format, formatDistanceToNow } from 'date-fns';
 import { Button, Card, H1, H2, P, Pill, Row, Screen } from '@/components/ui';
 import { Map } from '@/components/Map';
 import { SafetyNative, type DecryptedLocation } from '@/modules/safety-native';
-import { MIN_MEMBERS_FOR_FALLBACK, useStore, useUserId } from '@/lib/store';
+import { MIN_MEMBERS_FOR_FALLBACK, NO_EVENTS, useStore, useUserId } from '@/lib/store';
 import {
   fn, getActiveEpoch, getIncident, listIncidentEvents, listLocationBlobs, listReleasedKeysForMe,
   listUnlockApprovals, listUnlockRequests, rpc, subscribe,
@@ -27,7 +27,7 @@ export default function IncidentScreen() {
   const groups = useStore((s) => s.groups);
   const members = useStore((s) => s.members);
   const stored = useStore((s) => s.incidents.find((i) => i.id === id));
-  const events = useStore((s) => s.events[id] ?? []);
+  const events = useStore((s) => s.events[id] ?? NO_EVENTS);
   const [incident, setIncident] = useState<Incident | undefined>(stored);
   const [trail, setTrail] = useState<DecryptedLocation[]>([]);
   const [keys, setKeys] = useState<ReleasedKey[]>([]);

@@ -30,8 +30,8 @@ pub struct ImpactEvent {
 }
 
 impl ImpactEvent {
-    /// Spec v1.1: an Impact incident is a peak above `incident_peak_g` with an orientation change
-    /// (or a fall-like impact), never a drop.
+    /// An impact incident (PossibleFall or HardImpact): a peak above `incident_peak_g` with an orientation
+    /// change (or a fall-like impact), never a drop.
     pub fn is_incident(&self, cfg: &ImpactCfg) -> bool {
         self.kind != ImpactKind::Drop
             && self.peak_g > cfg.incident_peak_g
@@ -55,6 +55,11 @@ pub struct ImpactDetector {
     pub drop_active: bool,
     drop_window: Vec<f32>,
     drop_window_start: u64,
+    /// first sample above `incident_peak_g` of the current impact: (t_ms, g), taken by the engine at once so the
+    /// warning does not wait for the post-impact classification
+    onset: Option<(u64, f32)>,
+    /// an onset was already reported for the impact in progress
+    onset_sent: bool,
 }
 
 impl ImpactDetector {
@@ -66,7 +71,14 @@ impl ImpactDetector {
             drop_active: false,
             drop_window: Vec::new(),
             drop_window_start: 0,
+            onset: None,
+            onset_sent: false,
         }
+    }
+
+    /// The high-g onset of the impact in progress, once (see `onset`).
+    pub fn take_onset(&mut self) -> Option<(u64, f32)> {
+        self.onset.take()
     }
 
     pub fn push(&mut self, s: &MotionSample) -> Option<ImpactEvent> {
@@ -87,6 +99,10 @@ impl ImpactDetector {
                 }
                 self.drop_window.clear();
             }
+        }
+        if mag > self.cfg.incident_peak_g && !self.onset_sent && !self.drop_active {
+            self.onset_sent = true;
+            self.onset = Some((s.t_ms, mag));
         }
         let st = std::mem::replace(&mut self.st, St::Idle);
         let mut out = None;
@@ -171,6 +187,9 @@ impl ImpactDetector {
                 }
             }
         };
+        if matches!(self.st, St::Idle) && mag <= self.cfg.incident_peak_g {
+            self.onset_sent = false; // the impact is over: the next one reports its own onset
+        }
         out
     }
 }

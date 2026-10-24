@@ -9,14 +9,14 @@ records in `docs/CONTRACTS.md`:
 { "motion":  [{ "t_ms": 0, "ax": 0.01, "ay": -0.02, "az": 0.0, "gx": 0, "gy": 0, "gz": -1 }],
   "context": [{ "t_ms": 0, "away_from_home": true, "separated": false, "hour_local": 23,
                 "screen_on": false, "activity": "Walking", "battery_pct": 71, "speed_mps": -1 }],
-  "audio":   [{ "t_ms": 0, "scream": 0.01, "shout": 0.02, "glass": 0.0 }],
+  "audio":   [{ "t_ms": 0, "scream": 0.01, "shout": 0.02, "snore": 0.0, "level_db": 62.5 }],
   "actions": [{ "t_ms": 91000, "action": "CheckTimeout" }],
   "labels":  [{ "t_start_ms": 0, "t_end_ms": 120000, "label": "normal_walking" }],
   "meta":    { "participant": "p07", "scenario": "normal_walking", "placement": "pocket" } }
 ```
 
 Motion is 50 Hz: `ax..az` user acceleration in g (gravity removed), `gx..gz` gravity unit vector,
-device frame. Audio holds YAMNet class probabilities only — never samples.
+device frame. Audio holds YAMNet class probabilities and a sound level only (listening windows only) — never samples.
 
 ## Use
 

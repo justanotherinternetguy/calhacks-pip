@@ -1,8 +1,15 @@
 # Audio commotion model (YAMNet)
 
-The night-mode audio booster scores each 0.975 s microphone window with YAMNet and keeps three
-numbers: `scream`, `shout`, `glass`. This document records where the bundled model comes from, what it
-expects, and how its 521 AudioSet classes are mapped onto those three scores.
+Inside an engine **listening window** (night mode, opened after a fall, phone drop, grab, missed check-in or
+unsteady gait: 10 min after each, and while an escalation runs) the Android service captures continuously and scores each 0.975 s window with
+YAMNet. It keeps three numbers, `scream`, `shout` and `snore`, plus `level_db`, an estimated sound level in dB SPL
+(frame RMS in dBFS + 112.3, from the Android CDD 5.4.2 calibration of the voice-recognition source: 90 dB SPL at
+1 kHz reads as RMS 2500). Outside a window the microphone is off. This document records where the bundled model
+comes from, what it expects, and how its 521 AudioSet classes are mapped onto those scores.
+
+How the engine uses them (`model-v1.toml [incidents]`): screaming/shouting counts within 2 min of a fall or grab
+and only when the venue is not loud (median level of the last frames < 80 dB); snoring counts only while the person
+is down after a fall and a check-in went unanswered. AudioSet has no vomiting class, so vomiting is not detected.
 
 ## Files
 
@@ -22,7 +29,7 @@ The `copyModelConfig` Gradle task only copies `core/config/model-*.toml`; it nev
 iOS: `SafetyNative.podspec` declares `s.resources = 'Resources/*.{tflite,csv,caf,wav,toml}'` whenever the
 `Resources/` directory is non-empty, so both files land in the app bundle on the next `pod install`.
 
-Without `yamnet.tflite` the audio booster is disabled (`isLoaded == false` on iOS, throws on Android);
+Without `yamnet.tflite` audio labels are disabled (`isLoaded == false` on iOS, throws on Android);
 the rest of the safety model keeps working.
 
 ## Source and license
@@ -70,25 +77,23 @@ label list cannot silently change what "scream" means. With the bundled CSV the 
 |---|---|
 | `scream` | 11: Screaming (`/m/03qc9zr`) |
 | `shout` | 6: Shout (`/m/07p6fty`), 7: Bellow (`/m/07rwm0c`), 8: Whoop (`/m/0lyf6`), 9: Yell (`/m/07sr1lc`); iOS also 10: Children shouting (`/t/dd00135`) |
-| `glass` | 435: Glass (`/m/039jq`), 437: Shatter (`/m/07rn7sz`) |
+| `snore` | 38: Snoring (`/m/01d3sd`) |
 
 Each score is the max over its group. Note there is no class literally named "Scream"; the AudioSet label is
-"Screaming". Neighbouring classes for reference: 433 Splinter, 434 Crack, 436 "Chink, clink", 464 Breaking.
+"Screaming". Glass / Shatter (435, 437) were scored before v2 and are no longer used.
 
 ### Hard-coded fallbacks (used only if the CSV is missing or unparseable)
 
-| | scream | shout | glass | Status |
-|---|---|---|---|---|
-| Swift `AudioMonitor.swift` | `[11]` | `[6, 7, 9]` | `[435, 437]` | correct |
-| Kotlin `YamnetClassifier.kt` | `[11]` | `[6, 9, 7, 8]` | `[434, 435]` | **434 is "Crack", not Shatter; should be `[435, 437]`** |
+| | scream | shout | snore |
+|---|---|---|---|
+| Kotlin `YamnetClassifier.kt` | `[11]` | `[6, 9, 7, 8]` | `[38]` |
 
-The Kotlin fallback is harmless while the CSV is bundled (the CSV wins), but it should be corrected to
-`intArrayOf(435, 437)` so the no-CSV path matches iOS.
+(The iOS module was removed.)
 
 ## Updating the model
 
 1. Download the new `.tflite` and class map into a scratch directory, never straight into the repo.
 2. Check `bytes[4:8] == b"TFL3"`, input shape `[15600]` float32, output shape `[1, 521]`.
 3. Check the CSV has 521 rows, header `index,mid,display_name`, index column `0..520`, and that
-   `Screaming`, `Shout`, `Yell`, `Bellow`, `Whoop`, `Glass`, `Shatter` are present. Convert CRLF to LF.
+   `Screaming`, `Shout`, `Yell`, `Bellow`, `Whoop`, `Snoring` are present. Convert CRLF to LF.
 4. Copy the same two files to both the Android assets dir and `ios/Resources/`, and update the hashes above.

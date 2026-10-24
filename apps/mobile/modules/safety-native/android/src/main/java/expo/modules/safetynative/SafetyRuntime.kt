@@ -17,7 +17,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import uniffi.safety.EngineEvent
 import uniffi.safety.EscalationLevel
-import uniffi.safety.HmmState
 import uniffi.safety.IncidentRecord
 import uniffi.safety.Snapshot
 import uniffi.safety.UserAction
@@ -191,11 +190,10 @@ class SafetyRuntime private constructor(val app: Context) {
   }
 
   fun snapshotMap(s: Snapshot?): Map<String, Any?> = mapOf(
-    "pDanger" to (s?.pDanger?.toDouble() ?: 0.0),
-    "hmmState" to hmmName(s?.hmmState ?: HmmState.NORMAL),
     "escalation" to escalationName(s?.escalation ?: EscalationLevel.IDLE),
-    "riskBand" to (s?.riskBand?.toInt() ?: 0),
     "evidence" to (s?.evidence ?: ""),
+    "sensingFull" to (s?.sensingFull ?: false),
+    "listening" to (s?.listening ?: false),
     "baselineSeconds" to (s?.baselineSeconds?.toLong() ?: 0L),
     "placement" to placementName(s?.placement),
     "nightMode" to (s?.nightMode ?: false),
@@ -279,16 +277,14 @@ class SafetyRuntime private constructor(val app: Context) {
     is EngineEvent.UnlockLocation -> "unlock_location"
     is EngineEvent.SnatchDetected -> "snatch_detected"
     EngineEvent.Resolved -> "resolved"
-    is EngineEvent.RiskBandChanged -> "risk_band_changed"
     EngineEvent.BatteryDying -> "battery_dying"
     is EngineEvent.LocationIntervalChanged -> "location_interval_changed"
     is EngineEvent.SamplingRateChanged -> "sampling_rate_changed"
+    is EngineEvent.AudioListening -> "audio_listening"
     is EngineEvent.SignalIncident -> "signal_incident"
+    is EngineEvent.IncidentCleared -> "incident_cleared"
+    EngineEvent.IncidentLogCleared -> "incident_log_cleared"
     is EngineEvent.CallOptionAvailable -> "call_option"
-  }
-
-  fun hmmName(s: HmmState) = when (s) {
-    HmmState.NORMAL -> "normal"; HmmState.IMPAIRED -> "impaired"; HmmState.INCIDENT -> "incident"; HmmState.UNRESPONSIVE -> "unresponsive"
   }
 
   fun escalationName(e: EscalationLevel) = when (e) {
@@ -317,9 +313,14 @@ class SafetyRuntime private constructor(val app: Context) {
       val name = eventName(ev)
       synchronized(eventRing) { eventRing.addLast(name); while (eventRing.size > EVENT_RING_MAX) eventRing.removeFirst() }
       // Sampling/interval changes are logged where they are applied; everything else is a rare transition worth a line.
-      if (ev is EngineEvent.SignalIncident) Log.i(TAG, "incident: ${incidentKindName(ev.record.kind)} ${"%.1f".format(ev.record.sdDistance)} SD — ${ev.record.summary}")
+      if (ev is EngineEvent.SignalIncident) Log.i(TAG, "incident #${ev.record.id}: ${incidentKindName(ev.record.kind)} (${incidentTierName(ev.record.tier)}) — ${ev.record.summary}")
+      else if (ev is EngineEvent.IncidentCleared) Log.i(TAG, "incident #${ev.record.id} cleared: ${incidentKindName(ev.record.kind)}")
+      else if (ev is EngineEvent.AudioListening) Log.i(TAG, "engine event: $name on=${ev.on}")
       else if (ev !is EngineEvent.SamplingRateChanged && ev !is EngineEvent.LocationIntervalChanged) Log.i(TAG, "engine event: $name")
       try { handle(ev) } catch (e: Throwable) { Log.e(TAG, "event $ev failed", e) }
+      // the heartbeat carries status_level: send it as soon as the escalation level changes
+      if (ev is EngineEvent.CheckRequested || ev is EngineEvent.HeadsUp || ev is EngineEvent.UnlockLocation ||
+        ev is EngineEvent.SnatchDetected || ev is EngineEvent.Resolved) scope.launch { heartbeat.sendNow() }
     }
     if (events.isNotEmpty()) emitStatus()
   }
@@ -375,7 +376,6 @@ class SafetyRuntime private constructor(val app: Context) {
         emit("sos", mapOf("active" to false))
         emit("escalation", mapOf("level" to "resolved", "summary" to ""))
       }
-      is EngineEvent.RiskBandChanged -> scope.launch { heartbeat.sendNow() }
       EngineEvent.BatteryDying -> scope.launch {
         locationUploader.uploadNow()
         val id = openIncident("battery_dying", "Battery at ${batteryPct()}%")
@@ -388,9 +388,21 @@ class SafetyRuntime private constructor(val app: Context) {
         samplingFull = full
         sensing?.applySampling()
       }
+      is EngineEvent.AudioListening -> sensing?.setListening(ev.on)
       is EngineEvent.SignalIncident -> {
         synchronized(signalRing) { signalRing.addLast(ev.record); while (signalRing.size > SIGNAL_RING_MAX) signalRing.removeFirst() }
         emit("signalIncident", ev.record.toMap())
+      }
+      is EngineEvent.IncidentCleared -> {
+        synchronized(signalRing) {
+          val i = signalRing.indexOfFirst { it.id == ev.record.id }
+          if (i >= 0) signalRing[i] = ev.record
+        }
+        emit("incidentCleared", ev.record.toMap())
+      }
+      EngineEvent.IncidentLogCleared -> {
+        synchronized(signalRing) { signalRing.clear() }
+        emit("incidentLogCleared", emptyMap())
       }
       is EngineEvent.CallOptionAvailable -> {
         scope.launch {
@@ -401,6 +413,14 @@ class SafetyRuntime private constructor(val app: Context) {
         emit("callOption", mapOf("summary" to ev.summary))
       }
     }
+  }
+
+  /** User reset (personal dashboard): empty the incident log, rest sensing, persist, and tick so its events go out now. */
+  fun resetIncidents() {
+    engine.get().resetIncidents(now().toULong())
+    runTick()
+    engine.saveNow()
+    Log.i(TAG, "incident log reset by the user")
   }
 
   fun pushAction(action: UserAction) {

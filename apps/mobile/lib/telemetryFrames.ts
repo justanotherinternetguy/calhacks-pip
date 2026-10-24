@@ -5,14 +5,44 @@
 //   v1 `TelemetryTick`  — one complete tick per message (older phones, 4 Hz).
 //   v2 `TelemetryFrame` — 10 Hz: raw samples + events + incident deltas every frame, the engine `state` block only when
 //                         it changed or at least once a second. `FrameMerger` folds frames into complete ticks for the UI.
-import type { TelemetryFrame, TelemetryState, TelemetryTick } from '@/modules/safety-native';
+//
+// Older phone builds still send extra fields (`hmm`, `pDanger`, `riskBand`, `metrics.activeIds`) and records without
+// tier / clearedMs: the guards only require what every generation shares (`metrics.bands`, `escalation`), extra
+// fields are ignored, and `normState` / `normIncident` fill the v2 fields with defaults.
+import type { IncidentRecord, LiveMetrics, TelemetryFrame, TelemetryState, TelemetryTick } from '@/modules/safety-native';
 
 const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
 
 function isState(s: unknown): s is TelemetryState {
   if (!s || typeof s !== 'object') return false;
   const t = s as Partial<TelemetryState>;
-  return !!t.metrics && Array.isArray(t.metrics.bands) && typeof t.hmm === 'string' && typeof t.escalation === 'string' && isNum(t.pDanger);
+  return !!t.metrics && Array.isArray(t.metrics.bands) && typeof t.escalation === 'string';
+}
+
+/** Fill the v2 state fields an older phone does not send (listening, metrics.listening / context). */
+function normState(s: TelemetryState): TelemetryState {
+  const listening = typeof s.listening === 'boolean' ? s.listening : false;
+  const m: Partial<LiveMetrics> = s.metrics;
+  const metrics: LiveMetrics = {
+    ...s.metrics,
+    listening: typeof m.listening === 'boolean' ? m.listening : listening,
+    context: Array.isArray(m.context) ? m.context : [],
+  };
+  return { ...s, listening, metrics };
+}
+
+/**
+ * Fill v2 record fields. A record from an older phone has no clearing rule, so it is shown as a logged moment
+ * (cleared at its own time) rather than one that never clears.
+ */
+export function normIncident(r: IncidentRecord): IncidentRecord {
+  const p: Partial<IncidentRecord> = r;
+  return {
+    ...r,
+    tier: p.tier === 'context' || p.tier === 'watch' || p.tier === 'danger' ? p.tier : 'watch',
+    clearedMs: isNum(p.clearedMs) ? p.clearedMs : r.tMs,
+    acknowledged: p.acknowledged === true,
+  };
 }
 
 /** Runtime guard for a v1 tick. */
@@ -45,11 +75,16 @@ export class FrameMerger {
 
   merge(p: unknown): TelemetryTick | null {
     if (isTelemetryTick(p)) {
-      this.state = pickState(p);
-      return { ...p, st: isNum((p as { st?: unknown }).st) && (p as { st: number }).st > 0 ? (p as { st: number }).st : p.t };
+      this.state = normState(pickState(p));
+      return {
+        ...p,
+        ...this.state,
+        st: isNum((p as { st?: unknown }).st) && (p as { st: number }).st > 0 ? (p as { st: number }).st : p.t,
+        incidents: p.incidents.map(normIncident),
+      };
     }
     if (!isTelemetryFrame(p)) return null;
-    if (p.state) this.state = p.state;
+    if (p.state) this.state = normState(p.state);
     const s = this.state;
     if (!s) { this.dropped++; return null; }
     const tick: TelemetryTick = {
@@ -62,7 +97,7 @@ export class FrameMerger {
       gyro: p.gyro,
       st: isNum(p.st) && p.st > 0 ? p.st : p.t,
       sampleHz: isNum(p.sampleHz) ? p.sampleHz : 0,
-      incidents: p.incidents,
+      incidents: p.incidents.map(normIncident),
       incidentCount: isNum(p.incidentCount) ? p.incidentCount : 0,
       events: p.events,
     };
@@ -73,7 +108,7 @@ export class FrameMerger {
 
 function pickState(t: TelemetryTick): TelemetryState {
   const s: TelemetryState = {
-    metrics: t.metrics, hmm: t.hmm, escalation: t.escalation, riskBand: t.riskBand, pDanger: t.pDanger, nightMode: t.nightMode,
+    metrics: t.metrics, escalation: t.escalation, listening: t.listening, nightMode: t.nightMode,
     battery: t.battery, activity: t.activity, placement: t.placement, samplingFull: t.samplingFull,
   };
   if (t.checkPhrase !== undefined) s.checkPhrase = t.checkPhrase;

@@ -4,13 +4,12 @@ import { Pill } from '@/components/ui';
 import { colors, levelColor } from '@/lib/theme';
 import type { Presence } from '@/lib/types';
 import type { DeviceStatus } from './useMonitorData';
-import { heartbeatAge, riskColor } from './labels';
+import { heartbeatAge } from './labels';
 
 export function MemberCard({ name, shortId, isMe, status, presence, now, highlight }: {
   name: string; shortId: string; isMe: boolean; status?: DeviceStatus; presence?: Presence; now: number; highlight?: string;
 }) {
   const hb = heartbeatAge(status?.last_heartbeat, now);
-  const band = status?.risk_band ?? 0;
   const battery = status?.battery_pct;
   const batteryColor = battery == null ? colors.muted : battery <= 15 ? colors.danger : battery <= 30 ? colors.warn : colors.text;
   return (
@@ -20,7 +19,6 @@ export function MemberCard({ name, shortId, isMe, status, presence, now, highlig
           <Text style={styles.name} numberOfLines={1}>{name}{isMe ? ' (you)' : ''}</Text>
           <Text style={styles.id}>{shortId}{status ? ` · ${status.platform}` : ' · no device'}</Text>
         </View>
-        <Pill text={`risk ${band}`} color={riskColor(band)} />
       </View>
       <View style={styles.grid}>
         <Stat label="Night mode" value={status ? (status.night_mode ? 'on' : 'off') : '—'} color={status?.night_mode ? colors.accent : colors.muted} />

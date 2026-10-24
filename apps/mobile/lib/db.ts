@@ -76,7 +76,7 @@ export const insertUnlockApproval = async (a: Omit<UnlockApproval, 'id' | 'creat
 
 // ---- RPCs
 export const rpc = {
-  heartbeat: (a: { night_mode: boolean; battery_pct: number; risk_band: number; status_level: string }) => supabase.rpc('heartbeat', a),
+  heartbeat: (a: { night_mode: boolean; battery_pct: number; status_level: string }) => supabase.rpc('heartbeat', a),
   openIncident: async (a: { group_id: Uuid; level: IncidentLevel; summary: string }) => unwrap<Uuid>(await supabase.rpc('open_incident', a)),
   resolveIncident: async (incident_id: Uuid) => unwrap(await supabase.rpc('resolve_incident', { incident_id })),
   addIncidentEvent: async (a: { incident_id: Uuid; kind: IncidentEventKind; payload?: Record<string, unknown> }) =>

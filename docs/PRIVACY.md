@@ -8,7 +8,9 @@ ask for help. It first asks *you*. Only if you don't answer does it tell the fri
 
 - Your home and other saved places. Never uploaded.
 - Your walking and typing baselines. Stored encrypted; never uploaded.
-- Microphone audio. Analyzed in memory for scream / shout / glass-break scores and discarded.
+- Microphone audio. The microphone is off unless something already happened (a fall, a dropped
+  phone, a grab, a missed check-in, unsteady walking at night); then it listens for about 10 minutes.
+  Audio is analyzed in memory for scream / shout / snoring labels and a loudness level, then discarded.
   No recordings, ever.
 - Your private keys.
 
@@ -17,9 +19,9 @@ ask for help. It first asks *you*. Only if you don't answer does it tell the fri
 | Data | Who can read it |
 |---|---|
 | Your location (every 1–5 min during night mode) | **Nobody**, until an incident. It is encrypted with a key only your phone has. Your friends get the key only if you don't respond to a check-in, you tap "I need help" / SOS, or your phone goes offline and at least 2 friends agree to unlock. The company never has the key. |
-| Whether night mode is on, your battery level, a 0–3 risk band | Your group's friends and the server (every 2 min, no location) |
+| Whether night mode is on, your battery level, whether an alert is in progress | Your group's friends and the server (every 2 min, no location) |
 | Whether you are near or apart from your friends | Your group. The server sees only a yes/no; it never sees coordinates. |
-| That a check-in / heads-up / unlock happened, with a short reason ("hard fall, no movement 4 min") | Your group and the server |
+| That a check-in / heads-up / unlock happened, with a short reason ("a hard fall, then down for 2 min") | Your group and the server |
 | Every time anyone unlocks your location | **You** see it, and so does the whole group. |
 
 Encrypted locations are deleted from the server after 6 hours. Keys are destroyed at the end of

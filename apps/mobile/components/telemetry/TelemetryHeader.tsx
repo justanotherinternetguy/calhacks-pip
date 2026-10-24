@@ -4,7 +4,7 @@ import type { TelemetryTick } from '@/modules/safety-native';
 import { Pill } from '@/components/ui';
 import { latencyText, type TelemetryConnection } from '@/lib/telemetry';
 import { colors, levelColor } from '@/lib/theme';
-import { CONN_LABEL, ESCALATION_LABEL, HMM_LABEL, batteryColor, connColor, fmtClock, hmmColor } from './labels';
+import { CONN_LABEL, ESCALATION_LABEL, batteryColor, connColor, fmtClock } from './labels';
 
 export type SubjectOption = { id: string; name: string; isMe: boolean; publishing: boolean };
 
@@ -69,9 +69,8 @@ export function TelemetryHeader({ groupName, now, subjects, subjectId, manual, o
             <Pill text={tick.nightMode ? 'night mode' : 'day'} color={tick.nightMode ? colors.accent : colors.muted} />
             <Pill text={tick.samplingFull ? `${Math.round(tick.sampleHz)} Hz + gyro` : `${Math.round(tick.sampleHz)} Hz accel`} color={tick.samplingFull ? colors.warn : colors.muted} />
             <Pill text={`battery ${Math.round(tick.battery)}%`} color={batteryColor(tick.battery)} />
-            <Pill text={`risk ${tick.riskBand}`} color={[colors.ok, colors.accent, colors.warn, colors.danger][tick.riskBand] ?? colors.muted} />
+            <Pill text={tick.listening ? 'mic listening' : 'mic off'} color={tick.listening ? colors.warn : colors.muted} />
             <Pill text={ESCALATION_LABEL[tick.escalation] ?? tick.escalation} color={levelColor(tick.escalation)} />
-            <Pill text={`HMM ${HMM_LABEL[tick.hmm] ?? tick.hmm}`} color={hmmColor(tick.hmm)} />
           </View>
         ) : (
           <Text style={styles.meta}>waiting for the first tick…</Text>

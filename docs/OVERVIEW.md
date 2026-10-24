@@ -3,8 +3,8 @@
 Safe is a passive night-out safety system. The person being protected (the *subject*) carries an Android
 phone and never has to do anything. The phone watches how they move, notices when they can no longer ask
 for help, gives them a chance to say "I'm fine", and only then tells their friends. Friends watch from a
-web dashboard. Location is end-to-end encrypted and is released to friends only when the danger estimate
-is high. The app never calls the police itself; friends decide.
+web dashboard. Location is end-to-end encrypted and is released to friends only when a check-in goes
+unanswered while the evidence still holds (or on a grab / SOS). The app never calls the police itself; friends decide.
 
 Three pieces: an **Android app** (Expo UI + Kotlin sensing service + Rust detection core), a **Supabase
 backend** (Postgres with row-level security, Realtime, edge functions), and a **web monitor** (the same
@@ -19,7 +19,7 @@ Expo code base built for the browser, with the Rust crypto compiled to WebAssemb
   are away from home inside their evening window (default 8pm–6am) and ends when they get home. It can also
   be forced on, off, or paused for tonight from the home screen.
 - A persistent Android foreground service keeps sensing alive with the screen off. Every 2 minutes it sends a
-  **heartbeat** (battery, night mode, coarse risk band) — never a location.
+  **heartbeat** (battery, night mode, escalation status) — never a location.
 
 ### Sensing (Kotlin service, 50 Hz)
 - **Two sampling modes.** Low rate by default (10 Hz accelerometer, no gyro). Full rate (50 Hz accelerometer
@@ -28,61 +28,89 @@ Expo code base built for the browser, with the Rust crypto compiled to WebAssemb
   batched up to 1 s normally; while a stream is open batching is off (every sample as it happens) and a partial
   wake lock keeps the CPU up with the screen off and the phone unplugged.
 - Also fed in: motion activity (still / walking / running / vehicle), screen and unlock events, time since the
-  last touch, battery, distance from home, together/separated status from the server, and (at night) a
-  duty-cycled microphone classified on-device by **YAMNet** for screams, shouts and breaking glass. Audio
-  is analysed in memory only and never stored or uploaded.
+  last touch, battery and charging, distance from home, and together/separated status from the server.
+- **Microphone: listening windows only.** The mic is off unless the engine opens a listening window after a
+  fall, a phone drop, a grab, a missed check-in or unsteady gait (night mode only): for 10 minutes after each,
+  and for as long as an escalation runs. In a
+  window, ~1 s frames are classified on-device by **YAMNet** (scream, shout, snoring) plus a sound level in dB.
+  Only those labels reach the engine; audio is analysed in memory and never stored or uploaded.
 
 ### Detection (Rust core, `safety-core`, runs entirely on the device)
-Every second the engine updates a set of **live metrics** and compares each to the subject's **personal
-baseline band** (mean ± 2.5 SD per phone placement — pocket / hand / bag; 3.5 SD until the baseline is
-trusted after 7 days of ordinary walking; rolling 14-day window; nights that produced incidents are excluded):
+There is no probability model. Signals open and clear explicit **incidents**, each with a clearing rule, and
+every one goes into an **on-device incident log** (timestamp, kind, tier, raw values, distance out of band in SDs,
+placement, cleared time). Entries expire after 8 hours.
 
-| Metric | Source | Rule |
-|---|---|---|
-| Cadence, stride-time variability, step regularity, lateral sway | accelerometer | out of band for 30 s of walking ⇒ **Gait drift** |
-| Wobble while walking | gyroscope | above band 30 s ⇒ Gait drift |
-| Peak force | accelerometer | > 2.5 g with orientation change (or a free-fall pattern) ⇒ **Impact** |
-| Jerk + rotation rate | accel + gyro | spike while the phone is in hand, followed by running away ⇒ **Grab** |
-| Still 3 min + no touch 3 min after an impact | activity + touch | ⇒ **Stillness** |
-| Separated > 150 m from all friends 10 min, not heading home | proximity tokens + home distance | ⇒ **Separated** |
-| Typing latency / error rate at check-in | native typing view | outside band ⇒ **Typing off** |
+Every second the engine updates **live metrics** and compares each to the subject's **personal baseline band**
+(mean ± 2.5 SD per phone placement — pocket / hand / bag; 3.5 SD until the baseline is trusted after 7 days of
+ordinary walking; rolling 14-day window; nights that produced incidents are excluded).
 
-- A **"phone dropped alone"** pattern (long free fall, lands flat, no body motion) is deliberately *not* an
-  incident; it resolves when the phone is picked up.
-- Each incident goes into an **on-device incident log** (timestamp, type, raw values, distance out of band
-  in SDs, placement, state probabilities at that moment). Entries expire after 8 hours. A rule-based
-  **sequence agent** scans the log for runs that are concerning together (e.g. gait drift → separated →
-  impact → stillness), links them into a sequence, boosts the model, prunes isolated minor events, and
-  writes the one-line summary friends later see ("Hard fall, then no movement for 4 min").
-- A four-state **hidden Markov model** — Normal / Impaired / Incident / Unresponsive — runs a log-space
-  forward filter once a minute and immediately on any incident. Emissions are conditioned on the state;
-  context (away from home, late, separated, rapid drift onset, sequence boost) shifts only the *forward*
-  transitions. Recovery transitions are built in, so "sat still, then got up and walked" never alarms.
-  `P(danger) = P(Incident) + P(Unresponsive)`.
+Each incident has a **tier**: *context* is logged only; *watch* turns on full sensing (50 Hz + gyro, faster
+location) and counts toward a check-in; *danger* asks "You okay?" on its own.
 
-### Escalation (Rust state machine with hysteresis and cooldowns)
-1. **Check** — `P(danger) ≥ 0.7`: a high-priority "You okay?" notification. Opening it requires unlocking
+| Incident | Tier | Opens when | Clears when |
+|---|---|---|---|
+| Phone drop | watch | long free fall, lands flat, dead still, not picked up within 60 s | picked up |
+| High-g impact (warning) | watch | the first reading above 2.5 g, at once | replaced by possible fall / cleared by a drop, a grab or no tilt ~2.4 s later |
+| Possible fall | watch | impact > 2.5 g + orientation change + micro-motion after (or free fall + hard peak) | steps resume |
+| Fall, recovered | context | steps resume after a possible fall | (a moment; expires with the log) |
+| Down after fall | danger | after a possible fall or hard impact: no steps and no touch for 15 s | steps resume |
+| Hard impact | watch | the high-g warning stays when the impact had a tilt but was neither a fall nor a drop | walking resumes |
+| Unsteady gait | watch | stride variability / regularity / sway / wobble out of band for 30 s of walking | 2 min of in-band walking |
+| Slowed walk | watch | cadence > 20 % below the baseline for 1 min of walking | 30 s at normal cadence |
+| Stumble | context | one step interval > 40 % off rhythm with a sideways jolt, walking continues | (a moment; pruned after 30 min if nothing follows) |
+| Repeated stumbles | watch | 3 stumbles within 5 min | 10 min of walking without one |
+| Phone left behind | watch | phone set down (no micro-motion) 20 min while away late | picked up / touched |
+| Grab | danger | in hand + jerk spike + sharp rotation, then running away | owner unlocks the phone |
+| Separated | watch | > 150 m from all friends 10 min, not heading home | back with someone |
+| Stopped on the way home | watch | distance home fell ≥ 200 m, then not moving 10 min, not home | moving again / home |
+| In a vehicle | context | OS activity reports a vehicle | out of the vehicle |
+| Battery critical | context | ≤ 10 % and not charging while away late (uploads the latest location) | charging / ≥ 15 % |
+| Check-in missed | danger | "You okay?" unanswered for 2 min | answered |
+| Check-in typing off | watch | check-in typing far off the personal typing baseline | a normal check-in |
+| Scream / shout | watch | ≥ 2 frames of screaming/shouting within 2 min of a fall or grab, not in a loud venue | 10 min |
+| Snoring while down | danger | snoring frames while down after a fall and a check-in was missed | answered / steps resume |
+
+Context conditions that are states rather than events (away from home late, in a loud venue, phone set down) are
+shown with the live metrics and used by the rules, not logged. A "phone dropped alone" that is picked up in time is
+not an incident. Phone offline is detected server-side by the watchdog (below).
+
+**Incident logging only (current default).** `auto_escalate = false` in `model-v1.toml`: every incident is
+logged and drives full sensing and the listening window, but nothing escalates on its own. Set it to `true` to
+enable the check-in / heads-up / unlock flow below. Manual SOS works either way.
+
+**When to ask** (with `auto_escalate = true`). A check-in is asked when a danger incident is active, or when watch incidents from **two
+independent families** (fall · gait · phone · location · check-in · audio) are active at once — e.g. unsteady
+gait while separated, or a fall followed by screaming. Two incidents from one family (unsteady + slowed walk, both
+from the same walk) never ask. Answering acknowledges what is active; only a new incident can ask again.
+
+When an episode starts (check-in, grab, SOS) the incidents from the last hour join it, and friends later see its
+one-line summary ("Unsteady walking, then a hard fall, then down for 2 min, then no answer to a check-in").
+
+Encrypted location uploads every 5 minutes in night mode, every minute once friends were alerted.
+
+### Escalation (Rust state machine)
+1. **Check** — the trigger above holds: a high-priority "You okay?" notification. Opening it requires unlocking
    the phone (which blocks a thief). The subject types a random three-word phrase in a native input that
    measures their typing; they can also tap **"I need help"**, which skips straight to step 3.
-2. **Heads-up** — no response for 2 minutes, or typing far off baseline: friends get "Sam might not be
-   okay", with **no location**.
-3. **Location unlock** — still no response and `P ≥ 0.9`: the phone releases the current and next hour
-   keys to friends and keeps uploading encrypted live location.
+2. **Heads-up** — no answer within 2 minutes while the trigger still holds (logged as *check-in missed*), or
+   typing far off baseline: friends get "Sam might not be okay", with **no location**. If the evidence clears on
+   its own (got up and walked, back with the group) the episode resolves instead.
+3. **Location unlock** — still no answer 4 minutes after the check and the trigger still holds: the phone
+   releases the current and next hour keys to friends and keeps uploading encrypted live location.
 4. **Friends act** — ring the phone loudly, call, "I'm going", mark found/safe.
 5. **Call option** — after 10 minutes with no response, friends get a one-tap campus safety / 911 option
    with a prefilled card. The app never calls on its own.
 
 Other paths: a **grab** skips the check (immediate heads-up with no location; location unlocks after
 2 minutes unless the owner unlocks the phone). **Manual SOS** (hold button, quick-settings tile, widget)
-counts as consent and unlocks immediately. A correct check-in resets the model and lowers sensitivity for
-30 minutes; a wrong phrase counts as evidence.
+counts as consent and unlocks immediately. A wrong phrase leaves the check open for another try.
 
 ### Personal dashboard and demo mode
-- Settings → **Personal dashboard** (off by default): live metrics vs bands, the four state probabilities,
-  and the incident log, refreshed every second. Opening it forces full-rate sampling.
+- Settings → **Personal dashboard** (off by default): live metrics vs bands, sensing / mic status and
+  context, and the incident log (with the time each cleared), refreshed every second. Opening it forces full-rate sampling.
 - Settings → **Demo sensitivity**: loads a partial config override (impact at 1.8 g, grab after a yank +
-  twist + 2 s of jogging, gait drift after 10 s, 30 s check-in, drop-vs-fall discrimination disabled) so
-  incidents can be triggered by hand. Turning it off restores the production thresholds.
+  twist + 2 s of jogging, unsteady gait after 10 s, down after a fall after 30 s, 30 s check-in, drop-vs-fall
+  discrimination disabled) so incidents can be triggered by hand. Turning it off restores the production thresholds.
 - Model parameters live in a signed TOML served by the backend and merged over bundled defaults, so a
   config update can never brick the engine.
 
@@ -137,17 +165,19 @@ counts as consent and unlocks immediately. A correct check-in resets the model a
 - `/monitor` is a **real-time telemetry console** for the subject's phone, fed ten frames a second over one
   persistent Supabase Realtime WebSocket (no database writes; the phone measures and shows its own server round
   trip, and the waveform is drawn on the phone's sensor clock so network jitter never distorts it): scrolling 50 Hz accelerometer and
-  gyroscope waveforms with the impact line, metric band tiles with out-of-band flashes and sparklines, a
-  five-minute danger strip, the stacked state probabilities, the live incident log and sequence markers,
-  the engine event ticker, a check-in countdown, device status (heartbeat age, battery, night mode, risk
-  band, presence), and the friend actions. Location is never part of telemetry; it stays on the escrow path.
+  gyroscope waveforms with the impact line, metric band tiles with out-of-band flashes and sparklines,
+  a five-minute mic-listening strip, the live incident log (tier, cleared time, answered) and sequence markers,
+  the engine event ticker, a check-in countdown, device status (heartbeat age, battery, night mode,
+  presence), and the friend actions. Location is never part of telemetry; it stays on the escrow path.
 
 ---
 
 ## 5. Verification
 
-- Rust: 48 core tests (golden stories A and B, recovery, context only moving forward transitions, grab
-  timings, drift persistence, low-rate mode, sequence agent, baseline trust, config compatibility) plus
+- Rust: 59 core tests (golden stories A and B; every incident's open and clear rule — falls, drops, recovery,
+  down after fall, unsteady / slowed gait, stumbles, left behind, separated, stopped on the way home, vehicle,
+  battery, scream and snoring; the two-family check-in trigger, acknowledgement, grab timings, listening window,
+  low-rate mode, episodes and summaries, baseline trust, config and old-blob compatibility) plus
   19 crypto tests (Shamir k-of-n properties, HPKE tamper cases, AEAD vectors, zeroization, proximity
   matching). A `sim` CLI replays recorded or synthetic traces through the full pipeline and gates CI on
   false-alarm rate and detection delay.
@@ -159,7 +189,7 @@ counts as consent and unlocks immediately. A correct check-in resets the model a
 ## 6. Repository map
 
 ```
-core/crates/safety-core     detection engine (signal, baseline, hmm, escalation, log, config)
+core/crates/safety-core     detection engine (signal, baseline, incident rules, escalation, log, config)
 core/crates/safety-crypto   escrow and proximity cryptography
 core/crates/safety-ffi      uniffi bindings (Kotlin)      core/crates/safety-wasm   wasm-bindgen (web)
 core/crates/sim             trace replay / synth / CI gate  core/config/model-*.toml  parameters

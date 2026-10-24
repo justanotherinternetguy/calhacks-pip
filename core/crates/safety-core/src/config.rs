@@ -6,75 +6,38 @@ pub const DEFAULT_TOML: &str = include_str!("../../../config/model-v1.toml");
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
-    pub hmm: HmmCfg,
-    pub emissions: EmissionCfg,
     pub thresholds: ThresholdCfg,
     pub gait: GaitCfg,
     pub impact: ImpactCfg,
     pub grab: GrabCfg,
     pub signals: SignalCfg,
+    pub incidents: IncidentCfg,
     pub sampling: SamplingCfg,
     pub sequence: SequenceCfg,
     pub log: LogCfg,
     pub baseline: BaselineCfg,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HmmCfg {
-    pub initial: [f32; 4],
-    pub step_seconds: u32,
-    pub base_logits: [[f32; 4]; 4],
-    pub context: ContextCfg,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ContextCfg {
-    pub away_from_home: [f32; 4],
-    pub separated: [f32; 4],
-    pub late: [f32; 4],
-    pub rapid_drift: [f32; 4],
-    /// per-from-state multiplier applied to the sequence agent's log-odds boost
-    pub sequence: [f32; 4],
-    pub late_hour_start: u8,
-    pub late_hour_end: u8,
-    pub rapid_drift_z_per_min: f32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EmissionCfg {
-    pub p_walking: [f32; 4],
-    pub gait_z_mean: [f32; 4],
-    pub gait_z_sd: [f32; 4],
-    pub p_impact: [f32; 4],
-    pub stillness_buckets_s: [f32; 4],
-    pub p_stillness: [[f32; 4]; 4],
-    pub p_agitation: [f32; 4],
-    pub p_audio: [f32; 4],
-    pub p_touched: [f32; 4],
-    pub p_wrong_phrase: [f32; 4],
-    pub p_typing_impaired: [f32; 4],
-}
-
+/// Escalation timings. A check-in ("You okay?") is asked when a Danger incident is active or Watch incidents from
+/// at least `check_min_families` independent families are active at once.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ThresholdCfg {
-    pub t_check: f32,
-    pub t_heads_up: f32,
-    pub t_unlock: f32,
+    /// false = log incidents only; no automatic check-in / heads-up / unlock / grab alert (manual SOS still works)
+    pub auto_escalate: bool,
+    /// the user gets this long to answer before CheckInMissed + HeadsUp
     pub check_deadline_s: u32,
-    /// no response for this long (since the check) and P >= t_unlock => UnlockLocation
+    /// no response for this long (since the check) while the trigger still holds => UnlockLocation
     pub unlock_no_response_s: u32,
     /// no response for this long => CallOptionAvailable (once per episode)
     pub call_option_s: u32,
     /// grab: UnlockLocation this long after the immediate HeadsUp unless PhoneUnlocked/BiometricDismiss
     pub grab_unlock_s: u32,
-    pub dismiss_cooldown_s: u32,
-    pub cooldown_threshold_boost: f32,
-    pub dismiss_posterior: [f32; 4],
+    /// minimum gap between two Check prompts
     pub check_repeat_cooldown_s: u32,
-    pub risk_band_edges: [f32; 3],
-    pub risk_band_hysteresis: f32,
-    pub location_interval_s: [u32; 4],
-    pub battery_dying_pct: u8,
+    pub check_min_families: u32,
+    /// encrypted location upload interval (seconds): normally, and once friends were alerted
+    pub location_upload_s: u32,
+    pub location_upload_alert_s: u32,
     pub typing_z_reject: f32,
     pub typing_max_edit_ratio: f32,
 }
@@ -129,15 +92,49 @@ pub struct GrabCfg {
 pub struct SignalCfg {
     pub band_sd: f32,
     pub band_sd_untrusted: f32,
-    pub drift_persist_s: f32,
-    pub drift_refire_s: f32,
-    pub drift_gap_s: f32,
     /// dashboard peak-hold for the spike metrics (jerk, rotation, peak_g), seconds
     pub spike_hold_s: f32,
-    pub stillness_s: f32,
-    pub stillness_after_impact_min: f32,
+}
+
+/// Opening and clearing rules for every incident kind (see model-v1.toml [incidents]).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IncidentCfg {
+    pub drop_pickup_s: f32,
+    pub down_after_fall_s: f32,
+    pub unsteady_persist_s: f32,
+    pub unsteady_clear_s: f32,
+    pub drift_gap_s: f32,
+    pub slowed_cadence_frac: f32,
+    pub slowed_persist_s: f32,
+    pub slowed_clear_s: f32,
+    pub stumble_interval_dev: f32,
+    pub stumble_lateral_g: f32,
+    pub stumble_prune_min: f32,
+    pub repeated_stumbles_n: u32,
+    pub repeated_stumbles_window_min: f32,
+    pub repeated_stumbles_clear_min: f32,
+    pub set_down_rms_g: f32,
+    pub set_down_s: f32,
+    pub left_behind_min: f32,
     pub separated_min: f32,
     pub separated_home_margin_m: f32,
+    pub stopped_min: f32,
+    pub heading_home_window_min: f32,
+    pub heading_home_margin_m: f32,
+    pub moving_speed_mps: f32,
+    pub battery_critical_pct: u8,
+    pub battery_clear_pct: u8,
+    pub scream_min: f32,
+    pub scream_frames: u32,
+    pub scream_window_s: f32,
+    pub scream_after_s: f32,
+    pub scream_clear_min: f32,
+    pub loud_venue_db: f32,
+    pub loud_venue_frames: u32,
+    pub snore_min: f32,
+    pub snore_frames: u32,
+    pub snore_window_s: f32,
+    pub listen_hold_min: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -150,17 +147,11 @@ pub struct SamplingCfg {
     pub learn_walks_full_rate: bool,
 }
 
+/// Escalation episodes: when a check-in, grab or SOS starts, every incident within `window_min` before it joins
+/// the episode (sequence) and the friends' one-line summary is built from them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SequenceCfg {
     pub window_min: f32,
-    pub prune_isolated_gait_drift_min: f32,
-    pub max_boost: f32,
-    pub w_gait_drift: f32,
-    pub w_separated: f32,
-    pub w_impact: f32,
-    pub w_stillness: f32,
-    pub w_grab: f32,
-    pub w_typing_off: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -173,7 +164,6 @@ pub struct BaselineCfg {
     pub trusted_days: u32,
     pub window_days: u32,
     pub sd_floor_frac: f32,
-    pub cold_start_z_scale: f32,
     pub min_samples: usize,
     pub max_samples: usize,
     pub ewma_alpha: f32,
@@ -223,24 +213,26 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), EngineError> {
+        let err = |m: &str| Err(EngineError::Config { msg: m.into() });
         let t = &self.thresholds;
-        if !(t.t_heads_up <= t.t_check && t.t_check < t.t_unlock && t.t_unlock <= 1.0) {
-            return Err(EngineError::Config {
-                msg: "thresholds must satisfy t_heads_up <= t_check < t_unlock <= 1".into(),
-            });
+        if t.check_min_families < 1 {
+            return err("thresholds.check_min_families must be >= 1");
         }
-        let s: f32 = self.hmm.initial.iter().sum();
-        if (s - 1.0).abs() > 0.01 {
-            return Err(EngineError::Config { msg: "hmm.initial must sum to 1".into() });
+        if t.check_deadline_s == 0 || t.unlock_no_response_s < t.check_deadline_s {
+            return err("thresholds: unlock_no_response_s must be >= check_deadline_s > 0");
         }
         if self.gait.window_s <= 0.0 || self.gait.sample_hz <= 0.0 || self.gait.hop_s <= 0.0 {
-            return Err(EngineError::Config { msg: "gait window/hop/sample rate must be positive".into() });
+            return err("gait window/hop/sample rate must be positive");
         }
-        if self.sequence.max_boost < 0.0 || self.sequence.max_boost > 5.0 {
-            return Err(EngineError::Config { msg: "sequence.max_boost must be within [0, 5]".into() });
+        let i = &self.incidents;
+        if i.repeated_stumbles_n < 2 || i.scream_frames == 0 || i.snore_frames == 0 || i.loud_venue_frames == 0 {
+            return err("incidents: repeated_stumbles_n >= 2 and frame counts >= 1");
+        }
+        if !(0.0..1.0).contains(&i.slowed_cadence_frac) {
+            return err("incidents.slowed_cadence_frac must be within [0, 1)");
         }
         if self.baseline.trusted_days == 0 || self.baseline.window_days < self.baseline.trusted_days {
-            return Err(EngineError::Config { msg: "baseline.window_days must be >= trusted_days >= 1".into() });
+            return err("baseline.window_days must be >= trusted_days >= 1");
         }
         Ok(())
     }
@@ -252,20 +244,21 @@ mod tests {
     #[test]
     fn bundled_config_parses() {
         let c = Config::default_v1();
-        assert_eq!(c.hmm.step_seconds, 60);
-        assert!((c.thresholds.t_check - 0.7).abs() < 1e-6);
-        assert_eq!(c.thresholds.unlock_no_response_s, 120);
+        assert_eq!(c.thresholds.check_deadline_s, 120);
+        assert_eq!(c.thresholds.unlock_no_response_s, 240);
         assert_eq!(c.thresholds.call_option_s, 600);
+        assert_eq!(c.thresholds.check_min_families, 2);
         assert_eq!(c.baseline.trusted_days, 7);
         assert!((c.gait.hop_s - 1.0).abs() < 1e-6, "live metrics hop every second");
         assert!((c.signals.spike_hold_s - 8.0).abs() < 1e-6);
+        assert!((c.incidents.down_after_fall_s - 15.0).abs() < 1e-6);
     }
     #[test]
     fn bad_config_is_error() {
-        // Unknown keys are ignored (defaults fill the rest); wrong types and invalid thresholds are errors.
+        // Unknown keys are ignored (defaults fill the rest); wrong types and invalid values are errors.
         assert!(Config::from_toml("nonsense = 1").is_ok());
-        assert!(matches!(Config::from_toml("[hmm]\nstep_seconds = \"x\""), Err(EngineError::Config { .. })));
-        assert!(matches!(Config::from_toml("[thresholds]\nt_check = 1.5"), Err(EngineError::Config { .. })));
+        assert!(matches!(Config::from_toml("[gait]\nhop_s = \"x\""), Err(EngineError::Config { .. })));
+        assert!(matches!(Config::from_toml("[thresholds]\ncheck_min_families = 0"), Err(EngineError::Config { .. })));
         assert!(matches!(Config::from_toml("not toml ="), Err(EngineError::Config { .. })));
     }
 }
@@ -291,30 +284,31 @@ fn merge_into(base: &mut toml::Value, over: toml::Value) {
 mod compat_tests {
     use super::*;
 
+    /// A v1.1 server config (HMM tables, P thresholds) still loads: its unknown keys are ignored, the keys that
+    /// still exist apply, everything else comes from the bundled file.
     #[test]
-    fn older_schema_without_v11_sections_still_parses() {
-        // Strip the v1.1 additions the way a pre-addendum config would look.
-        let old: String = DEFAULT_TOML
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("sequence = "))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let cut = old.find("[sequence]").expect("fixture has a [sequence] table");
-        let next = old[cut + 1..].find("\n[").map(|i| cut + 1 + i).unwrap_or(old.len());
-        let old = format!("{}{}", &old[..cut], &old[next..]);
-        assert!(!old.contains("[sequence]"));
-        let cfg = Config::from_toml(&old).expect("missing keys fall back to defaults");
-        let fresh = Config::default_v1();
-        assert_eq!(cfg.hmm.context.sequence, fresh.hmm.context.sequence);
+    fn old_hmm_schema_still_parses() {
+        let old = "[hmm]\nstep_seconds = 60\n[emissions]\np_impact = [0.1, 0.1, 0.6, 0.1]\n\
+                   [thresholds]\nt_check = 0.7\nt_unlock = 0.9\ncheck_deadline_s = 90\n[sequence]\nmax_boost = 2.5\n";
+        let cfg = Config::from_toml(old).expect("old keys are ignored");
+        assert_eq!(cfg.thresholds.check_deadline_s, 90);
+        assert_eq!(cfg.thresholds.unlock_no_response_s, Config::default_v1().thresholds.unlock_no_response_s);
+    }
+
+    #[test]
+    fn demo_override_parses() {
+        let cfg = Config::from_toml(include_str!("../../../config/model-demo.toml")).expect("demo override is valid");
+        assert_eq!(cfg.thresholds.check_deadline_s, 30);
+        assert_eq!(cfg.incidents.down_after_fall_s, 15.0);
     }
 
     #[test]
     fn empty_and_partial_overrides_use_defaults() {
         let cfg = Config::from_toml("").unwrap();
-        assert_eq!(cfg.thresholds.t_check, Config::default_v1().thresholds.t_check);
-        let cfg = Config::from_toml("[thresholds]\nt_check = 0.75\n").unwrap();
-        assert_eq!(cfg.thresholds.t_check, 0.75);
+        assert_eq!(cfg.thresholds.check_deadline_s, Config::default_v1().thresholds.check_deadline_s);
+        let cfg = Config::from_toml("[incidents]\ndown_after_fall_s = 30\n").unwrap();
+        assert_eq!(cfg.incidents.down_after_fall_s, 30.0);
         assert_eq!(cfg.thresholds.call_option_s, Config::default_v1().thresholds.call_option_s);
-        assert!(Config::from_toml("[thresholds]\nt_check = \"nope\"\n").is_err());
+        assert!(Config::from_toml("[incidents]\ndown_after_fall_s = \"nope\"\n").is_err());
     }
 }

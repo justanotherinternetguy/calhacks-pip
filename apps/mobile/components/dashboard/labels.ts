@@ -1,6 +1,6 @@
 // Display labels for the §6 personal dashboard. Status colours are reserved (danger/warn/ok) and every
 // colour is paired with text, so nothing is encoded by colour alone.
-import type { Activity, IncidentKind, Placement } from '@/modules/safety-native';
+import type { Activity, IncidentKind, IncidentTier, Placement } from '@/modules/safety-native';
 import { colors } from '@/lib/theme';
 
 export const METRIC_LABEL: Record<string, { label: string; unit: string; digits: number }> = {
@@ -21,13 +21,16 @@ export const fmtValue = (name: string, v: number) => {
 export const fmtSd = (sd: number) => `${sd > 0 ? '+' : ''}${sd.toFixed(1)} SD`;
 
 export const KIND_LABEL: Record<IncidentKind, string> = {
-  gait_drift: 'gait drift', impact: 'impact', grab: 'grab', stillness: 'stillness', separated: 'separated', typing_off: 'typing off',
+  phone_drop: 'Phone dropped', possible_fall: 'Possible fall', fall_recovered: 'Got up after fall', down_after_fall: 'Down after fall',
+  hard_impact: 'Hard impact', unsteady_gait: 'Unsteady walking', stumble: 'Stumble', repeated_stumbles: 'Repeated stumbles',
+  slowed_walk: 'Walking slowly', phone_left_behind: 'Phone left behind', grab: 'Phone grabbed', separated: 'Separated from group',
+  stopped_on_way_home: 'Stopped on the way home', in_vehicle: 'In a vehicle', battery_critical: 'Battery critical',
+  check_in_missed: 'Check-in missed', typing_off: 'Typing off', scream_shout: 'Scream / shout', snoring_while_down: 'Snoring while down',
 };
-export const kindColor = (k: IncidentKind) =>
-  ({ gait_drift: colors.warn, impact: colors.danger, grab: colors.danger, stillness: colors.danger, separated: colors.warn, typing_off: colors.warn })[k] ?? colors.muted;
+export const kindLabel = (k: string) => KIND_LABEL[k as IncidentKind] ?? k.replace(/_/g, ' ');
+
+export const TIER_LABEL: Record<IncidentTier, string> = { context: 'context', watch: 'watch', danger: 'danger' };
+export const tierColor = (t: IncidentTier | undefined) => (t === 'danger' ? colors.danger : t === 'watch' ? colors.warn : colors.muted);
 
 export const PLACEMENT_LABEL: Record<Placement, string> = { unknown: 'placement unknown', pocket: 'in pocket', hand: 'in hand', bag: 'in bag' };
 export const ACTIVITY_LABEL: Record<Activity, string> = { unknown: 'unknown', stationary: 'stationary', walking: 'walking', running: 'running', vehicle: 'in a vehicle' };
-
-export const STATE_LABEL = ['Normal', 'Impaired', 'Incident', 'Unresponsive'] as const;
-export const STATE_COLOR = [colors.ok, colors.warn, colors.danger, colors.danger] as const;

@@ -178,6 +178,15 @@ impl Gen {
             self.push([k * 0.2 + nz[0], -k * 0.9 + nz[1], k * 0.3], g0);
         }
     }
+    /// Gait stumble: a lurching ~0.8 s with no regular step and a sideways jolt, then walking resumes (call `walk`).
+    pub fn trip(&mut self, g0: [f32; 3]) {
+        let lat = lateral(g0);
+        for i in 0..40 {
+            let k = if (18..21).contains(&i) { 0.9 } else { 0.0 };
+            let nz = self.n3(0.02);
+            self.push([lat[0] * k + nz[0], lat[1] * k + nz[1], lat[2] * k + nz[2]], g0);
+        }
+    }
     /// Phone dropped alone: long free fall, lands flat, dead still afterwards.
     pub fn drop(&mut self, still_secs: f32) {
         let gh = unit(G_HAND);
@@ -323,6 +332,7 @@ fn ctx(t_ms: u64, hour: u8, activity: Activity, screen_on: bool, speed: f32) -> 
         last_touch_ms: if screen_on { t_ms } else { 0 },
         distance_home_m: -1.0,
         sampling_full: true,
+        charging: false,
     }
 }
 

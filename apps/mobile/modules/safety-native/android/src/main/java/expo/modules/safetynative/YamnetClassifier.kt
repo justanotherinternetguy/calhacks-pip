@@ -20,12 +20,12 @@ class YamnetClassifier(context: Context) {
     private const val TAG = "Yamnet"
   }
 
-  data class Scores(val scream: Float, val shout: Float, val glass: Float)
+  data class Scores(val scream: Float, val shout: Float, val snore: Float)
 
   private val interpreter: Interpreter
   private val screamIdx: IntArray
   private val shoutIdx: IntArray
-  private val glassIdx: IntArray
+  private val snoreIdx: IntArray
   private val input = Array(1) { FloatArray(FRAME_SAMPLES) }
   private val output = Array(1) { FloatArray(NUM_CLASSES) }
 
@@ -46,8 +46,8 @@ class YamnetClassifier(context: Context) {
     }
     screamIdx = find("Screaming", fallback = intArrayOf(11))
     shoutIdx = find("Shout", "Yell", "Bellow", "Whoop", fallback = intArrayOf(6, 9, 7, 8))
-    glassIdx = find("Glass", "Shatter", fallback = intArrayOf(435, 437))
-    Log.i(TAG, "classes: scream=${screamIdx.toList()} shout=${shoutIdx.toList()} glass=${glassIdx.toList()}")
+    snoreIdx = find("Snoring", fallback = intArrayOf(38))
+    Log.i(TAG, "classes: scream=${screamIdx.toList()} shout=${shoutIdx.toList()} snore=${snoreIdx.toList()}")
   }
 
   private fun loadClassNames(context: Context): List<String> = try {
@@ -64,7 +64,7 @@ class YamnetClassifier(context: Context) {
     if (inShape.size == 1) interpreter.run(f, output) else interpreter.run(input, output)
     val s = output[0]
     fun maxOf(idx: IntArray) = idx.maxOf { if (it in s.indices) s[it] else 0f }
-    return Scores(maxOf(screamIdx), maxOf(shoutIdx), maxOf(glassIdx))
+    return Scores(maxOf(screamIdx), maxOf(shoutIdx), maxOf(snoreIdx))
   }
 
   fun close() = interpreter.close()

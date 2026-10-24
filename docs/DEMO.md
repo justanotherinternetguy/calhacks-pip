@@ -29,17 +29,18 @@ supabase functions serve                  # push/watchdog/proximity/unlock/purge
 Location is end-to-end encrypted; no single friend and not even we can unlock it."
 
 **0:30 — Home screen (30 s).** Phone A: night mode *active, away from home*; Jo shown *together*.
-Point at the risk band and the SOS hold button. Phone B shows Sam as *Night mode on, fine*.
+Point at the SOS hold button. Phone B shows Sam as *Night mode on, fine*.
 
 **1:00 — Story B, no false alarm (45 s).** Inject `heads-up` is tempting; instead inject
 `checkin-dismiss` first. Narrate the trace: stumble → hard impact → still. Phone A lights up
 "You okay? Type the 3 words". Type them. "Glad you're okay." Phone B: nothing happened. **Point:**
-the user gets the first say, and a good dismiss lowers sensitivity for 30 min.
+the user gets the first say, and answering acknowledges what was going on — only a new incident can ask again.
 
-**1:45 — Story A, escalation (75 s).** Inject `heads-up`. Ignore the check-in. After the 90 s
-timeout (9 s at 10×) Phone B gets "Sam might not be okay" **with no location**. Show the server
+**1:45 — Story A, escalation (75 s).** Inject `heads-up`. Ignore the check-in. After the 2 min
+check-in deadline (12 s at 10×) Phone B gets "Sam might not be okay" **with no location**. Show the server
 table in Supabase Studio: `location_blobs.ciphertext` is base64 garbage; `incidents.summary` reads
-"hard fall, no movement 4 min". Keep ignoring; `P(danger)` crosses `T_unlock`. Phone B: map appears
+"Unsteady walking, then a hard fall, then down for 2 min". Keep ignoring; 2 min later, with the person still
+down, the location unlocks. Phone B: map appears
 with Sam's live position; buttons *Ring phone*, *Call*, *I'm going*, *Found*. Tap *Ring phone* →
 Phone A rings loudly. Tap *I'm going* → visible on all friends' screens.
 

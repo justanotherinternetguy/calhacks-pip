@@ -11,8 +11,9 @@ import uniffi.safety.MotionSample
 
 /**
  * Debug-only replay of a recorded trace through the real engine:
- * `{ "speed": 10, "motion": [{tMs,ax,ay,az,gx,gy,gz,rx?,ry?,rz?}], "context": [{tMs,awayFromHome,separated,hourLocal,screenOn,activity,batteryPct,speedMps,lastTouchMs?,distanceHomeM?,samplingFull?}], "audio": [{tMs,scream,shout,glass}] }`
- * (rx/ry/rz default to 0 = no gyro; lastTouchMs 0 = unknown; distanceHomeM -1 = unknown; samplingFull defaults to true.)
+ * `{ "speed": 10, "motion": [{tMs,ax,ay,az,gx,gy,gz,rx?,ry?,rz?}], "context": [{tMs,awayFromHome,separated,hourLocal,screenOn,activity,batteryPct,speedMps,lastTouchMs?,distanceHomeM?,samplingFull?,charging?}], "audio": [{tMs,scream,shout,snore?,levelDb?}] }`
+ * (rx/ry/rz default to 0 = no gyro; lastTouchMs 0 = unknown; distanceHomeM -1 = unknown; samplingFull defaults to true,
+ * charging to false; snore defaults to 0 and levelDb to 50 dB SPL.)
  * Timestamps are re-based to "now"; `speed` > 1 replays faster than wall clock. Events are dispatched
  * exactly like live ones (notifications, uploads), so use a test backend.
  */
@@ -58,12 +59,18 @@ class TraceInjector(private val rt: SafetyRuntime) {
               batteryPct = c.optInt("batteryPct", 80).toUByte(), speedMps = c.optDouble("speedMps", -1.0).toFloat(),
               lastTouchMs = (if (touch > 0L) touch - t0 + base else 0L).toULong(),
               distanceHomeM = c.optDouble("distanceHomeM", -1.0).toFloat(), samplingFull = c.optBoolean("samplingFull", true),
+              charging = c.optBoolean("charging", false),
             ),
           )
         }
         while (ai < audio.length() && audio.getJSONObject(ai).getLong("tMs") - t0 + base <= simNow) {
           val a = audio.getJSONObject(ai++)
-          engine.pushAudio(AudioScores((a.getLong("tMs") - t0 + base).toULong(), a.optDouble("scream").toFloat(), a.optDouble("shout").toFloat(), a.optDouble("glass").toFloat()))
+          engine.pushAudio(
+            AudioScores(
+              (a.getLong("tMs") - t0 + base).toULong(), a.optDouble("scream", 0.0).toFloat(), a.optDouble("shout", 0.0).toFloat(),
+              a.optDouble("snore", 0.0).toFloat(), a.optDouble("levelDb", 50.0).toFloat(),
+            ),
+          )
         }
         rt.dispatch(engine.tick(simNow.toULong()))
         simNow += 1000

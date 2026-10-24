@@ -13,7 +13,7 @@ type Ev = { at: number; text: string };
 
 /**
  * safe://debug/friend-view — what a friend sees once a location is released, rendered on the same device
- * for demos and the unlock-map e2e flow. Uses the newest active incident if there is one; the trail is a
+ * for demos and the unlock-map e2e flow. Uses the newest open incident if there is one; the trail is a
  * local demo trail because this phone is the subject and cannot decrypt as a friend.
  */
 export default function DebugFriendView() {

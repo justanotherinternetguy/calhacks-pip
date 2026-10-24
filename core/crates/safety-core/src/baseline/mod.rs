@@ -166,21 +166,9 @@ pub struct Baseline {
     pub pending: [PlacementStats; 4],
     #[serde(default)]
     pub typing: TypingStats,
-    /// incident log state (records expire after `log.expiry_h`)
-    #[serde(default)]
+    /// incident log state (records expire after `log.expiry_h`); a log in an older shape loads empty
+    #[serde(default, deserialize_with = "crate::log::lenient_log")]
     pub log: LogState,
-}
-
-/// z-scores per gait feature, positive = toward impairment.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct GaitZ {
-    pub cadence: f32,
-    pub step_cv: f32,
-    pub regularity: f32,
-    pub harmonic_ratio: f32,
-    pub sway_rms: f32,
-    /// aggregate drift score (≥0)
-    pub drift: f32,
 }
 
 /// Local day index from a wall-clock timestamp and the local hour the platform reports for it.
@@ -307,23 +295,6 @@ impl Baseline {
             }
         }
         (pr[0], pr[1].max(1e-4))
-    }
-
-    pub fn zscore(&self, cfg: &BaselineCfg, placement: Placement, f: &GaitFeatures) -> GaitZ {
-        let trusted = self.trusted(cfg, placement);
-        let vals = Self::values(f);
-        let mut z = [0.0f32; 5];
-        for i in 0..5 {
-            let (m, sd) = self.band_stats(cfg, placement, i);
-            z[i] = (vals[i] - m) / sd.max(1e-3);
-        }
-        // direction: cv up, regularity down, HR down, sway up, cadence either way
-        let dir = [z[0].abs() * 0.5, z[1], -z[2], -z[3], z[4]];
-        let scale = if trusted { 1.0 } else { cfg.cold_start_z_scale };
-        let mut pos: Vec<f32> = dir.iter().map(|d| d.max(0.0)).collect();
-        pos.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-        let drift = ((pos[0] + pos[1] + pos[2]) / 2.0 * scale).min(4.0);
-        GaitZ { cadence: z[0], step_cv: z[1], regularity: z[2], harmonic_ratio: z[3], sway_rms: z[4], drift }
     }
 }
 

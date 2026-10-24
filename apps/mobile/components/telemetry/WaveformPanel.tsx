@@ -5,18 +5,15 @@ import { TREND_SECONDS, type TelemetryBuffers } from '@/lib/telemetry';
 import { colors, radius } from '@/lib/theme';
 import { LiveCanvas } from './LiveCanvas';
 import type { DrawFn } from './LiveCanvas.types';
-import { SERIES, STATE_FILL, drawStack, drawTrace, drawTrendLine, fill, hband, hgrid, hline, label, traceMax, vgrid } from './draw';
-import { STATE_LABEL } from './labels';
+import { SERIES, drawSpans, drawTrace, fill, hband, hgrid, hline, label, traceMax, vgrid } from './draw';
 
 const WINDOWS = [10, 30, 60] as const;
 const IMPACT_G = 2.5; // CONTRACTS §6: impact = peak > 2.5 g with orientation change
-const T_CHECK = 0.7; // model-v1.toml t_check
-const P_UNLOCK = 0.9;
 const BAND_SD = 2.5;
 
 /**
- * Left column: the scrolling |a| (g) and |ω| (rad/s) traces at the incoming sample rate, then the 5-min
- * P(danger) strip and the 4-state probability stack. All four are canvases fed straight from the buffers.
+ * Left column: the scrolling |a| (g) and |ω| (rad/s) traces at the incoming sample rate, then a 5-min strip of the
+ * microphone listening window. All three are canvases fed straight from the buffers.
  */
 export function WaveformPanel({ buffers, tick }: { buffers: TelemetryBuffers; tick: TelemetryTick | null }) {
   const [windowSec, setWindowSec] = useState<(typeof WINDOWS)[number]>(10);
@@ -63,24 +60,14 @@ export function WaveformPanel({ buffers, tick }: { buffers: TelemetryBuffers; ti
     };
   }, [buffers, windowSec]);
 
-  const dangerDraw = useMemo<DrawFn>(() => (ctx, w, h, now) => {
+  const micDraw = useMemo<DrawFn>(() => (ctx, w, h, now) => {
     fill(ctx, w, h, colors.bg);
-    const r = { x: 0, y: 16, w, h: h - 20 };
-    hgrid(ctx, r, 2);
+    const r = { x: 0, y: 15, w, h: h - 16 };
+    drawSpans(ctx, r, buffers.trend, now, TREND_SECONDS, (p) => p.listening, `${colors.warn}55`);
     vgrid(ctx, r, TREND_SECONDS, 60);
-    hline(ctx, r, T_CHECK, 0, 1, colors.warn, `check ${T_CHECK}`);
-    hline(ctx, r, P_UNLOCK, 0, 1, colors.danger, `unlock ${P_UNLOCK}`);
-    drawTrendLine(ctx, r, buffers.trend, now, TREND_SECONDS, (p) => p.pDanger, 0, 1, colors.danger, `${colors.danger}2e`);
     const last = buffers.trend[buffers.trend.length - 1];
-    label(ctx, `P(danger) · 5 min${last ? `  ${(last.pDanger * 100).toFixed(0)}%` : ''}`, 4, 2, colors.text);
-  }, [buffers]);
-
-  const stackDraw = useMemo<DrawFn>(() => (ctx, w, h, now) => {
-    fill(ctx, w, h, colors.bg);
-    const r = { x: 0, y: 16, w, h: h - 20 };
-    drawStack(ctx, r, buffers.trend, now, TREND_SECONDS);
-    vgrid(ctx, r, TREND_SECONDS, 60, '#00000033');
-    label(ctx, 'HMM state probabilities · 5 min', 4, 2, colors.text);
+    label(ctx, 'Mic listening · 5 min', 4, 2, colors.text);
+    if (last) label(ctx, last.listening ? 'listening' : 'off', w - 4, 2, last.listening ? colors.warn : colors.muted, 'right');
   }, [buffers]);
 
   const tickPeak = tick ? Math.max(0, ...tick.accel) : 0;
@@ -102,24 +89,15 @@ export function WaveformPanel({ buffers, tick }: { buffers: TelemetryBuffers; ti
           ))}
         </View>
       </View>
-      <LiveCanvas draw={accelDraw} height={150} fps={60} testID="wave-accel" placeholder="Accelerometer |a| trace" />
-      <LiveCanvas draw={gyroDraw} height={120} fps={60} testID="wave-gyro" placeholder="Gyroscope |ω| trace" />
-      <LiveCanvas draw={dangerDraw} height={96} fps={10} testID="trend-danger" placeholder="P(danger) 5-min strip" />
-      <LiveCanvas draw={stackDraw} height={96} fps={10} testID="trend-stack" placeholder="State probability stack" />
-      <View style={styles.legend}>
-        {STATE_LABEL.map((s, i) => (
-          <View key={s} style={styles.legendItem}>
-            <View style={[styles.swatch, { backgroundColor: STATE_FILL[i] }]} />
-            <Text style={styles.meta}>{s}{tick ? ` ${([tick.metrics.pNormal, tick.metrics.pImpaired, tick.metrics.pIncident, tick.metrics.pUnresponsive][i] * 100).toFixed(0)}%` : ''}</Text>
-          </View>
-        ))}
-      </View>
+      <LiveCanvas draw={accelDraw} height={110} fps={60} testID="wave-accel" placeholder="Accelerometer |a| trace" />
+      <LiveCanvas draw={gyroDraw} height={84} fps={60} testID="wave-gyro" placeholder="Gyroscope |ω| trace" />
+      <LiveCanvas draw={micDraw} height={30} fps={10} testID="trend-mic" placeholder="Mic listening 5-min strip" />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  panel: { backgroundColor: colors.card, borderRadius: radius, padding: 12, gap: 10, borderWidth: 1, borderColor: colors.border },
+  panel: { backgroundColor: colors.card, borderRadius: radius, padding: 10, gap: 6, borderWidth: 1, borderColor: colors.border },
   head: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   title: { color: colors.text, fontSize: 15, fontWeight: '700' },
   meta: { color: colors.muted, fontSize: 12, fontVariant: ['tabular-nums'] },
@@ -127,7 +105,4 @@ const styles = StyleSheet.create({
   segBtn: { paddingVertical: 4, paddingHorizontal: 10 },
   segOn: { backgroundColor: colors.border },
   segText: { color: colors.muted, fontSize: 12, fontWeight: '600' },
-  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 14 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  swatch: { width: 10, height: 10, borderRadius: 2 },
 });

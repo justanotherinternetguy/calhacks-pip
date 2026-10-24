@@ -1,8 +1,10 @@
-//! Escalation state machine with hysteresis, cooldowns and timers (PLAN §4, timings per spec v1.1):
-//! Check (P ≥ t_check) → HeadsUp once the check deadline passes → UnlockLocation after
-//! `unlock_no_response_s` with P ≥ t_unlock → CallOptionAvailable after `call_option_s`.
-//! Grab: HeadsUp (+ SnatchDetected) immediately, UnlockLocation after `grab_unlock_s` unless the owner
-//! unlocks the phone (PhoneUnlocked / BiometricDismiss).
+//! Escalation state machine. Driven by the incident log, not by a probability:
+//! Check ("You okay?") when the check-in trigger holds (a Danger incident, or Watch incidents from two independent
+//! families) → HeadsUp to friends (no location) once the check deadline passes with the trigger still holding →
+//! UnlockLocation after `unlock_no_response_s` (since the check) if it still holds → CallOptionAvailable after
+//! `call_option_s`. If the trigger stops holding (got up and walked, back with the group) the episode resolves.
+//! Grab: HeadsUp (+ SnatchDetected) immediately, UnlockLocation after `grab_unlock_s` unless the owner unlocks the
+//! phone (PhoneUnlocked / BiometricDismiss). NeedHelp / ManualSos unlock immediately.
 use crate::config::ThresholdCfg;
 use crate::types::{EngineEvent, EscalationLevel, UserAction};
 use rand::rngs::StdRng;
@@ -15,28 +17,39 @@ const WORDS: &[&str] = &[
     "tunnel", "umbrella", "velvet", "walnut", "yellow", "zebra", "anchor", "basket",
 ];
 
+/// What the engine must do after `update`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TickEffect {
+    /// a check-in was just requested: the recent incidents join a new episode
+    pub episode_started: bool,
+    /// the check deadline passed unanswered: log CheckInMissed
+    pub check_missed: bool,
+    /// the episode resolved on its own
+    pub resolved: bool,
+}
+
 /// Side effects the engine must apply after an action.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ActionEffect {
-    pub reset_posterior: bool,
-    pub wrong_phrase: bool,
+    /// the user (or a friend) said they are fine: acknowledge the active incidents, close the episode
+    pub dismissed: bool,
+    /// the owner has the phone again: the grab is over
     pub snatch_cleared: bool,
+    /// the user asked for help (NeedHelp / ManualSos): start an episode
+    pub help: bool,
 }
 
 pub struct Escalation {
     cfg: ThresholdCfg,
     level: EscalationLevel,
     check_deadline: Option<u64>,
-    /// start of the current alert episode (check requested / grab) for the no-response timers
+    /// start of the current alert episode (check requested / grab / help) for the no-response timers
     episode_start: Option<u64>,
     /// the grab path: Unlocked follows after grab_unlock_s
     grab_at: Option<u64>,
     call_option_fired: bool,
-    cooldown_until: u64,
     last_check_ms: Option<u64>,
-    risk_band: u8,
     loc_interval: u32,
-    battery_fired: bool,
     rng: StdRng,
     phrase: String,
     summary: String,
@@ -51,11 +64,8 @@ impl Escalation {
             episode_start: None,
             grab_at: None,
             call_option_fired: false,
-            cooldown_until: 0,
             last_check_ms: None,
-            risk_band: 0,
-            loc_interval: cfg.location_interval_s[0],
-            battery_fired: false,
+            loc_interval: cfg.location_upload_s,
             rng: StdRng::seed_from_u64(seed),
             phrase: String::new(),
             summary: String::new(),
@@ -64,29 +74,23 @@ impl Escalation {
     pub fn level(&self) -> EscalationLevel {
         self.level
     }
-    pub fn risk_band(&self) -> u8 {
-        self.risk_band
-    }
     pub fn phrase(&self) -> &str {
         &self.phrase
     }
-    pub fn in_cooldown(&self, now_ms: u64) -> bool {
-        now_ms < self.cooldown_until
+    pub fn check_deadline(&self) -> Option<u64> {
+        self.check_deadline
     }
     pub fn location_interval_s(&self) -> u32 {
         self.loc_interval
     }
+    /// Friends have been told (heads-up, unlock or snatch).
+    pub fn alerted(&self) -> bool {
+        matches!(self.level, EscalationLevel::HeadsUp | EscalationLevel::Unlocked | EscalationLevel::Snatch)
+    }
     pub fn reset(&mut self) {
-        self.level = EscalationLevel::Idle;
-        self.check_deadline = None;
-        self.episode_start = None;
-        self.grab_at = None;
-        self.call_option_fired = false;
+        self.set_level(EscalationLevel::Idle);
     }
 
-    fn boost(&self, now_ms: u64) -> f32 {
-        if self.in_cooldown(now_ms) { self.cfg.cooldown_threshold_boost } else { 0.0 }
-    }
     fn new_phrase(&mut self) -> String {
         let mut w = Vec::new();
         while w.len() < 3 {
@@ -114,14 +118,11 @@ impl Escalation {
         self.episode_start.map(|s| now_ms.saturating_sub(s))
     }
 
-    /// Called every tick with the current posterior danger, the HMM evidence string and the one-line
-    /// summary (sequence summary when the incident log has one, otherwise the evidence).
-    pub fn update(&mut self, now_ms: u64, p: f32, evidence: &str, summary: &str) -> Vec<EngineEvent> {
+    /// Called every tick. `trigger` = the incident log asks for a check-in right now; `summary` = the episode's
+    /// one-liner (or the active incidents).
+    pub fn update(&mut self, now_ms: u64, trigger: bool, summary: &str) -> (Vec<EngineEvent>, TickEffect) {
         let mut ev = Vec::new();
-        let b = self.boost(now_ms);
-        let (t_check, t_heads, t_unlock) =
-            (self.cfg.t_check + b, self.cfg.t_heads_up + b, (self.cfg.t_unlock + b).min(0.999));
-        let summary_or = |s: &str| if summary.is_empty() { s.to_string() } else { summary.to_string() };
+        let mut fx = TickEffect::default();
         match self.level {
             EscalationLevel::Resolved => self.set_level(EscalationLevel::Idle),
             EscalationLevel::Idle => {
@@ -129,40 +130,44 @@ impl Escalation {
                     .last_check_ms
                     .map(|t| now_ms.saturating_sub(t) >= self.cfg.check_repeat_cooldown_s as u64 * 1000)
                     .unwrap_or(true);
-                if p >= t_check && gap_ok {
+                if trigger && gap_ok {
                     self.phrase = self.new_phrase();
                     let deadline = now_ms + self.cfg.check_deadline_s as u64 * 1000;
+                    self.set_level(EscalationLevel::Check);
                     self.check_deadline = Some(deadline);
                     self.last_check_ms = Some(now_ms);
-                    self.set_level(EscalationLevel::Check);
                     self.episode_start = Some(now_ms);
-                    self.call_option_fired = false;
+                    fx.episode_started = true;
                     ev.push(EngineEvent::CheckRequested { phrase: self.phrase.clone(), deadline_ms: deadline });
                 }
             }
             EscalationLevel::Check => {
                 // the user always gets the full check-in window before friends are involved
                 if self.check_deadline.map(|d| now_ms >= d).unwrap_or(false) {
-                    if p >= t_heads {
+                    if trigger {
                         self.set_level(EscalationLevel::HeadsUp);
-                        self.summary = summary_or(evidence);
-                        ev.push(EngineEvent::HeadsUp { summary: format!("no response to check-in; {}", self.summary) });
+                        self.summary = summary.to_string();
+                        fx.check_missed = true;
+                        ev.push(EngineEvent::HeadsUp { summary: format!("no answer to a check-in; {}", self.summary) });
                     } else {
                         self.set_level(EscalationLevel::Resolved);
+                        fx.resolved = true;
                         ev.push(EngineEvent::Resolved);
                     }
                 }
             }
             EscalationLevel::HeadsUp => {
-                let waited = self.since_episode(now_ms).unwrap_or(0);
-                if p >= t_unlock && waited >= self.cfg.unlock_no_response_s as u64 * 1000 {
-                    self.set_level(EscalationLevel::Unlocked);
-                    self.summary = summary_or(evidence);
-                    ev.push(EngineEvent::UnlockLocation { summary: self.summary.clone() });
-                } else if p < 0.2 {
-                    // posterior recovered on its own (walking resumed etc.)
+                if !trigger {
+                    // the evidence cleared on its own (walking again, back with the group)
                     self.set_level(EscalationLevel::Resolved);
+                    fx.resolved = true;
                     ev.push(EngineEvent::Resolved);
+                } else if self.since_episode(now_ms).unwrap_or(0) >= self.cfg.unlock_no_response_s as u64 * 1000 {
+                    self.set_level(EscalationLevel::Unlocked);
+                    if !summary.is_empty() {
+                        self.summary = summary.to_string();
+                    }
+                    ev.push(EngineEvent::UnlockLocation { summary: self.summary.clone() });
                 }
             }
             EscalationLevel::Snatch => {
@@ -176,55 +181,37 @@ impl Escalation {
             }
             EscalationLevel::Unlocked => {}
         }
-        if matches!(self.level, EscalationLevel::HeadsUp | EscalationLevel::Unlocked | EscalationLevel::Snatch)
-            && !self.call_option_fired
-        {
+        if self.alerted() && !self.call_option_fired {
             if let Some(w) = self.since_episode(now_ms) {
                 if w >= self.cfg.call_option_s as u64 * 1000 {
                     self.call_option_fired = true;
-                    let s = if self.summary.is_empty() { summary_or(evidence) } else { self.summary.clone() };
+                    let s = if self.summary.is_empty() { summary.to_string() } else { self.summary.clone() };
                     ev.push(EngineEvent::CallOptionAvailable { summary: format!("no response for {} min; {s}", w / 60_000) });
                 }
             }
         }
-        ev.extend(self.update_band(p));
-        ev
+        ev.extend(self.sync_interval());
+        (ev, fx)
     }
 
-    fn update_band(&mut self, p: f32) -> Vec<EngineEvent> {
-        let e = self.cfg.risk_band_edges;
-        let h = self.cfg.risk_band_hysteresis;
-        let raw = if p >= e[2] { 3 } else if p >= e[1] { 2 } else if p >= e[0] { 1 } else { 0 };
-        let mut band = raw;
-        if raw < self.risk_band {
-            // only step down once clear of the edge by the hysteresis margin
-            let edge = e[(self.risk_band - 1) as usize];
-            if p > edge - h {
-                band = self.risk_band;
-            }
+    /// Location upload interval: `location_upload_alert_s` once friends were alerted, `location_upload_s` otherwise.
+    fn sync_interval(&mut self) -> Vec<EngineEvent> {
+        let iv = if self.alerted() { self.cfg.location_upload_alert_s } else { self.cfg.location_upload_s };
+        if iv == self.loc_interval {
+            return Vec::new();
         }
-        if matches!(self.level, EscalationLevel::Unlocked | EscalationLevel::Snatch) {
-            band = 3;
-        }
-        let mut ev = Vec::new();
-        if band != self.risk_band {
-            self.risk_band = band;
-            ev.push(EngineEvent::RiskBandChanged { band });
-            let iv = self.cfg.location_interval_s[band as usize];
-            if iv != self.loc_interval {
-                self.loc_interval = iv;
-                ev.push(EngineEvent::LocationIntervalChanged { seconds: iv });
-            }
-        }
-        ev
+        self.loc_interval = iv;
+        vec![EngineEvent::LocationIntervalChanged { seconds: iv }]
     }
 
-    /// Typing far off baseline during a Check counts as evidence; with P ≥ T_heads_up it escalates.
-    pub fn typing_impaired(&mut self, now_ms: u64, p: f32, evidence: &str) -> Vec<EngineEvent> {
-        if self.level == EscalationLevel::Check && p >= self.cfg.t_heads_up + self.boost(now_ms) {
+    /// Typing far off baseline during a Check: friends get the heads-up now instead of at the deadline.
+    pub fn typing_impaired(&mut self, summary: &str) -> Vec<EngineEvent> {
+        if self.level == EscalationLevel::Check {
             self.set_level(EscalationLevel::HeadsUp);
-            self.summary = evidence.to_string();
-            return vec![EngineEvent::HeadsUp { summary: format!("check-in typing far off baseline; {evidence}") }];
+            self.summary = summary.to_string();
+            let mut ev = vec![EngineEvent::HeadsUp { summary: format!("check-in typing far off baseline; {summary}") }];
+            ev.extend(self.sync_interval());
+            return ev;
         }
         Vec::new()
     }
@@ -241,27 +228,15 @@ impl Escalation {
         self.call_option_fired = false;
         self.summary = summary.clone();
         let mut ev = vec![EngineEvent::SnatchDetected { summary: summary.clone() }, EngineEvent::HeadsUp { summary }];
-        ev.extend(self.update_band(1.0));
+        ev.extend(self.sync_interval());
         ev
-    }
-
-    pub fn battery(&mut self, pct: u8) -> Vec<EngineEvent> {
-        if pct <= self.cfg.battery_dying_pct && !self.battery_fired {
-            self.battery_fired = true;
-            return vec![EngineEvent::BatteryDying];
-        }
-        if pct > self.cfg.battery_dying_pct + 7 {
-            self.battery_fired = false;
-        }
-        Vec::new()
     }
 
     pub fn apply_action(&mut self, a: UserAction, now_ms: u64) -> (Vec<EngineEvent>, ActionEffect) {
         let mut ev = Vec::new();
         let mut fx = ActionEffect::default();
         let dismiss = |s: &mut Self, ev: &mut Vec<EngineEvent>, fx: &mut ActionEffect| {
-            s.cooldown_until = now_ms + s.cfg.dismiss_cooldown_s as u64 * 1000;
-            fx.reset_posterior = true;
+            fx.dismissed = true;
             if s.level != EscalationLevel::Idle {
                 s.set_level(EscalationLevel::Resolved);
                 ev.push(EngineEvent::Resolved);
@@ -274,14 +249,19 @@ impl Escalation {
                     dismiss(self, &mut ev, &mut fx);
                 }
             }
-            UserAction::DismissWrongPhrase => fx.wrong_phrase = true,
+            // a typo: the check stays open until its deadline, the user can try again
+            UserAction::DismissWrongPhrase => {}
             UserAction::NeedHelp | UserAction::ManualSos => {
                 if self.level != EscalationLevel::Unlocked {
                     self.set_level(EscalationLevel::Unlocked);
+                    if self.episode_start.is_none() {
+                        self.episode_start = Some(now_ms);
+                    }
                     let summary = if a == UserAction::ManualSos { "manual SOS" } else { "user asked for help" };
                     self.summary = summary.into();
+                    fx.help = true;
                     ev.push(EngineEvent::UnlockLocation { summary: summary.into() });
-                    ev.extend(self.update_band(1.0));
+                    ev.extend(self.sync_interval());
                 }
             }
             UserAction::BiometricDismiss => {
@@ -317,37 +297,60 @@ mod tests {
     use super::*;
     use crate::config::Config;
 
+    fn has<F: Fn(&EngineEvent) -> bool>(ev: &[EngineEvent], f: F) -> bool {
+        ev.iter().any(f)
+    }
+
     #[test]
-    fn check_timeout_headsup_unlock_and_dismiss_cooldown() {
+    fn check_headsup_unlock_follow_the_trigger() {
         let cfg = Config::default_v1().thresholds;
         let mut e = Escalation::new(&cfg, 7);
-        assert!(e.update(0, 0.65, "x", "").iter().all(|e| !matches!(e, EngineEvent::CheckRequested { .. })), "below t_check = 0.7");
-        let ev = e.update(0, 0.75, "x", "");
-        assert!(matches!(ev[0], EngineEvent::CheckRequested { deadline_ms: 90_000, .. }));
+        let (ev, _) = e.update(0, false, "");
+        assert!(!has(&ev, |e| matches!(e, EngineEvent::CheckRequested { .. })));
+        let (ev, fx) = e.update(1000, true, "");
+        assert!(fx.episode_started);
+        assert!(matches!(ev[0], EngineEvent::CheckRequested { deadline_ms: 121_000, .. }));
         if let EngineEvent::CheckRequested { phrase, .. } = &ev[0] {
             assert_eq!(phrase.split(' ').count(), 3);
         }
-        assert!(e.update(60_000, 0.75, "x", "").is_empty());
-        let ev = e.update(90_000, 0.75, "x", "");
-        assert!(matches!(ev[0], EngineEvent::HeadsUp { .. }));
-        // P high but no response for less than 120 s: no unlock yet
-        assert!(e.update(100_000, 0.96, "fall", "").iter().all(|e| !matches!(e, EngineEvent::UnlockLocation { .. })));
-        let ev = e.update(120_000, 0.96, "fall", "Fall, then no movement for 2 min");
-        assert!(matches!(&ev[0], EngineEvent::UnlockLocation { summary } if summary.starts_with("Fall")));
-        assert_eq!(e.risk_band(), 3);
+        assert!(e.update(60_000, true, "").0.is_empty());
+        let (ev, fx) = e.update(121_000, true, "A fall, then down for 2 min");
+        assert!(fx.check_missed);
+        assert!(matches!(&ev[0], EngineEvent::HeadsUp { summary } if summary.ends_with("down for 2 min")));
+        assert_eq!(e.location_interval_s(), 60, "faster location once friends are alerted");
+        // unlock 240 s after the check while the trigger still holds
+        assert!(!has(&e.update(240_000, true, "").0, |e| matches!(e, EngineEvent::UnlockLocation { .. })));
+        let (ev, _) = e.update(241_000, true, "A fall, then down for 2 min");
+        assert!(matches!(&ev[0], EngineEvent::UnlockLocation { summary } if summary.starts_with("A fall")));
         // call option once at 600 s
-        assert!(e.update(599_000, 0.96, "fall", "").iter().all(|e| !matches!(e, EngineEvent::CallOptionAvailable { .. })));
-        let ev = e.update(600_000, 0.96, "fall", "");
+        assert!(!has(&e.update(600_000, true, "").0, |e| matches!(e, EngineEvent::CallOptionAvailable { .. })));
+        let (ev, _) = e.update(601_000, true, "");
         assert!(matches!(ev[0], EngineEvent::CallOptionAvailable { .. }), "{ev:?}");
-        assert!(e.update(700_000, 0.96, "fall", "").iter().all(|e| !matches!(e, EngineEvent::CallOptionAvailable { .. })));
-        // dismiss resets, and cooldown raises the bar for 30 min
+        assert!(!has(&e.update(700_000, true, "").0, |e| matches!(e, EngineEvent::CallOptionAvailable { .. })));
         let (ev, fx) = e.apply_action(UserAction::DismissOk, 730_000);
-        assert!(fx.reset_posterior && ev.contains(&EngineEvent::Resolved));
-        e.update(731_000, 0.1, "", "");
+        assert!(fx.dismissed && ev.contains(&EngineEvent::Resolved));
+        e.update(731_000, false, "");
         assert_eq!(e.level(), EscalationLevel::Idle);
-        assert!(e.update(740_000, 0.8, "x", "").iter().all(|e| !matches!(e, EngineEvent::CheckRequested { .. })));
-        let ev = e.update(730_000 + 1_800_001 + 300_000, 0.8, "x", "");
-        assert!(ev.iter().any(|e| matches!(e, EngineEvent::CheckRequested { .. })));
+    }
+
+    #[test]
+    fn trigger_clearing_resolves_and_check_waits_its_deadline() {
+        let cfg = Config::default_v1().thresholds;
+        let mut e = Escalation::new(&cfg, 7);
+        e.update(0, true, "");
+        // trigger gone before the deadline: still no heads-up, resolved at the deadline
+        assert!(e.update(10_000, false, "").0.is_empty());
+        let (ev, fx) = e.update(120_000, false, "");
+        assert!(fx.resolved && ev.contains(&EngineEvent::Resolved));
+        // no new check inside the repeat cooldown
+        e.update(121_000, false, "");
+        assert!(!has(&e.update(200_000, true, "").0, |e| matches!(e, EngineEvent::CheckRequested { .. })));
+        assert!(has(&e.update(300_000, true, "").0, |e| matches!(e, EngineEvent::CheckRequested { .. })));
+        // heads-up, then the trigger clears: resolved without unlock
+        e.update(420_000, true, "x");
+        assert_eq!(e.level(), EscalationLevel::HeadsUp);
+        let (ev, fx) = e.update(430_000, false, "");
+        assert!(fx.resolved && ev.contains(&EngineEvent::Resolved));
     }
 
     #[test]
@@ -357,11 +360,11 @@ mod tests {
         let ev = e.grab(10_000, "jerk".into());
         assert!(matches!(ev[0], EngineEvent::SnatchDetected { .. }));
         assert!(matches!(ev[1], EngineEvent::HeadsUp { .. }));
-        assert!(!ev.iter().any(|e| matches!(e, EngineEvent::UnlockLocation { .. })));
+        assert!(!has(&ev, |e| matches!(e, EngineEvent::UnlockLocation { .. })));
         e.apply_action(UserAction::DismissOk, 11_000);
         assert_eq!(e.level(), EscalationLevel::Snatch);
-        assert!(e.update(129_000, 0.3, "", "").iter().all(|e| !matches!(e, EngineEvent::UnlockLocation { .. })));
-        let ev = e.update(130_000, 0.3, "", "");
+        assert!(!has(&e.update(129_000, false, "").0, |e| matches!(e, EngineEvent::UnlockLocation { .. })));
+        let (ev, _) = e.update(130_000, false, "");
         assert!(matches!(ev[0], EngineEvent::UnlockLocation { .. }), "{ev:?}");
         assert_eq!(e.level(), EscalationLevel::Unlocked);
 
@@ -370,7 +373,7 @@ mod tests {
         let (_, fx) = e.apply_action(UserAction::PhoneUnlocked, 60_000);
         assert!(fx.snatch_cleared);
         assert_eq!(e.level(), EscalationLevel::Resolved);
-        assert!(e.update(130_000, 0.3, "", "").iter().all(|e| !matches!(e, EngineEvent::UnlockLocation { .. })));
+        assert!(!has(&e.update(130_000, false, "").0, |e| matches!(e, EngineEvent::UnlockLocation { .. })));
 
         let mut e = Escalation::new(&cfg, 1);
         e.grab(10_000, "jerk".into());
@@ -380,12 +383,12 @@ mod tests {
     }
 
     #[test]
-    fn need_help_skips_to_unlock_and_battery_fires_once() {
+    fn need_help_skips_to_unlock() {
         let cfg = Config::default_v1().thresholds;
         let mut e = Escalation::new(&cfg, 1);
-        let (ev, _) = e.apply_action(UserAction::NeedHelp, 0);
+        let (ev, fx) = e.apply_action(UserAction::NeedHelp, 0);
+        assert!(fx.help);
         assert!(matches!(ev[0], EngineEvent::UnlockLocation { .. }));
-        assert_eq!(e.battery(3), vec![EngineEvent::BatteryDying]);
-        assert!(e.battery(2).is_empty());
+        assert_eq!(e.location_interval_s(), 60);
     }
 }

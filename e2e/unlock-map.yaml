@@ -1,4 +1,4 @@
-# Unlock: P(danger) ≥ T_unlock, no dismiss → epoch key released, map visible on the friend screen (web mock friend).
+# Unlock: check-in unanswered while the incident still holds, no dismiss → epoch key released, map visible on the friend screen (web mock friend).
 # appId must match apps/mobile/app.json (android.package / ios.bundleIdentifier).
 appId: app.safe.mobile
 tags: [debug]

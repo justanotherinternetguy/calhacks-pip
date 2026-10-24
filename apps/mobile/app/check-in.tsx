@@ -32,10 +32,15 @@ export default function CheckIn() {
 
   const finish = () => { useStore.getState().set({ pendingCheck: null }); router.replace('/home'); };
 
-  // Native escalated (heads-up / unlocked / snatch) or resolved while this was open → the check is over.
+  // Native escalated (heads-up / unlocked / snatch) or resolved while this was open → the check is over. Leave once:
+  // a heads-up can arrive while submit() is still settling, and re-running replace() on every re-render loops.
+  const exited = useRef(false);
   useEffect(() => {
     if (pending) hadPending.current = true;
-    else if (hadPending.current && !accepted) router.replace('/home');
+    else if (hadPending.current && !accepted && !exited.current) {
+      exited.current = true;
+      router.replace('/home');
+    }
   }, [pending, accepted, router]);
 
   const submit = async (r: CheckInResult) => {

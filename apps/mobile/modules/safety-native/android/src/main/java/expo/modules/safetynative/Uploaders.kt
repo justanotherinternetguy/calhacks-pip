@@ -34,7 +34,7 @@ abstract class PeriodicUploader(protected val rt: SafetyRuntime, private val tag
   protected abstract fun tickOnce()
 }
 
-/** Every 2 min in night mode: PATCH devices (status level, battery, risk band). No location. */
+/** Every 2 min in night mode: PATCH devices (status level, battery). No location. */
 class HeartbeatUploader(rt: SafetyRuntime) : PeriodicUploader(rt, "Heartbeat") {
   override fun tickOnce() {
     val cfg = rt.prefs.serverConfig ?: return
@@ -43,7 +43,6 @@ class HeartbeatUploader(rt: SafetyRuntime) : PeriodicUploader(rt, "Heartbeat") {
       .put("last_heartbeat", SupabaseRest.isoNow())
       .put("night_mode", rt.nightActive)
       .put("battery_pct", rt.batteryPct())
-      .put("risk_band", snap?.riskBand?.toInt() ?: 0)
       .put("status_level", rt.escalationName(snap?.escalation ?: uniffi.safety.EscalationLevel.IDLE))
     rt.supabase.patch("devices", "id=eq.${cfg.deviceId}", patch)
     rt.lastHeartbeatMs = rt.now()

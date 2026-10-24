@@ -10,10 +10,11 @@ pub enum Placement { Unknown, Pocket, Hand, Bag }
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct Context {
     pub t_ms: u64, pub away_from_home: bool, pub separated: bool, pub hour_local: u8, pub screen_on: bool, pub activity: Activity, pub battery_pct: u8, pub speed_mps: f32,
-    pub last_touch_ms: u64, pub distance_home_m: f32, pub sampling_full: bool,
+    pub last_touch_ms: u64, pub distance_home_m: f32, pub sampling_full: bool, pub charging: bool,
 }
+/// One ~1 s microphone frame: YAMNet scores + estimated level (dB SPL). Labels only, never audio.
 #[derive(uniffi::Record, Clone, Debug)]
-pub struct AudioScores { pub t_ms: u64, pub scream: f32, pub shout: f32, pub glass: f32 }
+pub struct AudioScores { pub t_ms: u64, pub scream: f32, pub shout: f32, pub snore: f32, pub level_db: f32 }
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct TypingSample { pub phrase: String, pub typed: String, pub key_times_ms: Vec<u64>, pub backspaces: u32, pub duration_ms: u64 }
 #[derive(uniffi::Record, Clone, Debug)]
@@ -21,13 +22,25 @@ pub struct TypingVerdict { pub accepted: bool, pub z_score: f32, pub reason: Str
 #[derive(uniffi::Enum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UserAction { DismissOk, DismissWrongPhrase, NeedHelp, ManualSos, BiometricDismiss, FriendMarkedSafe, CheckTimeout, PhoneUnlocked }
 #[derive(uniffi::Enum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HmmState { Normal, Impaired, Incident, Unresponsive }
-#[derive(uniffi::Enum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EscalationLevel { Idle, Check, HeadsUp, Unlocked, Snatch, Resolved }
 #[derive(uniffi::Record, Clone, Debug)]
-pub struct Snapshot { pub p_danger: f32, pub hmm_state: HmmState, pub escalation: EscalationLevel, pub risk_band: u8, pub evidence: String, pub baseline_seconds: u32, pub placement: Placement, pub night_mode: bool }
+pub struct Snapshot {
+    pub escalation: EscalationLevel, pub evidence: String, pub sensing_full: bool, pub listening: bool,
+    pub baseline_seconds: u32, pub placement: Placement, pub night_mode: bool,
+}
 #[derive(uniffi::Enum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IncidentKind { GaitDrift, Impact, Grab, Stillness, Separated, TypingOff }
+pub enum IncidentKind {
+    PhoneDrop, PossibleFall, FallRecovered, DownAfterFall, HardImpact,
+    UnsteadyGait, Stumble, RepeatedStumbles, SlowedWalk,
+    PhoneLeftBehind, Grab,
+    Separated, StoppedOnWayHome, InVehicle,
+    BatteryCritical,
+    CheckInMissed, TypingOff,
+    ScreamShout, SnoringWhileDown,
+}
+/// Context: logged only · Watch: full sensing, counts toward a check-in · Danger: asks "You okay?" on its own
+#[derive(uniffi::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IncidentTier { Context, Watch, Danger }
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct MetricBand { pub name: String, pub value: f32, pub mean: f32, pub sd: f32, pub sd_distance: f32, pub in_band: bool }
 #[derive(uniffi::Record, Clone, Debug)]
@@ -35,14 +48,19 @@ pub struct LiveMetrics {
     pub t_ms: u64, pub placement: Placement, pub sampling_full: bool, pub activity: Activity,
     /// cadence, stride_cv, regularity, sway, wobble, jerk, rotation, peak_g
     pub bands: Vec<MetricBand>,
-    pub p_normal: f32, pub p_impaired: f32, pub p_incident: f32, pub p_unresponsive: f32,
+    pub listening: bool,
+    /// context that holds right now: "away from home late", "in a vehicle", "loud venue", "phone set down"
+    pub context: Vec<String>,
     pub baseline_trusted: bool, pub baseline_walk_days: f32, pub evidence: String,
 }
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct IncidentRecord {
-    pub id: u32, pub t_ms: u64, pub kind: IncidentKind, pub summary: String, pub sd_distance: f32, pub placement: Placement, pub raw_json: String,
-    pub p_normal: f32, pub p_impaired: f32, pub p_incident: f32, pub p_unresponsive: f32,
-    /// 0 = none
+    pub id: u32, pub t_ms: u64, pub kind: IncidentKind, pub tier: IncidentTier, pub summary: String, pub sd_distance: f32, pub placement: Placement, pub raw_json: String,
+    /// 0 = still active
+    pub cleared_ms: u64,
+    /// answered a check-in while it was active: no longer asks for another
+    pub acknowledged: bool,
+    /// escalation episode; 0 = none
     pub sequence_id: u32, pub watched: bool,
 }
 #[derive(uniffi::Enum, Clone, Debug)]
@@ -52,11 +70,15 @@ pub enum EngineEvent {
     UnlockLocation { summary: String },
     SnatchDetected { summary: String },
     Resolved,
-    RiskBandChanged { band: u8 },
     BatteryDying,
     LocationIntervalChanged { seconds: u32 },
     SamplingRateChanged { hz: u32, gyro: bool },
+    /// microphone listening window opened / closed
+    AudioListening { on: bool },
     SignalIncident { record: IncidentRecord },
+    IncidentCleared { record: IncidentRecord },
+    /// the incident log was reset by the user
+    IncidentLogCleared,
     CallOptionAvailable { summary: String },
 }
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -94,12 +116,12 @@ impl From<Context> for core::Context {
     fn from(c: Context) -> Self {
         core::Context {
             t_ms: c.t_ms, away_from_home: c.away_from_home, separated: c.separated, hour_local: c.hour_local, screen_on: c.screen_on, activity: c.activity.into(), battery_pct: c.battery_pct, speed_mps: c.speed_mps,
-            last_touch_ms: c.last_touch_ms, distance_home_m: c.distance_home_m, sampling_full: c.sampling_full,
+            last_touch_ms: c.last_touch_ms, distance_home_m: c.distance_home_m, sampling_full: c.sampling_full, charging: c.charging,
         }
     }
 }
 impl From<AudioScores> for core::AudioScores {
-    fn from(a: AudioScores) -> Self { core::AudioScores { t_ms: a.t_ms, scream: a.scream, shout: a.shout, glass: a.glass } }
+    fn from(a: AudioScores) -> Self { core::AudioScores { t_ms: a.t_ms, scream: a.scream, shout: a.shout, snore: a.snore, level_db: a.level_db } }
 }
 impl From<TypingSample> for core::TypingSample {
     fn from(s: TypingSample) -> Self { core::TypingSample { phrase: s.phrase, typed: s.typed, key_times_ms: s.key_times_ms, backspaces: s.backspaces, duration_ms: s.duration_ms } }
@@ -121,11 +143,6 @@ impl From<UserAction> for core::UserAction {
         }
     }
 }
-impl From<core::HmmState> for HmmState {
-    fn from(s: core::HmmState) -> Self {
-        match s { core::HmmState::Normal => HmmState::Normal, core::HmmState::Impaired => HmmState::Impaired, core::HmmState::Incident => HmmState::Incident, core::HmmState::Unresponsive => HmmState::Unresponsive }
-    }
-}
 impl From<core::EscalationLevel> for EscalationLevel {
     fn from(l: core::EscalationLevel) -> Self {
         match l {
@@ -140,14 +157,33 @@ impl From<core::EscalationLevel> for EscalationLevel {
 }
 impl From<core::IncidentKind> for IncidentKind {
     fn from(k: core::IncidentKind) -> Self {
+        use core::IncidentKind as K;
         match k {
-            core::IncidentKind::GaitDrift => IncidentKind::GaitDrift,
-            core::IncidentKind::Impact => IncidentKind::Impact,
-            core::IncidentKind::Grab => IncidentKind::Grab,
-            core::IncidentKind::Stillness => IncidentKind::Stillness,
-            core::IncidentKind::Separated => IncidentKind::Separated,
-            core::IncidentKind::TypingOff => IncidentKind::TypingOff,
+            K::PhoneDrop => IncidentKind::PhoneDrop,
+            K::PossibleFall => IncidentKind::PossibleFall,
+            K::FallRecovered => IncidentKind::FallRecovered,
+            K::DownAfterFall => IncidentKind::DownAfterFall,
+            K::HardImpact => IncidentKind::HardImpact,
+            K::UnsteadyGait => IncidentKind::UnsteadyGait,
+            K::Stumble => IncidentKind::Stumble,
+            K::RepeatedStumbles => IncidentKind::RepeatedStumbles,
+            K::SlowedWalk => IncidentKind::SlowedWalk,
+            K::PhoneLeftBehind => IncidentKind::PhoneLeftBehind,
+            K::Grab => IncidentKind::Grab,
+            K::Separated => IncidentKind::Separated,
+            K::StoppedOnWayHome => IncidentKind::StoppedOnWayHome,
+            K::InVehicle => IncidentKind::InVehicle,
+            K::BatteryCritical => IncidentKind::BatteryCritical,
+            K::CheckInMissed => IncidentKind::CheckInMissed,
+            K::TypingOff => IncidentKind::TypingOff,
+            K::ScreamShout => IncidentKind::ScreamShout,
+            K::SnoringWhileDown => IncidentKind::SnoringWhileDown,
         }
+    }
+}
+impl From<core::IncidentTier> for IncidentTier {
+    fn from(t: core::IncidentTier) -> Self {
+        match t { core::IncidentTier::Context => IncidentTier::Context, core::IncidentTier::Watch => IncidentTier::Watch, core::IncidentTier::Danger => IncidentTier::Danger }
     }
 }
 impl From<core::MetricBand> for MetricBand {
@@ -160,7 +196,7 @@ impl From<core::LiveMetrics> for LiveMetrics {
         LiveMetrics {
             t_ms: m.t_ms, placement: m.placement.into(), sampling_full: m.sampling_full, activity: m.activity.into(),
             bands: m.bands.into_iter().map(Into::into).collect(),
-            p_normal: m.p_normal, p_impaired: m.p_impaired, p_incident: m.p_incident, p_unresponsive: m.p_unresponsive,
+            listening: m.listening, context: m.context,
             baseline_trusted: m.baseline_trusted, baseline_walk_days: m.baseline_walk_days, evidence: m.evidence,
         }
     }
@@ -168,15 +204,18 @@ impl From<core::LiveMetrics> for LiveMetrics {
 impl From<core::IncidentRecord> for IncidentRecord {
     fn from(r: core::IncidentRecord) -> Self {
         IncidentRecord {
-            id: r.id, t_ms: r.t_ms, kind: r.kind.into(), summary: r.summary, sd_distance: r.sd_distance, placement: r.placement.into(), raw_json: r.raw_json,
-            p_normal: r.p_normal, p_impaired: r.p_impaired, p_incident: r.p_incident, p_unresponsive: r.p_unresponsive,
+            id: r.id, t_ms: r.t_ms, kind: r.kind.into(), tier: r.tier.into(), summary: r.summary, sd_distance: r.sd_distance, placement: r.placement.into(), raw_json: r.raw_json,
+            cleared_ms: r.cleared_ms, acknowledged: r.acknowledged,
             sequence_id: r.sequence_id, watched: r.watched,
         }
     }
 }
 impl From<core::Snapshot> for Snapshot {
     fn from(s: core::Snapshot) -> Self {
-        Snapshot { p_danger: s.p_danger, hmm_state: s.hmm_state.into(), escalation: s.escalation.into(), risk_band: s.risk_band, evidence: s.evidence, baseline_seconds: s.baseline_seconds, placement: s.placement.into(), night_mode: s.night_mode }
+        Snapshot {
+            escalation: s.escalation.into(), evidence: s.evidence, sensing_full: s.sensing_full, listening: s.listening,
+            baseline_seconds: s.baseline_seconds, placement: s.placement.into(), night_mode: s.night_mode,
+        }
     }
 }
 impl From<core::EngineEvent> for EngineEvent {
@@ -187,11 +226,13 @@ impl From<core::EngineEvent> for EngineEvent {
             core::EngineEvent::UnlockLocation { summary } => EngineEvent::UnlockLocation { summary },
             core::EngineEvent::SnatchDetected { summary } => EngineEvent::SnatchDetected { summary },
             core::EngineEvent::Resolved => EngineEvent::Resolved,
-            core::EngineEvent::RiskBandChanged { band } => EngineEvent::RiskBandChanged { band },
             core::EngineEvent::BatteryDying => EngineEvent::BatteryDying,
             core::EngineEvent::LocationIntervalChanged { seconds } => EngineEvent::LocationIntervalChanged { seconds },
             core::EngineEvent::SamplingRateChanged { hz, gyro } => EngineEvent::SamplingRateChanged { hz, gyro },
+            core::EngineEvent::AudioListening { on } => EngineEvent::AudioListening { on },
             core::EngineEvent::SignalIncident { record } => EngineEvent::SignalIncident { record: record.into() },
+            core::EngineEvent::IncidentCleared { record } => EngineEvent::IncidentCleared { record: record.into() },
+            core::EngineEvent::IncidentLogCleared => EngineEvent::IncidentLogCleared,
             core::EngineEvent::CallOptionAvailable { summary } => EngineEvent::CallOptionAvailable { summary },
         }
     }
@@ -238,17 +279,21 @@ impl SafetyEngine {
     pub fn set_night_mode(&self, active: bool, now_ms: u64) {
         self.lock().set_night_mode(active, now_ms);
     }
+    /// User reset: empty the incident log and put sensing back to rest (baselines stay). Events follow on the next tick.
+    pub fn reset_incidents(&self, now_ms: u64) {
+        self.lock().reset_incidents(now_ms);
+    }
     pub fn set_learning(&self, enabled: bool) {
         self.lock().set_learning(enabled);
     }
-    /// Call every ~1 s in night mode; the HMM step runs internally once a minute + on impact.
+    /// Call every ~1 s in night mode; every incident rule and the escalation run inside.
     pub fn tick(&self, now_ms: u64) -> Vec<EngineEvent> {
         self.lock().tick(now_ms).into_iter().map(Into::into).collect()
     }
     pub fn snapshot(&self) -> Snapshot {
         self.lock().snapshot().into()
     }
-    /// Live metrics vs. bands, the four state probabilities, baseline trust (dashboard).
+    /// Live metrics vs. bands, risk band, active incidents, context, baseline trust (dashboard).
     pub fn metrics(&self) -> LiveMetrics {
         self.lock().metrics().into()
     }

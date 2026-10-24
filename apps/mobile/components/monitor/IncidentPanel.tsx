@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { format, formatDistanceToNow } from 'date-fns';
 import { Button, Card, Pill, Row } from '@/components/ui';
 import { Map } from '@/components/Map';
-import { useStore } from '@/lib/store';
+import { NO_EVENTS, useStore } from '@/lib/store';
 import { fn, getActiveEpoch, listIncidentEvents, listUnlockRequests, rpc } from '@/lib/db';
 import type { Group, Incident, IncidentEventKind, Profile, Uuid } from '@/lib/types';
 import { colors, levelColor } from '@/lib/theme';
@@ -18,7 +18,7 @@ export function IncidentPanel({ incident, group, profiles, me, mapHeight, now }:
   incident: Incident; group: Group | undefined; profiles: Record<Uuid, Profile>; me: Uuid | null; mapHeight: number; now: number;
 }) {
   const id = incident.id;
-  const events = useStore((s) => s.events[id] ?? []);
+  const events = useStore((s) => s.events[id] ?? NO_EVENTS);
   const { trail, last, req, setReq, approvals, k, setK, error: locError } = useIncidentLocations(id);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

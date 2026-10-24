@@ -1,9 +1,9 @@
-//! Incident log (v1.1): records with 8 h expiry, persisted in the baseline blob, plus the rule-based
-//! sequence "agent" that groups concerning runs into sequences, prunes isolated minor incidents and
-//! turns a sequence into a bounded HMM log-odds boost and a one-line unlock summary.
-use crate::config::{LogCfg, SequenceCfg};
-use crate::types::{IncidentKind, IncidentRecord};
-use serde::{Deserialize, Serialize};
+//! Incident log: every incident the engine opens, with its tier and clearing time, persisted in the baseline blob
+//! (8 h expiry). Also owns escalation *episodes*: when a check-in / grab / SOS starts, the recent incidents join the
+//! episode (`sequence_id`, `watched`) and the friends' one-line summary is built from them.
+use crate::config::{IncidentCfg, LogCfg, SequenceCfg};
+use crate::types::{IncidentFamily, IncidentKind, IncidentRecord, IncidentTier};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Persisted part of the log.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -11,26 +11,23 @@ pub struct LogState {
     pub records: Vec<IncidentRecord>,
     pub next_id: u32,
     pub next_seq: u32,
-    /// sequences with an id at or below this were resolved by the user / a friend and no longer boost
+    /// the open escalation episode; 0 = none
     #[serde(default)]
-    pub resolved_seq: u32,
+    pub episode: u32,
+}
+
+/// A blob written by an older engine (different record shape) loads as an empty log instead of failing the whole
+/// baseline: the log is 8 h of context, the gait baseline is weeks of learning.
+pub fn lenient_log<'de, D: Deserializer<'de>>(d: D) -> Result<LogState, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
 pub struct IncidentLog {
     cfg: SequenceCfg,
     log_cfg: LogCfg,
+    inc: IncidentCfg,
     state: LogState,
-}
-
-fn kind_weight(cfg: &SequenceCfg, k: IncidentKind) -> f32 {
-    match k {
-        IncidentKind::GaitDrift => cfg.w_gait_drift,
-        IncidentKind::Separated => cfg.w_separated,
-        IncidentKind::Impact => cfg.w_impact,
-        IncidentKind::Stillness => cfg.w_stillness,
-        IncidentKind::Grab => cfg.w_grab,
-        IncidentKind::TypingOff => cfg.w_typing_off,
-    }
 }
 
 fn raw_f32(rec: &IncidentRecord, key: &str) -> Option<f32> {
@@ -38,31 +35,42 @@ fn raw_f32(rec: &IncidentRecord, key: &str) -> Option<f32> {
     v.get(key)?.as_f64().map(|x| x as f32)
 }
 
-/// Human phrase for one record inside a sequence summary (lowercase, mid-sentence form).
-fn phrase(rec: &IncidentRecord) -> String {
+/// "5 s", "2 min".
+pub fn duration(s: f32) -> String {
+    if s < 60.0 { format!("{:.0} s", s.max(0.0)) } else { format!("{} min", (s / 60.0).floor() as u32) }
+}
+
+/// Human phrase for one record inside a summary (lowercase, mid-sentence form).
+pub fn phrase(rec: &IncidentRecord) -> String {
+    use IncidentKind::*;
+    let mins = |key: &str| (raw_f32(rec, key).unwrap_or(0.0) / 60.0).floor().max(1.0) as u32;
     match rec.kind {
-        IncidentKind::GaitDrift => "unsteady walking".into(),
-        IncidentKind::Separated => "separated from the group".into(),
-        IncidentKind::Impact => {
-            let peak = raw_f32(rec, "peak_g").unwrap_or(0.0);
-            let fall = raw_f32(rec, "fall_likelihood").unwrap_or(0.0) >= 0.5;
-            match (fall, peak >= 4.0) {
-                (true, true) => "a hard fall".into(),
-                (true, false) => "a fall".into(),
-                (false, _) => "a hard impact".into(),
-            }
+        PhoneDrop => "the phone dropped and left lying".into(),
+        PossibleFall => {
+            if raw_f32(rec, "peak_g").unwrap_or(0.0) >= 4.0 { "a hard fall".into() } else { "a fall".into() }
         }
-        IncidentKind::Stillness => {
-            let s = raw_f32(rec, "stillness_s").unwrap_or(0.0);
-            format!("no movement for {} min", (s / 60.0).floor().max(1.0) as u32)
-        }
-        IncidentKind::Grab => "phone grabbed".into(),
-        IncidentKind::TypingOff => "impaired typing".into(),
+        FallRecovered => "got up again".into(),
+        DownAfterFall => format!("down for {}", duration(raw_f32(rec, "down_s").unwrap_or(0.0))),
+        HardImpact => "a hard impact".into(),
+        UnsteadyGait => "unsteady walking".into(),
+        Stumble => "a stumble".into(), // never in a summary (see join_phrases)
+        RepeatedStumbles => "repeated stumbling".into(),
+        SlowedWalk => "walking unusually slowly".into(),
+        PhoneLeftBehind => format!("the phone left behind for {} min", mins("set_down_s")),
+        Grab => "phone grabbed".into(),
+        Separated => "separated from the group".into(),
+        StoppedOnWayHome => format!("stopped on the way home for {} min", mins("stopped_s")),
+        InVehicle => "got into a vehicle".into(),
+        BatteryCritical => "battery critical".into(),
+        CheckInMissed => "no answer to a check-in".into(),
+        TypingOff => "impaired typing at a check-in".into(),
+        ScreamShout => "screaming or shouting".into(),
+        SnoringWhileDown => "snoring sounds while down".into(),
     }
 }
 
 fn capitalize_first(s: &str) -> String {
-    let s = s.strip_prefix("a ").unwrap_or(s);
+    let s = s.strip_prefix("a ").or_else(|| s.strip_prefix("the ")).unwrap_or(s);
     let mut c = s.chars();
     match c.next() {
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
@@ -70,9 +78,35 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
+/// "A, then b, then c" from the records' phrases: repeats collapse to their first mention. Single stumbles are left
+/// out (weak on their own, and a yank looks like one); repeated stumbling tells that story.
+fn join_phrases(recs: &[&IncidentRecord]) -> Option<String> {
+    // the high-g warning that a fall / drop / grab replaced a moment later is not a separate event
+    let superseded = |r: &IncidentRecord| {
+        r.kind == IncidentKind::HardImpact
+            && recs.iter().any(|o| {
+                matches!(o.kind, IncidentKind::PossibleFall | IncidentKind::PhoneDrop | IncidentKind::Grab) && o.t_ms.abs_diff(r.t_ms) <= 15_000
+            })
+    };
+    let mut phrases: Vec<String> = Vec::new();
+    for r in recs.iter().filter(|r| r.kind != IncidentKind::Stumble && !superseded(r)) {
+        let p = phrase(r);
+        if !phrases.contains(&p) {
+            phrases.push(p);
+        }
+    }
+    let first = phrases.first()?;
+    let mut out = capitalize_first(first);
+    for p in &phrases[1..] {
+        out.push_str(", then ");
+        out.push_str(p);
+    }
+    Some(out)
+}
+
 impl IncidentLog {
-    pub fn new(cfg: &SequenceCfg, log_cfg: &LogCfg, state: LogState, now_ms: u64) -> Self {
-        let mut l = IncidentLog { cfg: cfg.clone(), log_cfg: log_cfg.clone(), state };
+    pub fn new(cfg: &SequenceCfg, log_cfg: &LogCfg, inc: &IncidentCfg, state: LogState, now_ms: u64) -> Self {
+        let mut l = IncidentLog { cfg: cfg.clone(), log_cfg: log_cfg.clone(), inc: inc.clone(), state };
         l.expire(now_ms);
         l
     }
@@ -86,15 +120,61 @@ impl IncidentLog {
     pub fn is_empty(&self) -> bool {
         self.state.records.is_empty()
     }
+    pub fn get(&self, id: u32) -> Option<&IncidentRecord> {
+        self.state.records.iter().find(|r| r.id == id)
+    }
+    pub fn is_active(&self, id: u32) -> bool {
+        self.get(id).map(|r| r.cleared_ms == 0).unwrap_or(false)
+    }
+    pub fn active(&self) -> impl Iterator<Item = &IncidentRecord> {
+        self.state.records.iter().filter(|r| r.cleared_ms == 0)
+    }
+    /// Newest active record of a kind.
+    pub fn active_of(&self, kind: IncidentKind) -> Option<&IncidentRecord> {
+        self.active().filter(|r| r.kind == kind).last()
+    }
+    pub fn episode_open(&self) -> bool {
+        self.state.episode != 0
+    }
 
-    /// Append a record (assigns the id) and return it.
+    /// Append a record (assigns id and tier; joins the open episode) and return it.
     pub fn push(&mut self, mut rec: IncidentRecord) -> IncidentRecord {
         self.state.next_id += 1;
         rec.id = self.state.next_id;
-        rec.sequence_id = 0;
-        rec.watched = false;
+        rec.tier = rec.kind.tier();
+        rec.cleared_ms = if rec.kind.is_point() { rec.t_ms.max(1) } else { 0 };
+        rec.acknowledged = false;
+        rec.sequence_id = self.state.episode;
+        rec.watched = self.state.episode != 0;
         self.state.records.push(rec.clone());
         rec
+    }
+
+    /// Mark an active record cleared; returns the updated record (None if unknown or already cleared).
+    pub fn clear(&mut self, id: u32, t_ms: u64) -> Option<IncidentRecord> {
+        let r = self.state.records.iter_mut().find(|r| r.id == id && r.cleared_ms == 0)?;
+        r.cleared_ms = t_ms.max(r.t_ms).max(1);
+        Some(r.clone())
+    }
+
+    /// Clear every active record; returns the updated records.
+    pub fn clear_all(&mut self, t_ms: u64) -> Vec<IncidentRecord> {
+        let ids: Vec<u32> = self.active().map(|r| r.id).collect();
+        ids.into_iter().filter_map(|id| self.clear(id, t_ms)).collect()
+    }
+
+    /// The user answered a check-in: whatever is active now no longer asks for another one.
+    pub fn acknowledge_active(&mut self) {
+        for r in self.state.records.iter_mut().filter(|r| r.cleared_ms == 0) {
+            r.acknowledged = true;
+        }
+    }
+
+    /// Mark one record acknowledged (it replaced one the user had already answered for).
+    pub fn acknowledge(&mut self, id: u32) {
+        if let Some(r) = self.state.records.iter_mut().find(|r| r.id == id) {
+            r.acknowledged = true;
+        }
     }
 
     /// Drop records older than `log.expiry_h`. Called on load and every tick.
@@ -103,130 +183,91 @@ impl IncidentLog {
         self.state.records.retain(|r| now_ms.saturating_sub(r.t_ms) <= ttl);
     }
 
-    fn window_ms(&self) -> u64 {
-        (self.cfg.window_min * 60_000.0) as u64
-    }
-
-    fn is_fall(rec: &IncidentRecord) -> bool {
-        raw_f32(rec, "fall_likelihood").unwrap_or(0.0) >= 0.5
-    }
-
-    /// Sequence agent pass: form/extend sequences from concerning runs inside the window, prune isolated
-    /// gait drifts. Returns the current boost.
-    pub fn analyze(&mut self, now_ms: u64) -> f32 {
+    /// Expiry plus pruning: a single stumble with nothing after it for `stumble_prune_min` is removed.
+    pub fn maintain(&mut self, now_ms: u64) {
         self.expire(now_ms);
-        let window = self.window_ms();
-        let n = self.state.records.len();
-        for i in 0..n {
-            let r = &self.state.records[i];
-            if r.sequence_id != 0 {
-                continue;
-            }
-            let (t, kind) = (r.t_ms, r.kind);
-            let earlier = |k: &[IncidentKind]| -> bool {
-                self.state.records[..i].iter().any(|p| k.contains(&p.kind) && t.saturating_sub(p.t_ms) <= window)
-            };
-            let trigger = match kind {
-                IncidentKind::Grab | IncidentKind::Stillness => true,
-                IncidentKind::Impact => {
-                    Self::is_fall(r) || earlier(&[IncidentKind::GaitDrift, IncidentKind::Separated, IncidentKind::TypingOff])
-                }
-                IncidentKind::Separated => earlier(&[IncidentKind::GaitDrift]),
-                IncidentKind::GaitDrift | IncidentKind::TypingOff => false,
-            };
-            if !trigger {
-                continue;
-            }
-            // members: every record inside the window up to and including the trigger
-            let members: Vec<usize> =
-                (0..=i).filter(|j| t.saturating_sub(self.state.records[*j].t_ms) <= window).collect();
-            let existing = members.iter().map(|j| self.state.records[*j].sequence_id).filter(|s| *s != 0).max();
-            let seq = match existing {
-                Some(s) => s,
-                None => {
-                    self.state.next_seq += 1;
-                    self.state.next_seq
-                }
-            };
-            for j in members {
-                let m = &mut self.state.records[j];
-                if m.sequence_id == 0 {
-                    m.sequence_id = seq;
-                }
-                m.watched = true;
-            }
-        }
-        // prune: isolated GaitDrift with nothing after it for prune_min
-        let prune = (self.cfg.prune_isolated_gait_drift_min * 60_000.0) as u64;
+        let prune = (self.inc.stumble_prune_min * 60_000.0) as u64;
         let recs = &self.state.records;
         let keep: Vec<bool> = recs
             .iter()
             .map(|r| {
-                if r.kind != IncidentKind::GaitDrift || r.watched || r.sequence_id != 0 {
+                if r.kind != IncidentKind::Stumble || r.watched || now_ms.saturating_sub(r.t_ms) < prune {
                     return true;
-                }
-                if now_ms.saturating_sub(r.t_ms) < prune {
-                    return true; // too early to judge
                 }
                 recs.iter().any(|o| o.id != r.id && o.t_ms >= r.t_ms && o.t_ms - r.t_ms <= prune)
             })
             .collect();
         let mut k = keep.into_iter();
         self.state.records.retain(|_| k.next().unwrap_or(true));
-        self.boost(now_ms)
     }
 
-    /// Id of the newest unresolved sequence with a member inside the window.
-    fn active_seq(&self, now_ms: u64) -> Option<u32> {
-        let window = self.window_ms();
-        self.state
-            .records
-            .iter()
-            .filter(|r| r.sequence_id > self.state.resolved_seq && now_ms.saturating_sub(r.t_ms) <= window)
-            .map(|r| r.sequence_id)
-            .max()
-    }
-
-    /// Bounded log-odds boost for the HMM forward transitions: Σ member weights of the active sequence.
-    pub fn boost(&self, now_ms: u64) -> f32 {
-        match self.active_seq(now_ms) {
-            None => 0.0,
-            Some(seq) => self
-                .state
-                .records
-                .iter()
-                .filter(|r| r.sequence_id == seq)
-                .map(|r| kind_weight(&self.cfg, r.kind))
-                .sum::<f32>()
-                .min(self.cfg.max_boost),
-        }
-    }
-
-    /// One line describing the active (or most recent) sequence, e.g. "Fall, then no movement for 4 min".
-    pub fn sequence_summary(&self, now_ms: u64) -> Option<String> {
-        let seq = self.active_seq(now_ms).or_else(|| self.state.records.iter().map(|r| r.sequence_id).filter(|s| *s > 0).max())?;
-        let mut phrases: Vec<String> = Vec::new();
-        for r in self.state.records.iter().filter(|r| r.sequence_id == seq) {
-            let p = phrase(r);
-            if phrases.last().map(|l| l == &p).unwrap_or(false) {
-                continue;
+    /// Ask "You okay?" now? True when an unacknowledged Danger incident is active, or unacknowledged Watch
+    /// incidents from at least `min_families` families are. A missed check-in never re-triggers one, and a grab has
+    /// its own path.
+    pub fn check_trigger(&self, min_families: u32) -> bool {
+        let mut fams: Vec<IncidentFamily> = Vec::new();
+        for r in self.active().filter(|r| !r.acknowledged && !matches!(r.kind, IncidentKind::CheckInMissed | IncidentKind::Grab)) {
+            match r.tier {
+                IncidentTier::Danger => return true,
+                IncidentTier::Watch => {
+                    if !fams.contains(&r.kind.family()) {
+                        fams.push(r.kind.family());
+                    }
+                }
+                IncidentTier::Context => {}
             }
-            phrases.push(p);
         }
-        if phrases.is_empty() {
-            return None;
-        }
-        let mut out = capitalize_first(&phrases[0]);
-        for p in &phrases[1..] {
-            out.push_str(", then ");
-            out.push_str(p);
-        }
-        Some(out)
+        fams.len() as u32 >= min_families
     }
 
-    /// The user / a friend resolved the episode: sequences so far stop boosting (they stay in the log).
-    pub fn resolve(&mut self) {
-        self.state.resolved_seq = self.state.next_seq;
+    /// Any active Watch / Danger incident (acknowledged ones included): full sensing stays on.
+    pub fn watching(&self) -> bool {
+        self.active().any(|r| r.tier >= IncidentTier::Watch)
+    }
+
+    /// Start an escalation episode: every record from the last `window_min` joins it. Returns the episode id.
+    pub fn start_episode(&mut self, now_ms: u64) -> u32 {
+        if self.state.episode != 0 {
+            return self.state.episode;
+        }
+        self.state.next_seq += 1;
+        let seq = self.state.next_seq;
+        self.state.episode = seq;
+        let window = (self.cfg.window_min * 60_000.0) as u64;
+        for r in self.state.records.iter_mut().filter(|r| r.sequence_id == 0 && now_ms.saturating_sub(r.t_ms) <= window) {
+            r.sequence_id = seq;
+            r.watched = true;
+        }
+        seq
+    }
+
+    /// The episode was resolved (answered, marked safe, stood down): later incidents start fresh.
+    /// Forget every record (user reset). Ids keep counting up so an old id never names a new record.
+    pub fn reset(&mut self) {
+        self.state.records.clear();
+        self.state.episode = 0;
+    }
+
+    pub fn end_episode(&mut self) {
+        self.state.episode = 0;
+    }
+
+    /// One line for the open (or most recent) episode, e.g. "Unsteady walking, then a hard fall, then down for 2 min".
+    pub fn sequence_summary(&self) -> Option<String> {
+        let seq = if self.state.episode != 0 {
+            self.state.episode
+        } else {
+            self.state.records.iter().map(|r| r.sequence_id).filter(|s| *s > 0).max()?
+        };
+        let recs: Vec<&IncidentRecord> = self.state.records.iter().filter(|r| r.sequence_id == seq).collect();
+        join_phrases(&recs)
+    }
+
+    /// Active incidents, most serious first ("Possible fall (3.4 g); separated from the group").
+    pub fn active_summary(&self) -> String {
+        let mut act: Vec<&IncidentRecord> = self.active().filter(|r| r.tier > IncidentTier::Context).collect();
+        act.sort_by(|a, b| b.tier.cmp(&a.tier).then(b.t_ms.cmp(&a.t_ms)));
+        act.iter().map(|r| r.summary.as_str()).collect::<Vec<_>>().join("; ")
     }
 }
 
@@ -241,14 +282,13 @@ mod tests {
             id: 0,
             t_ms,
             kind,
-            summary: String::new(),
+            tier: kind.tier(),
+            summary: kind.name().into(),
             sd_distance: 0.0,
             placement: Placement::Pocket,
             raw_json: raw.into(),
-            p_normal: 1.0,
-            p_impaired: 0.0,
-            p_incident: 0.0,
-            p_unresponsive: 0.0,
+            cleared_ms: 0,
+            acknowledged: false,
             sequence_id: 0,
             watched: false,
         }
@@ -256,51 +296,77 @@ mod tests {
 
     fn log() -> IncidentLog {
         let c = Config::default_v1();
-        IncidentLog::new(&c.sequence, &c.log, LogState::default(), 0)
+        IncidentLog::new(&c.sequence, &c.log, &c.incidents, LogState::default(), 0)
     }
 
     #[test]
-    fn impact_then_stillness_forms_sequence_with_summary() {
+    fn danger_alone_or_two_families_trigger_a_check() {
         let mut l = log();
-        l.push(rec(60_000, IncidentKind::Impact, r#"{"peak_g":4.6,"fall_likelihood":0.8}"#));
-        assert!(l.analyze(61_000) > 0.0, "a fall alone is watched");
-        l.push(rec(300_000, IncidentKind::Stillness, r#"{"stillness_s":240}"#));
-        let b = l.analyze(301_000);
-        assert!((b - 2.0).abs() < 1e-5, "boost {b}");
-        assert!(l.records().iter().all(|r| r.watched && r.sequence_id == 1));
-        assert_eq!(l.sequence_summary(301_000).unwrap(), "Hard fall, then no movement for 4 min");
-        l.resolve();
-        assert_eq!(l.boost(302_000), 0.0);
+        l.push(rec(0, IncidentKind::UnsteadyGait, "{}"));
+        l.push(rec(1000, IncidentKind::SlowedWalk, "{}"));
+        assert!(!l.check_trigger(2), "two gait incidents are one family");
+        l.push(rec(2000, IncidentKind::Stumble, "{}"));
+        assert!(!l.check_trigger(2), "context never counts");
+        let sep = l.push(rec(3000, IncidentKind::Separated, "{}"));
+        assert!(l.check_trigger(2), "gait + location");
+        l.clear(sep.id, 4000);
+        assert!(!l.check_trigger(2));
+        l.push(rec(5000, IncidentKind::DownAfterFall, r#"{"down_s":130}"#));
+        assert!(l.check_trigger(2), "danger alone");
+        l.acknowledge_active();
+        assert!(!l.check_trigger(2), "answered check-in acknowledges");
+        assert!(l.watching(), "acknowledged incidents keep full sensing on");
+        l.push(rec(6000, IncidentKind::CheckInMissed, "{}"));
+        assert!(!l.check_trigger(2), "a missed check-in never re-triggers");
     }
 
     #[test]
-    fn long_chain_summary_and_isolated_gait_drift_pruned() {
+    fn episode_summary_and_join() {
         let mut l = log();
-        l.push(rec(0, IncidentKind::GaitDrift, "{}"));
-        l.push(rec(600_000, IncidentKind::Separated, "{}"));
-        l.push(rec(900_000, IncidentKind::Impact, r#"{"peak_g":5.0,"fall_likelihood":0.7}"#));
-        l.analyze(901_000);
-        assert_eq!(l.sequence_summary(901_000).unwrap(), "Unsteady walking, then separated from the group, then a hard fall");
+        l.push(rec(0, IncidentKind::UnsteadyGait, "{}"));
+        l.push(rec(60_000, IncidentKind::PossibleFall, r#"{"peak_g":4.6}"#));
+        l.push(rec(180_000, IncidentKind::DownAfterFall, r#"{"down_s":120}"#));
+        let seq = l.start_episode(181_000);
+        assert!(l.records().iter().all(|r| r.watched && r.sequence_id == seq));
+        assert_eq!(l.sequence_summary().unwrap(), "Unsteady walking, then a hard fall, then down for 2 min");
+        let later = l.push(rec(300_000, IncidentKind::CheckInMissed, "{}"));
+        assert_eq!(later.sequence_id, seq, "incidents during an episode join it");
+        l.end_episode();
+        let after = l.push(rec(400_000, IncidentKind::Separated, "{}"));
+        assert_eq!(after.sequence_id, 0);
+        assert!(l.sequence_summary().unwrap().ends_with("no answer to a check-in"));
+    }
+
+    #[test]
+    fn isolated_stumble_pruned_and_expiry() {
         let mut l = log();
-        l.push(rec(0, IncidentKind::GaitDrift, "{}"));
-        assert_eq!(l.analyze(19 * 60_000), 0.0);
+        l.push(rec(0, IncidentKind::Stumble, "{}"));
+        l.maintain(29 * 60_000);
         assert_eq!(l.records().len(), 1);
-        l.analyze(21 * 60_000);
-        assert!(l.is_empty(), "isolated gait drift pruned");
-        // grab alone
+        l.maintain(31 * 60_000);
+        assert!(l.is_empty(), "isolated stumble pruned");
         let mut l = log();
-        l.push(rec(0, IncidentKind::Grab, "{}"));
-        assert!(l.analyze(1000) >= 1.5);
-        assert_eq!(l.sequence_summary(1000).unwrap(), "Phone grabbed");
-    }
-
-    #[test]
-    fn expiry() {
+        l.push(rec(0, IncidentKind::Stumble, "{}"));
+        l.push(rec(60_000, IncidentKind::Stumble, "{}"));
+        l.maintain(40 * 60_000);
+        assert_eq!(l.records().len(), 1, "the first stumble had a follower; the second is now isolated");
         let mut l = log();
-        l.push(rec(0, IncidentKind::Impact, "{}"));
+        l.push(rec(0, IncidentKind::HardImpact, "{}"));
         l.expire(7 * 3_600_000);
         assert_eq!(l.records().len(), 1);
         l.expire(8 * 3_600_000 + 1);
         assert!(l.is_empty());
+    }
+
+    #[test]
+    fn old_blob_log_loads_empty() {
+        #[derive(Deserialize)]
+        struct W {
+            #[serde(deserialize_with = "lenient_log")]
+            log: LogState,
+        }
+        let old = r#"{"log":{"records":[{"id":1,"t_ms":5,"kind":"GaitDrift","p_normal":1.0}],"next_id":1,"next_seq":0}}"#;
+        let w: W = serde_json::from_str(old).unwrap();
+        assert!(w.log.records.is_empty());
     }
 }

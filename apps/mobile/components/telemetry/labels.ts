@@ -1,25 +1,23 @@
 // Labels and colours for the telemetry console. Status colours are the theme's reserved set and every colour
 // is paired with text. Metric / kind / placement labels are shared with the personal dashboard.
-import type { EscalationLevel, HmmState } from '@/modules/safety-native';
+import type { EscalationLevel } from '@/modules/safety-native';
 import type { TelemetryConnState } from '@/lib/telemetry';
 import { colors } from '@/lib/theme';
 
-export { ACTIVITY_LABEL, KIND_LABEL, PLACEMENT_LABEL, STATE_COLOR, STATE_LABEL, fmtSd, fmtValue, kindColor, metricLabel } from '@/components/dashboard/labels';
+export { ACTIVITY_LABEL, KIND_LABEL, PLACEMENT_LABEL, TIER_LABEL, fmtSd, fmtValue, kindLabel, metricLabel, tierColor } from '@/components/dashboard/labels';
 
 /** Engine events as they arrive in `tick.events` (CONTRACTS §7, snake_case). */
 export const ENGINE_EVENT_LABEL: Record<string, string> = {
   check_requested: 'check-in requested', heads_up: 'friends notified (heads-up)', unlock_location: 'location unlocked', snatch_detected: 'snatch detected',
-  resolved: 'resolved', risk_band_changed: 'risk band changed', battery_dying: 'battery dying', sampling_rate_changed: 'sampling rate changed',
-  signal_incident: 'signal flagged', call_option: 'call option available',
+  resolved: 'resolved', battery_dying: 'battery dying', sampling_rate_changed: 'sampling rate changed',
+  audio_listening: 'mic listening window', signal_incident: 'incident opened', incident_cleared: 'incident cleared', incident_log_cleared: 'incident log reset', call_option: 'call option available',
 };
 export const engineEventLabel = (name: string) => ENGINE_EVENT_LABEL[name] ?? name.replace(/_/g, ' ');
 export const engineEventColor = (name: string) =>
-  ({ check_requested: colors.warn, heads_up: colors.warn, unlock_location: colors.danger, snatch_detected: colors.danger, call_option: colors.danger, battery_dying: colors.warn, resolved: colors.ok, signal_incident: colors.warn } as Record<string, string>)[name] ?? colors.muted;
+  ({ check_requested: colors.warn, heads_up: colors.warn, unlock_location: colors.danger, snatch_detected: colors.danger, call_option: colors.danger, battery_dying: colors.warn, resolved: colors.ok, signal_incident: colors.warn, incident_cleared: colors.ok } as Record<string, string>)[name] ?? colors.muted;
 /** Events that should make the console beep (escalation steps + call option). */
 export const ALERT_EVENTS = new Set(['check_requested', 'heads_up', 'unlock_location', 'snatch_detected', 'call_option']);
 
-export const HMM_LABEL: Record<HmmState, string> = { normal: 'normal', impaired: 'impaired', incident: 'incident', unresponsive: 'unresponsive' };
-export const hmmColor = (s: HmmState) => ({ normal: colors.ok, impaired: colors.warn, incident: colors.danger, unresponsive: colors.danger })[s] ?? colors.muted;
 export const ESCALATION_LABEL: Record<EscalationLevel, string> = { idle: 'idle', check: 'check-in', heads_up: 'heads-up', unlocked: 'unlocked', snatch: 'snatch', resolved: 'resolved' };
 
 export const CONN_LABEL: Record<TelemetryConnState, string> = {

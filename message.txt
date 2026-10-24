@@ -1,0 +1,32 @@
+| Incident | Category | Trigger | Clears when | Reliability |
+|---|---|---|---|---|
+| Phone drop | Falls | Free-fall (< 0.3 g for 150+ ms), then impact > 2.5 g; was in hand; dead still after | Picked up within 60 s (deleted) | High |
+| Possible person fall | Falls | Impact > 2.5 g + upright → horizontal; no clean free-fall; micro-motion after | Gets up → becomes Fall, recovered | Medium-high |
+| Fall, recovered | Falls | Possible person fall, then upright + steps resume | Kept as context, expires at 8 hrs | High |
+| Down after fall | Falls | Possible person fall + no steps + horizontal for 2+ min | Steps resume | High |
+| Hard impact, unclassified | Falls | Impact > 2.5 g that fits neither pattern | Normal walking within 1 min | Medium |
+| Unsteady gait | Gait | Sway or step-time variability above baseline for 30+ s while walking | Normal band for 2+ min | High (with baseline) |
+| Stumble | Gait | Single step-interval outlier + sideways spike, walking continues | Deleted after 30 min if nothing follows | Medium |
+| Repeated stumbles | Gait | 3+ stumbles in 5 min | Normal gait for 10+ min | High |
+| Slowed walk | Gait | Cadence well below baseline for 1+ min while walking | Cadence back in normal band | Medium |
+| Stationary on person | Stillness | No steps for 10+ min, slight on-body motion | Steps resume | High |
+| Phone set down | Stillness | Perfectly still for 5+ min, no micro-motion | Picked up | High |
+| Phone left behind | Stillness | Set down 20+ min, away from home, late | Picked up | Medium |
+| No interaction | Stillness | Screen untouched 3+ min (logged only after another incident) | Any touch | High |
+| Grab | Handling | In hand (touched within 2 s) + jerk spike + sharp rotation + fast movement away | Owner unlocks phone | Medium |
+| Separated from group | Location | > 150 m from all friends for 10+ min, not heading home | Back within 150 m of anyone | High outdoors |
+| Away from home late | Location | Not home, 11 pm–5 am | Arrives home | High (context only) |
+| Stopped on the way home | Location | Was heading home, then still 10+ min somewhere not home | Moving again or home | High outdoors |
+| Got in a vehicle | Location | Activity recognition switches to automotive | Out of vehicle | High (context) |
+| Battery critical | Device | < 10% while away late; uploads latest encrypted location | Charging | High |
+| Phone offline | Device | No server heartbeat 10+ min while away late; enables k-of-n fallback | Heartbeat returns | High |
+| Check-in missed | Check-in | "You okay?" unanswered for 2 min | Answered | High |
+| Check-in typing off | Check-in | Typing speed or errors outside baseline | Normal check-in later | Medium |
+| Loud venue | Audio | Sound level > 80 dB sustained 5+ min | Quieter for 5+ min | High (context only) |
+| Left loud venue | Audio | Loud venue, then sudden sustained quiet | — | High (context) |
+| Scream / shout | Audio | Classifier detects screaming or shouting within 2 min of a grab or fall | Expires after 10 min if nothing follows | Medium (quiet settings only) |
+| Distress word | Audio | On-device speech recognition hears "help," "stop," "get off" during a listening window | Expires after 10 min if nothing follows | Medium |
+| Vomiting | Audio | Classifier detects vomiting during Down after fall or Stationary on person | Steps resume or check-in answered | Medium |
+| Snoring while down | Audio | Snoring during Down after fall + Check-in missed | Check-in answered or steps resume | Medium |
+
+Audio only listens after a fall, grab, missed check-in, or unsteady gait while away late. It runs on the phone and stores labels only, never recordings.

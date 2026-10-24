@@ -4,7 +4,7 @@ import { Pill } from '@/components/ui';
 import { colors, radius } from '@/lib/theme';
 import { fmtCountdown } from './labels';
 
-const CHECK_WINDOW_MS = 120_000; // CONTRACTS §6: unlock when no response for 120 s
+const CHECK_WINDOW_MS = 120_000; // model-v1.toml check_deadline_s
 
 /**
  * Shown while the tick carries `checkPhrase`: the phone is asking its owner to type the phrase before the
@@ -24,7 +24,7 @@ export function CheckInBanner({ phrase, deadlineMs, phoneNow, subjectName }: { p
         <Text style={[styles.count, { color: tint }]}>{remaining == null ? '—' : remaining <= 0 ? 'overdue' : fmtCountdown(remaining)}</Text>
       </View>
       <View style={styles.track}><View style={[styles.fill, { width: `${frac * 100}%`, backgroundColor: tint }]} /></View>
-      <Text style={styles.meta}>No answer by the deadline escalates to a heads-up for the group; the engine unlocks location after 120 s if P(danger) stays ≥ 0.9.</Text>
+      <Text style={styles.meta}>No answer by the deadline logs a missed check-in and sends the group a heads-up (no location); location unlocks 2 min later if the trigger still holds.</Text>
     </View>
   );
 }

@@ -205,7 +205,7 @@ update public.model_configs set toml = $toml$...$toml$, signature = '<base64 ed2
 ## Access model (short)
 
 - `profiles`: self + anyone sharing a group (incl. pending invites).
-- `devices`: only self; group-mates get `device_status` (heartbeat, night_mode, battery, risk band, status, public keys).
+- `devices`: only self; group-mates get `device_status` (heartbeat, night_mode, battery, status, public keys).
 - `groups`/`group_members`: members read; owner invites/removes; invitee accepts (`accept_invite`) or deletes own row; anyone can leave.
 - `epochs`/`key_shares`: subject writes; recipient reads own share.
 - `location_blobs`: subject inserts; group-mates read; nobody updates/deletes (purge is a definer fn).

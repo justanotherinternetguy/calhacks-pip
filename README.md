@@ -3,12 +3,12 @@
 Every safety app needs the person in danger to act. **safe** runs passively on a night out: it
 notices when someone *can't* ask for help (gait drifting badly, a hard fall then no movement,
 commotion, a snatched phone), asks *them* first ("You okay? type the 3 words"), and only then tells
-their friends. Location stays end-to-end encrypted until the danger estimate is high, and no single
+their friends. Location stays end-to-end encrypted until a check-in goes unanswered, and no single
 party — not one friend, not the company — can unlock it. Friends decide what to do; **the app never
 calls police itself.** Detection runs in Rust on the device; the server only ever sees ciphertext,
 proximity tokens and coarse status.
 
-> **Not an emergency service.** Detection is probabilistic and alerts can fail or be false. If you
+> **Not an emergency service.** Detection is heuristic and alerts can fail or be false. If you
 > are in danger, call your local emergency number. 18+ only. See [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Architecture
@@ -22,7 +22,7 @@ proximity tokens and coarse status.
 │   audio classifier · screen/unlock events · battery   │
 │        │ windows of samples                           │
 │ Rust safety-core (uniffi)                             │
-│   features → baselines → HMM → escalation policy      │
+│   features → baselines → incidents → escalation       │
 │   crypto: epoch keys, Shamir, AEAD, HPKE, proximity   │
 └───────────────┬───────────────────────────────────────┘
                 │ only ciphertext, tokens, coarse status
@@ -33,9 +33,11 @@ proximity tokens and coarse status.
 └───────────────────────────────────────────────────────┘
 ```
 
-Pipeline: 50 Hz motion → gait/impact/stillness/agitation features, z-scored against the user's own
-baseline per placement → 4-state HMM (Normal, Impaired, Incident, Unresponsive; context shifts
-transitions, not scores) → escalation state machine (Check → Heads-up → Unlock) with hysteresis.
+Pipeline: 50 Hz motion, context and (in listening windows only) audio labels → gait / impact / grab /
+stillness signals against the user's own baseline per placement → rule-based incidents (possible fall,
+down after fall, unsteady gait, stumbles, separated, stopped on the way home, phone left behind, scream,
+…), each with a tier and a clearing rule → escalation state machine (Check → Heads-up → Unlock) when a
+danger incident is active or two independent kinds of evidence coincide. No probability model.
 Escrow: daily key `K_day` split k-of-n (Shamir) to friends, hourly `K_h = HKDF(K_day, hour)`,
 locations XChaCha20-Poly1305 under `K_h`, shares HPKE-sealed + Ed25519-signed. Interfaces are fixed
 in [docs/CONTRACTS.md](docs/CONTRACTS.md); the full design is [PLAN.md](PLAN.md).
@@ -47,11 +49,11 @@ safe/
   apps/mobile/                     Expo app (expo-router, TS) — UI only
     modules/safety-native/         Expo module: android/**/*.kt, src/ TS facade (iOS removed)
   core/                            Cargo workspace
-    crates/safety-core/            signal, baseline, hmm, escalation, typing (pure Rust, no I/O)
+    crates/safety-core/            signal, baseline, incident rules, log, escalation, typing (pure Rust, no I/O)
     crates/safety-crypto/          identity, Shamir GF(256), HPKE seal/open, location AEAD, proximity
     crates/safety-ffi/             uniffi proc-macro surface (`SafetyEngine` + crypto fns)
     crates/sim/                    `sim batch core/traces` replays traces through the pipeline (CI gate)
-    config/model-v1.toml           HMM params + thresholds (signed, served by `config` function)
+    config/model-v1.toml           incident rules + thresholds (signed, served by `config` function)
     traces/<scenario>/*.json       recorded traces for sim + e2e inject
     build-mobile.sh                cargo-ndk / xcframework + uniffi bindings → module dirs
   supabase/                        migrations (RLS), functions/{push,watchdog,proximity,unlock,purge,config}, pgTAP tests
@@ -88,7 +90,7 @@ Full script: [docs/DEMO.md](docs/DEMO.md). Short version, one phone/emulator + w
    (iOS: `xcrun simctl openurl booted 'safe://debug/inject?trace=checkin-dismiss'`). Type the
    3 words → dismissed, friend sees nothing.
 3. Inject `heads-up`, ignore the check-in → friend gets "might not be okay" **without location** →
-   P(danger) passes `T_unlock` → friend's map appears. Show `location_blobs.ciphertext` in Studio.
+   2 min later, still down → friend's map appears. Show `location_blobs.ciphertext` in Studio.
 4. Inject `snatch` → immediate "don't chase" alert with the snatch-moment pin; biometric-only dismiss.
 5. Hold the SOS button → `manual-sos`. Headless: `maestro test e2e/`.
 
@@ -97,10 +99,11 @@ Trace names (`checkin-dismiss`, `heads-up`, `unlock-map`, `snatch`, `manual-sos`
 
 ## Privacy in one paragraph
 
-Home places, baselines and keys never leave the phone. Audio is classified in memory into scream /
-shout / glass scores and discarded. Location uploads are ciphertext under an hourly key; the server
-keeps 6 h and cannot decrypt. Friends learn only together/separated (HMAC'd geohash tokens) and a
-0–3 risk band, until a check-in is missed, the user taps "I need help"/SOS, or the phone goes
+Home places, baselines and keys never leave the phone. The microphone only listens after a fall, drop,
+grab, missed check-in or unsteady walking; audio is classified in memory into scream / shout / snoring
+labels and discarded. Location uploads are ciphertext under an hourly key; the server
+keeps 6 h and cannot decrypt. Friends learn only together/separated (HMAC'd geohash tokens) and a coarse
+status (night mode, battery, escalation level), until a check-in is missed, the user taps "I need help"/SOS, or the phone goes
 offline and ≥ 2 friends approve a fallback unlock. Every unlock is logged and shown to the subject
 and the whole group. Accepted risks and adversary table: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
@@ -111,7 +114,7 @@ and the whole group. Accepted risks and adversary table: [docs/THREAT_MODEL.md](
 | M0 spikes (locked-phone 50 Hz, iOS bg mic, battery, EAS build, Critical Alerts) | todo | hardware spikes need real phones; Apple entitlement deliberately out of hackathon scope |
 | M1 foundation (monorepo, CI, schema + RLS, auth, onboarding, QR friends, groups) | done (unverified on device) | workspaces, CI, contracts, 4 migrations (pgTAP 25/25 on Postgres 17), OTP/OAuth sign-in, onboarding, QR add, groups screens; typecheck passes |
 | M2 sensing (native services, night-mode controller, Rust features, baselines, trace recorder) | code complete, uncompiled natively | Swift + Kotlin services written against generated uniffi bindings (no Xcode/SDK here); `safety-core` signal/baseline tested |
-| M3 reasoning (HMM, escalation, typing check-in, replayed traces) | done | v1.1 engine: live signal bands, gyro, grab detector, incident log + sequence agent; 57 Rust tests, `sim batch` 6/6 (fall trace: check at 3:15, unlock at 5:15; story B quiet) |
+| M3 reasoning (incident rules, escalation, typing check-in, replayed traces) | done | v2 engine: rule-based incidents with tiers (HMM / P(danger) removed), live signal bands, gyro, grab + stumble detectors, listening windows; 59 core tests, `sim batch` 6/6 (fall trace: check at 3:15, unlock at 7:15; story B quiet) |
 | M4 escrow (epochs, Shamir, HPKE, blobs, normal + fallback unlock, proximity, push, watchdog) | done (push unverified live) | `safety-crypto` 19 tests; shared conventions in CONTRACTS §5; APNs/FCM builders unit-tested, no live credentials |
 | M5 friend response (incident screens, ring/call/en-route/resolve, escalate card, audit log) | done (web mock verified only) | incident timeline, map after unlock, fallback-unlock approval flow, history + audit screens |
 | M6 extra paths (audio classifier, snatch, manual SOS / intents / widgets / QS tile) | code complete | snatch detector tested in Rust; YAMNet wrappers, App Intent, widget, QS tile written; `yamnet.tflite` asset not bundled |

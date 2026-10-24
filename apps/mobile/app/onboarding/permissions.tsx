@@ -8,7 +8,7 @@ import { colors } from '@/lib/theme';
 const ITEMS: { kind: keyof Permissions; title: string; why: string; android?: boolean }[] = [
   { kind: 'locationAlways', title: 'Location — Always', why: 'So night mode can start by itself when you leave home, and so a location can be unlocked for friends if you may be in danger. Encrypted on your phone first.' },
   { kind: 'motion', title: 'Motion & fitness', why: 'Walking rhythm, falls and stillness are detected from the accelerometer, on your phone only.' },
-  { kind: 'microphone', title: 'Microphone (optional)', why: 'A few seconds every half minute during night mode, to notice screams or breaking glass. Audio is never stored or uploaded. Works without it, just a bit less sensitive.' },
+  { kind: 'microphone', title: 'Microphone (optional)', why: 'Only for a few minutes after a fall, a grab or a missed check-in, to notice screaming, shouting or snoring. Audio is never stored or uploaded. Works without it, just a bit less sensitive.' },
   { kind: 'notifications', title: 'Notifications', why: 'The "you okay?" check-in and friend alerts arrive as high-priority notifications.' },
   { kind: 'batteryUnrestricted', title: 'Unrestricted battery', why: 'Android may kill background apps to save battery. Safe needs to stay alive through the night (target under 8% battery per night).', android: true },
 ];

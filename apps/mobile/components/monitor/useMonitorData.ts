@@ -10,7 +10,7 @@ import type { AuditLog, IncidentEvent, Uuid } from '@/lib/types';
 
 export type DeviceStatus = {
   device_id: Uuid; user_id: Uuid; platform: 'ios' | 'android'; last_heartbeat: string | null; night_mode: boolean;
-  battery_pct: number | null; risk_band: number; status_level: string;
+  battery_pct: number | null; status_level: string;
 };
 
 /** Wall clock that ticks every `everyMs`, for live ages / the header clock. */
@@ -38,7 +38,7 @@ export function useDeviceStatus(userIds: Uuid[], intervalMs = 15_000): Record<Uu
     const load = async () => {
       const { data, error } = await supabase
         .from('device_status')
-        .select('device_id,user_id,platform,last_heartbeat,night_mode,battery_pct,risk_band,status_level')
+        .select('device_id,user_id,platform,last_heartbeat,night_mode,battery_pct,status_level')
         .in('user_id', ids);
       if (!alive || error || !data) { if (error) console.warn('device_status', error.message); return; }
       const next: Record<Uuid, DeviceStatus> = {};

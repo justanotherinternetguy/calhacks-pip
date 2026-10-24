@@ -14,9 +14,6 @@ export const AUDIT_LABEL: Record<string, string> = {
   ring: 'rang the phone', en_route: 'is on the way', called_911: 'called 911', called_campus: 'called campus safety', found: 'found them', release: 'location unlocked',
 };
 
-export const RISK_COLOR = [colors.ok, colors.accent, colors.warn, colors.danger] as const;
-export const riskColor = (band: number | null | undefined) => RISK_COLOR[Math.min(3, Math.max(0, band ?? 0))];
-
 /** Heartbeat freshness: quiet under 3 min, amber past 3, red past 10 (device heartbeats every 2 min in night mode). */
 export function heartbeatAge(lastHeartbeat: string | null | undefined, nowMs: number): { text: string; color: string } {
   if (!lastHeartbeat) return { text: 'no heartbeat yet', color: colors.muted };

@@ -1,5 +1,6 @@
 //! Signal processing on motion windows (50 Hz + gyro in full mode, ~10 Hz accel-only in low-rate
 //! mode). No I/O, no platform deps.
+pub mod audio;
 pub mod drift;
 pub mod gait;
 pub mod grab;
@@ -8,8 +9,9 @@ pub mod live;
 pub mod placement;
 pub mod spike;
 
-pub use drift::DriftTracker;
-pub use gait::{GaitAnalyzer, GaitFeatures};
+pub use audio::AudioWindow;
+pub use drift::{DriftRule, DriftStep, DriftTracker};
+pub use gait::{GaitAnalyzer, GaitFeatures, StumbleInfo, StumbleRule};
 pub use grab::{GrabDetector, GrabEvent};
 pub use impact::{ImpactDetector, ImpactEvent, ImpactKind};
 pub use live::{Bands, METRIC_NAMES};

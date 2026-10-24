@@ -2,14 +2,13 @@ import { create } from 'zustand';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import type { Session } from '@supabase/supabase-js';
-import type { IncidentRecord, Status } from '@/modules/safety-native';
+import type { Status } from '@/modules/safety-native';
 import type { Group, GroupMember, Incident, IncidentEvent, Presence, Profile, Uuid } from './types';
 
 export type PendingCheck = { phrase: string; deadlineMs: number } | null;
 export type SnatchAlert = { summary: string; lat?: number; lng?: number; atMs: number } | null;
 /** §6: the engine said 10 min passed with no response — friends get the one-tap call option. */
 export type CallOption = { summary: string; atMs: number } | null;
-export const RECENT_SIGNALS_MAX = 50;
 
 type State = {
   session: Session | null;
@@ -25,22 +24,26 @@ type State = {
   profiles: Record<Uuid, Profile>;
   incidents: Incident[];
   events: Record<Uuid, IncidentEvent[]>;
-  // §6 live signals (from native 'signalIncident' / 'callOption'); personal dashboard preference
-  recentSignals: IncidentRecord[]; // newest first, ring of RECENT_SIGNALS_MAX
+  // §6 call option (native 'callOption'); personal dashboard preference
   callOption: CallOption;
   dashboardEnabled: boolean;
   set: (patch: Partial<State>) => void;
   upsertIncident: (i: Incident) => void;
   addEvent: (e: IncidentEvent) => void;
-  pushSignal: (r: IncidentRecord) => void;
   reset: () => void;
 };
 
 const initial = {
   session: null, profile: null, onboarded: false, status: null, pendingCheck: null, snatch: null, sosActive: false,
   groups: [], members: [], presence: {}, profiles: {}, incidents: [], events: {},
-  recentSignals: [], callOption: null, dashboardEnabled: false,
+  callOption: null, dashboardEnabled: false,
 };
+
+/**
+ * Stable fallback for selectors: zustand v5 compares selector results with Object.is, so `s.events[id] ?? []`
+ * would return a fresh array every render and loop ("Maximum update depth exceeded") until the first event arrives.
+ */
+export const NO_EVENTS: readonly IncidentEvent[] = [];
 
 export const useStore = create<State>((set) => ({
   ...initial,
@@ -53,8 +56,6 @@ export const useStore = create<State>((set) => ({
       if (list.some((x) => x.id === e.id)) return s;
       return { events: { ...s.events, [e.incident_id]: [...list, e].sort((a, b) => a.created_at.localeCompare(b.created_at)) } };
     }),
-  pushSignal: (r) =>
-    set((s) => ({ recentSignals: [r, ...s.recentSignals.filter((x) => x.id !== r.id || x.tMs !== r.tMs)].slice(0, RECENT_SIGNALS_MAX) })),
   // dashboardEnabled is a device preference, not session state: keep it across sign-out.
   reset: () => set((s) => ({ ...initial, dashboardEnabled: s.dashboardEnabled })),
 }));

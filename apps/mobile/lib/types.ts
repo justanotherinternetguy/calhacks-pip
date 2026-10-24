@@ -12,7 +12,7 @@ export type Profile = { id: Uuid; display_name: string | null; phone: string | n
 export type Device = {
   id: Uuid; user_id: Uuid; platform: Platform; push_token: string | null; push_kind: 'apns' | 'fcm' | null;
   x25519_pub: string | null; ed25519_pub: string | null; last_heartbeat: string | null; night_mode: boolean;
-  battery_pct: number | null; risk_band: number; status_level: string; created_at: string;
+  battery_pct: number | null; status_level: string; created_at: string;
 };
 export type Group = { id: Uuid; name: string; owner_id: Uuid; threshold_k: number; campus_safety_number: string | null; created_at: string };
 export type GroupMember = { group_id: Uuid; user_id: Uuid; status: MemberStatus; invited_by: Uuid | null; created_at: string };

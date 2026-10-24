@@ -49,22 +49,22 @@ export function TelemetryTile({ b, buffers, bandSd, now, style }: { b: MetricBan
         </Text>
         <Text style={[styles.sd, { color: out ? colors.danger : colors.muted }]}>{fmtSd(b.sdDistance)}</Text>
       </View>
-      <LiveCanvas draw={draw} height={30} fps={5} style={styles.spark} placeholder="" />
+      <LiveCanvas draw={draw} height={22} fps={5} style={styles.spark} placeholder="" />
       <Text style={styles.small} numberOfLines={1}>{fmtValue(b.name, b.mean)} ± {fmtValue(b.name, bandSd * b.sd)} · 60 s</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  tile: { backgroundColor: colors.card, borderRadius: radius - 4, padding: 10, gap: 6, borderWidth: 1, borderColor: colors.border },
+  tile: { backgroundColor: colors.card, borderRadius: radius - 4, paddingVertical: 7, paddingHorizontal: 8, gap: 3, borderWidth: 1, borderColor: colors.border },
   flash: { backgroundColor: `${colors.danger}26`, borderColor: colors.danger },
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 6 },
-  label: { color: colors.muted, fontSize: 12, flexShrink: 1 },
-  outLabel: { color: colors.danger, fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  label: { color: colors.muted, fontSize: 11, flexShrink: 1 },
+  outLabel: { color: colors.danger, fontSize: 9, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
   valueRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 6 },
-  value: { fontSize: 20, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  value: { fontSize: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
   unit: { color: colors.muted, fontSize: 11, fontWeight: '400' },
-  sd: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  sd: { fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] },
   spark: { borderWidth: 0, borderRadius: 6 },
-  small: { color: colors.muted, fontSize: 11, fontVariant: ['tabular-nums'] },
+  small: { color: colors.muted, fontSize: 10, fontVariant: ['tabular-nums'] },
 });

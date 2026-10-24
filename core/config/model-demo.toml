@@ -18,14 +18,19 @@ rotation_deg_per_s = 150.0     # a quick twist (v1: 300)
 confirm_s = 2                  # 2 s of jogging/fast movement confirms (v1: 4)
 in_hand_touch_s = 10.0         # touched within 10 s counts as in hand (v1: 2)
 
+[incidents]
+unsteady_persist_s = 10        # 10 s of odd walking = unsteady gait (v1: 30)
+slowed_persist_s = 15          # (v1: 60)
+down_after_fall_s = 15         # (v1: 15)
+separated_min = 1              # (v1: 10)
+stopped_min = 1                # (v1: 10)
+left_behind_min = 2            # (v1: 20)
+
 [signals]
-drift_persist_s = 10           # 10 s of odd walking = gait drift (v1: 30)
 band_sd_untrusted = 2.0        # tighter bands while the baseline is untrusted (v1: 3.5)
-stillness_s = 30               # 30 s still + no touch after an impact (v1: 180)
-separated_min = 1
 
 [thresholds]
-check_deadline_s = 30          # check-in window (v1: 90)
-unlock_no_response_s = 30      # unlock after 30 s with no response and P ≥ t_unlock (v1: 120)
+check_deadline_s = 30          # check-in window (v1: 120)
+unlock_no_response_s = 60      # location unlock 60 s after the check if it still holds (v1: 240)
 call_option_s = 90             # call option after 90 s (v1: 600)
 grab_unlock_s = 30             # grab: unlock after 30 s unless the owner unlocks (v1: 120)

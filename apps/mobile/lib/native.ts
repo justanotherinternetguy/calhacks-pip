@@ -120,8 +120,7 @@ function wireEvents() {
       router.push('/snatch');
       void refreshIncidents();
     }),
-    // §6 live signals: ring of the last 50 engine records + the call-option flag, for the home tab / dashboard.
-    SafetyNative.addListener('signalIncident', (r) => useStore.getState().pushSignal(r)),
+    // §6: 10 min with no response — the call-option flag.
     SafetyNative.addListener('callOption', (e) => s({ callOption: { summary: e.summary, atMs: Date.now() } })),
     // Native rotated the JWT pair (SessionKeeper): adopt it, or supabase-js would later refresh with a dead token.
     // setSession fires TOKEN_REFRESHED → onAuthSession → SafetyNative.setSession(same pair), which native ignores.

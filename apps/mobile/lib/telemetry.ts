@@ -44,6 +44,30 @@ const RETRY_MAX_MS = 30_000;
 export const telemetryTopic = (userId: string) => `telemetry:${userId}`;
 /** realtime-js hands back the existing channel for a duplicate topic, so a resubscribe must wait for the old one to leave. */
 const pendingRemovals = new Map<string, Promise<unknown>>();
+const COMMAND_JOIN_MS = 8_000;
+
+/**
+ * Send a command to a member's phone on `telemetry-cmd:{userId}` (migration 0012: the subject or any group-mate may
+ * publish, only the phone reads). Joins the channel just for this send (acked), then leaves. Resolves to 'ok' when
+ * the server accepted it, otherwise the reason.
+ */
+export async function sendTelemetryCommand(userId: string, cmd: 'reset_incidents'): Promise<string> {
+  try { await supabase.realtime.setAuth(); } catch {}
+  const ch = supabase.channel(`telemetry-cmd:${userId}`, { config: { private: true, broadcast: { ack: true } } });
+  try {
+    const joined = await new Promise<string>((resolve) => {
+      const timer = setTimeout(() => resolve('join timed out'), COMMAND_JOIN_MS);
+      ch.subscribe((st, err) => {
+        if (st === 'SUBSCRIBED') { clearTimeout(timer); resolve('ok'); }
+        else if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') { clearTimeout(timer); resolve(err?.message ?? st.toLowerCase()); }
+      });
+    });
+    if (joined !== 'ok') return joined;
+    return await ch.send({ type: 'broadcast', event: 'command', payload: { cmd, t: Date.now() } });
+  } finally {
+    void supabase.removeChannel(ch).catch(() => {});
+  }
+}
 
 /**
  * Subscribe to one subject's telemetry. `onTick(tick, receivedAtMs)` for every complete tick (v2 frames are merged
@@ -167,8 +191,7 @@ export const MIN_DISPLAY_DELAY_MS = 120;
 export type TrendPoint = {
   t: number; // phone unix ms
   at: number; // local arrival ms
-  pDanger: number;
-  p: [number, number, number, number]; // normal, impaired, incident, unresponsive
+  listening: boolean;
   sd: Record<string, number>; // per-band sd_distance
   inBand: Record<string, boolean>;
 };
@@ -208,6 +231,12 @@ export class TelemetryBuffers {
   readonly incidents = new Map<number, IncidentRecord>();
   /** `incidentCount` from the newest tick: the phone's live log size */
   incidentCountOnPhone = 0;
+
+  /** Forget every incident record held here (the phone is told to reset its log separately). */
+  clearIncidents() {
+    this.incidents.clear();
+    this.incidentCountOnPhone = 0;
+  }
   ticks = 0;
   private lastSeq: number | null = null;
   dropped = 0; // sequence gaps seen
@@ -246,12 +275,15 @@ export class TelemetryBuffers {
     const sd: Record<string, number> = {};
     const inBand: Record<string, boolean> = {};
     for (const b of m.bands) { sd[b.name] = b.sdDistance; inBand[b.name] = b.inBand; }
-    this.trend.push({ t: tick.t, at: receivedAt, pDanger: tick.pDanger, p: [m.pNormal, m.pImpaired, m.pIncident, m.pUnresponsive], sd, inBand });
+    this.trend.push({ t: tick.t, at: receivedAt, listening: tick.listening, sd, inBand });
     const cutoff = receivedAt - TREND_SECONDS * 1000;
     let drop = 0;
     while (drop < this.trend.length && this.trend[drop].at < cutoff) drop++;
     if (drop) this.trend.splice(0, drop);
 
+    // The phone's log was reset: drop what we hold before taking this frame's records.
+    if (tick.events.includes('incident_log_cleared')) this.incidents.clear();
+    // Upsert by id: records are re-sent when they clear / are acknowledged; only a first sighting counts as new.
     const newIncidents: IncidentRecord[] = [];
     for (const r of tick.incidents) {
       const prev = this.incidents.get(r.id);

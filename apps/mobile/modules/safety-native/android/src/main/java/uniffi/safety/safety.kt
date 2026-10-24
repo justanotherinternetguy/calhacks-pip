@@ -764,6 +764,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -818,6 +820,8 @@ fun uniffi_safety_ffi_checksum_method_safetyengine_push_context(
 fun uniffi_safety_ffi_checksum_method_safetyengine_push_motion(
 ): Short
 fun uniffi_safety_ffi_checksum_method_safetyengine_push_typing(
+): Short
+fun uniffi_safety_ffi_checksum_method_safetyengine_reset_incidents(
 ): Short
 fun uniffi_safety_ffi_checksum_method_safetyengine_set_learning(
 ): Short
@@ -900,6 +904,8 @@ fun uniffi_safety_ffi_fn_method_safetyengine_push_motion(`ptr`: Pointer,`samples
 ): Unit
 fun uniffi_safety_ffi_fn_method_safetyengine_push_typing(`ptr`: Pointer,`s`: RustBuffer.ByValue,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_safety_ffi_fn_method_safetyengine_reset_incidents(`ptr`: Pointer,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_safety_ffi_fn_method_safetyengine_set_learning(`ptr`: Pointer,`enabled`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_safety_ffi_fn_method_safetyengine_set_night_mode(`ptr`: Pointer,`active`: Byte,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1100,7 +1106,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_safety_ffi_checksum_method_safetyengine_incident_log() != 26412.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_safety_ffi_checksum_method_safetyengine_metrics() != 64373.toShort()) {
+    if (lib.uniffi_safety_ffi_checksum_method_safetyengine_metrics() != 21586.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_safety_ffi_checksum_method_safetyengine_push_action() != 26431.toShort()) {
@@ -1118,6 +1124,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_safety_ffi_checksum_method_safetyengine_push_typing() != 33608.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_safety_ffi_checksum_method_safetyengine_reset_incidents() != 51093.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_safety_ffi_checksum_method_safetyengine_set_learning() != 21424.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1127,7 +1136,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_safety_ffi_checksum_method_safetyengine_snapshot() != 16415.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_safety_ffi_checksum_method_safetyengine_tick() != 337.toShort()) {
+    if (lib.uniffi_safety_ffi_checksum_method_safetyengine_tick() != 26273.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_safety_ffi_checksum_constructor_safetyengine_new() != 57386.toShort()) {
@@ -1602,7 +1611,7 @@ public interface SafetyEngineInterface {
     fun `incidentLog`(): List<IncidentRecord>
     
     /**
-     * Live metrics vs. bands, the four state probabilities, baseline trust (dashboard).
+     * Live metrics vs. bands, risk band, active incidents, context, baseline trust (dashboard).
      */
     fun `metrics`(): LiveMetrics
     
@@ -1616,6 +1625,11 @@ public interface SafetyEngineInterface {
     
     fun `pushTyping`(`s`: TypingSample, `nowMs`: kotlin.ULong): TypingVerdict
     
+    /**
+     * User reset: empty the incident log and put sensing back to rest (baselines stay). Events follow on the next tick.
+     */
+    fun `resetIncidents`(`nowMs`: kotlin.ULong)
+    
     fun `setLearning`(`enabled`: kotlin.Boolean)
     
     fun `setNightMode`(`active`: kotlin.Boolean, `nowMs`: kotlin.ULong)
@@ -1623,7 +1637,7 @@ public interface SafetyEngineInterface {
     fun `snapshot`(): Snapshot
     
     /**
-     * Call every ~1 s in night mode; the HMM step runs internally once a minute + on impact.
+     * Call every ~1 s in night mode; every incident rule and the escalation run inside.
      */
     fun `tick`(`nowMs`: kotlin.ULong): List<EngineEvent>
     
@@ -1751,7 +1765,7 @@ open class SafetyEngine: Disposable, AutoCloseable, SafetyEngineInterface
 
     
     /**
-     * Live metrics vs. bands, the four state probabilities, baseline trust (dashboard).
+     * Live metrics vs. bands, risk band, active incidents, context, baseline trust (dashboard).
      */override fun `metrics`(): LiveMetrics {
             return FfiConverterTypeLiveMetrics.lift(
     callWithPointer {
@@ -1820,6 +1834,20 @@ open class SafetyEngine: Disposable, AutoCloseable, SafetyEngineInterface
     }
     
 
+    
+    /**
+     * User reset: empty the incident log and put sensing back to rest (baselines stay). Events follow on the next tick.
+     */override fun `resetIncidents`(`nowMs`: kotlin.ULong)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_safety_ffi_fn_method_safetyengine_reset_incidents(
+        it, FfiConverterULong.lower(`nowMs`),_status)
+}
+    }
+    
+    
+
     override fun `setLearning`(`enabled`: kotlin.Boolean)
         = 
     callWithPointer {
@@ -1856,7 +1884,7 @@ open class SafetyEngine: Disposable, AutoCloseable, SafetyEngineInterface
 
     
     /**
-     * Call every ~1 s in night mode; the HMM step runs internally once a minute + on impact.
+     * Call every ~1 s in night mode; every incident rule and the escalation run inside.
      */override fun `tick`(`nowMs`: kotlin.ULong): List<EngineEvent> {
             return FfiConverterSequenceTypeEngineEvent.lift(
     callWithPointer {
@@ -1907,11 +1935,15 @@ public object FfiConverterTypeSafetyEngine: FfiConverter<SafetyEngine, Pointer> 
 
 
 
+/**
+ * One ~1 s microphone frame: YAMNet scores + estimated level (dB SPL). Labels only, never audio.
+ */
 data class AudioScores (
     var `tMs`: kotlin.ULong, 
     var `scream`: kotlin.Float, 
     var `shout`: kotlin.Float, 
-    var `glass`: kotlin.Float
+    var `snore`: kotlin.Float, 
+    var `levelDb`: kotlin.Float
 ) {
     
     companion object
@@ -1927,6 +1959,7 @@ public object FfiConverterTypeAudioScores: FfiConverterRustBuffer<AudioScores> {
             FfiConverterFloat.read(buf),
             FfiConverterFloat.read(buf),
             FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
         )
     }
 
@@ -1934,14 +1967,16 @@ public object FfiConverterTypeAudioScores: FfiConverterRustBuffer<AudioScores> {
             FfiConverterULong.allocationSize(value.`tMs`) +
             FfiConverterFloat.allocationSize(value.`scream`) +
             FfiConverterFloat.allocationSize(value.`shout`) +
-            FfiConverterFloat.allocationSize(value.`glass`)
+            FfiConverterFloat.allocationSize(value.`snore`) +
+            FfiConverterFloat.allocationSize(value.`levelDb`)
     )
 
     override fun write(value: AudioScores, buf: ByteBuffer) {
             FfiConverterULong.write(value.`tMs`, buf)
             FfiConverterFloat.write(value.`scream`, buf)
             FfiConverterFloat.write(value.`shout`, buf)
-            FfiConverterFloat.write(value.`glass`, buf)
+            FfiConverterFloat.write(value.`snore`, buf)
+            FfiConverterFloat.write(value.`levelDb`, buf)
     }
 }
 
@@ -1958,7 +1993,8 @@ data class Context (
     var `speedMps`: kotlin.Float, 
     var `lastTouchMs`: kotlin.ULong, 
     var `distanceHomeM`: kotlin.Float, 
-    var `samplingFull`: kotlin.Boolean
+    var `samplingFull`: kotlin.Boolean, 
+    var `charging`: kotlin.Boolean
 ) {
     
     companion object
@@ -1981,6 +2017,7 @@ public object FfiConverterTypeContext: FfiConverterRustBuffer<Context> {
             FfiConverterULong.read(buf),
             FfiConverterFloat.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -1995,7 +2032,8 @@ public object FfiConverterTypeContext: FfiConverterRustBuffer<Context> {
             FfiConverterFloat.allocationSize(value.`speedMps`) +
             FfiConverterULong.allocationSize(value.`lastTouchMs`) +
             FfiConverterFloat.allocationSize(value.`distanceHomeM`) +
-            FfiConverterBoolean.allocationSize(value.`samplingFull`)
+            FfiConverterBoolean.allocationSize(value.`samplingFull`) +
+            FfiConverterBoolean.allocationSize(value.`charging`)
     )
 
     override fun write(value: Context, buf: ByteBuffer) {
@@ -2010,6 +2048,7 @@ public object FfiConverterTypeContext: FfiConverterRustBuffer<Context> {
             FfiConverterULong.write(value.`lastTouchMs`, buf)
             FfiConverterFloat.write(value.`distanceHomeM`, buf)
             FfiConverterBoolean.write(value.`samplingFull`, buf)
+            FfiConverterBoolean.write(value.`charging`, buf)
     }
 }
 
@@ -2059,16 +2098,21 @@ data class IncidentRecord (
     var `id`: kotlin.UInt, 
     var `tMs`: kotlin.ULong, 
     var `kind`: IncidentKind, 
+    var `tier`: IncidentTier, 
     var `summary`: kotlin.String, 
     var `sdDistance`: kotlin.Float, 
     var `placement`: Placement, 
     var `rawJson`: kotlin.String, 
-    var `pNormal`: kotlin.Float, 
-    var `pImpaired`: kotlin.Float, 
-    var `pIncident`: kotlin.Float, 
-    var `pUnresponsive`: kotlin.Float, 
     /**
-     * 0 = none
+     * 0 = still active
+     */
+    var `clearedMs`: kotlin.ULong, 
+    /**
+     * answered a check-in while it was active: no longer asks for another
+     */
+    var `acknowledged`: kotlin.Boolean, 
+    /**
+     * escalation episode; 0 = none
      */
     var `sequenceId`: kotlin.UInt, 
     var `watched`: kotlin.Boolean
@@ -2086,14 +2130,13 @@ public object FfiConverterTypeIncidentRecord: FfiConverterRustBuffer<IncidentRec
             FfiConverterUInt.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterTypeIncidentKind.read(buf),
+            FfiConverterTypeIncidentTier.read(buf),
             FfiConverterString.read(buf),
             FfiConverterFloat.read(buf),
             FfiConverterTypePlacement.read(buf),
             FfiConverterString.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterBoolean.read(buf),
         )
@@ -2103,14 +2146,13 @@ public object FfiConverterTypeIncidentRecord: FfiConverterRustBuffer<IncidentRec
             FfiConverterUInt.allocationSize(value.`id`) +
             FfiConverterULong.allocationSize(value.`tMs`) +
             FfiConverterTypeIncidentKind.allocationSize(value.`kind`) +
+            FfiConverterTypeIncidentTier.allocationSize(value.`tier`) +
             FfiConverterString.allocationSize(value.`summary`) +
             FfiConverterFloat.allocationSize(value.`sdDistance`) +
             FfiConverterTypePlacement.allocationSize(value.`placement`) +
             FfiConverterString.allocationSize(value.`rawJson`) +
-            FfiConverterFloat.allocationSize(value.`pNormal`) +
-            FfiConverterFloat.allocationSize(value.`pImpaired`) +
-            FfiConverterFloat.allocationSize(value.`pIncident`) +
-            FfiConverterFloat.allocationSize(value.`pUnresponsive`) +
+            FfiConverterULong.allocationSize(value.`clearedMs`) +
+            FfiConverterBoolean.allocationSize(value.`acknowledged`) +
             FfiConverterUInt.allocationSize(value.`sequenceId`) +
             FfiConverterBoolean.allocationSize(value.`watched`)
     )
@@ -2119,14 +2161,13 @@ public object FfiConverterTypeIncidentRecord: FfiConverterRustBuffer<IncidentRec
             FfiConverterUInt.write(value.`id`, buf)
             FfiConverterULong.write(value.`tMs`, buf)
             FfiConverterTypeIncidentKind.write(value.`kind`, buf)
+            FfiConverterTypeIncidentTier.write(value.`tier`, buf)
             FfiConverterString.write(value.`summary`, buf)
             FfiConverterFloat.write(value.`sdDistance`, buf)
             FfiConverterTypePlacement.write(value.`placement`, buf)
             FfiConverterString.write(value.`rawJson`, buf)
-            FfiConverterFloat.write(value.`pNormal`, buf)
-            FfiConverterFloat.write(value.`pImpaired`, buf)
-            FfiConverterFloat.write(value.`pIncident`, buf)
-            FfiConverterFloat.write(value.`pUnresponsive`, buf)
+            FfiConverterULong.write(value.`clearedMs`, buf)
+            FfiConverterBoolean.write(value.`acknowledged`, buf)
             FfiConverterUInt.write(value.`sequenceId`, buf)
             FfiConverterBoolean.write(value.`watched`, buf)
     }
@@ -2143,10 +2184,11 @@ data class LiveMetrics (
      * cadence, stride_cv, regularity, sway, wobble, jerk, rotation, peak_g
      */
     var `bands`: List<MetricBand>, 
-    var `pNormal`: kotlin.Float, 
-    var `pImpaired`: kotlin.Float, 
-    var `pIncident`: kotlin.Float, 
-    var `pUnresponsive`: kotlin.Float, 
+    var `listening`: kotlin.Boolean, 
+    /**
+     * context that holds right now: "away from home late", "in a vehicle", "loud venue", "phone set down"
+     */
+    var `context`: List<kotlin.String>, 
     var `baselineTrusted`: kotlin.Boolean, 
     var `baselineWalkDays`: kotlin.Float, 
     var `evidence`: kotlin.String
@@ -2166,10 +2208,8 @@ public object FfiConverterTypeLiveMetrics: FfiConverterRustBuffer<LiveMetrics> {
             FfiConverterBoolean.read(buf),
             FfiConverterTypeActivity.read(buf),
             FfiConverterSequenceTypeMetricBand.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterSequenceString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterFloat.read(buf),
             FfiConverterString.read(buf),
@@ -2182,10 +2222,8 @@ public object FfiConverterTypeLiveMetrics: FfiConverterRustBuffer<LiveMetrics> {
             FfiConverterBoolean.allocationSize(value.`samplingFull`) +
             FfiConverterTypeActivity.allocationSize(value.`activity`) +
             FfiConverterSequenceTypeMetricBand.allocationSize(value.`bands`) +
-            FfiConverterFloat.allocationSize(value.`pNormal`) +
-            FfiConverterFloat.allocationSize(value.`pImpaired`) +
-            FfiConverterFloat.allocationSize(value.`pIncident`) +
-            FfiConverterFloat.allocationSize(value.`pUnresponsive`) +
+            FfiConverterBoolean.allocationSize(value.`listening`) +
+            FfiConverterSequenceString.allocationSize(value.`context`) +
             FfiConverterBoolean.allocationSize(value.`baselineTrusted`) +
             FfiConverterFloat.allocationSize(value.`baselineWalkDays`) +
             FfiConverterString.allocationSize(value.`evidence`)
@@ -2197,10 +2235,8 @@ public object FfiConverterTypeLiveMetrics: FfiConverterRustBuffer<LiveMetrics> {
             FfiConverterBoolean.write(value.`samplingFull`, buf)
             FfiConverterTypeActivity.write(value.`activity`, buf)
             FfiConverterSequenceTypeMetricBand.write(value.`bands`, buf)
-            FfiConverterFloat.write(value.`pNormal`, buf)
-            FfiConverterFloat.write(value.`pImpaired`, buf)
-            FfiConverterFloat.write(value.`pIncident`, buf)
-            FfiConverterFloat.write(value.`pUnresponsive`, buf)
+            FfiConverterBoolean.write(value.`listening`, buf)
+            FfiConverterSequenceString.write(value.`context`, buf)
             FfiConverterBoolean.write(value.`baselineTrusted`, buf)
             FfiConverterFloat.write(value.`baselineWalkDays`, buf)
             FfiConverterString.write(value.`evidence`, buf)
@@ -2394,11 +2430,10 @@ public object FfiConverterTypeShare: FfiConverterRustBuffer<Share> {
 
 
 data class Snapshot (
-    var `pDanger`: kotlin.Float, 
-    var `hmmState`: HmmState, 
     var `escalation`: EscalationLevel, 
-    var `riskBand`: kotlin.UByte, 
     var `evidence`: kotlin.String, 
+    var `sensingFull`: kotlin.Boolean, 
+    var `listening`: kotlin.Boolean, 
     var `baselineSeconds`: kotlin.UInt, 
     var `placement`: Placement, 
     var `nightMode`: kotlin.Boolean
@@ -2413,11 +2448,10 @@ data class Snapshot (
 public object FfiConverterTypeSnapshot: FfiConverterRustBuffer<Snapshot> {
     override fun read(buf: ByteBuffer): Snapshot {
         return Snapshot(
-            FfiConverterFloat.read(buf),
-            FfiConverterTypeHmmState.read(buf),
             FfiConverterTypeEscalationLevel.read(buf),
-            FfiConverterUByte.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterTypePlacement.read(buf),
             FfiConverterBoolean.read(buf),
@@ -2425,22 +2459,20 @@ public object FfiConverterTypeSnapshot: FfiConverterRustBuffer<Snapshot> {
     }
 
     override fun allocationSize(value: Snapshot) = (
-            FfiConverterFloat.allocationSize(value.`pDanger`) +
-            FfiConverterTypeHmmState.allocationSize(value.`hmmState`) +
             FfiConverterTypeEscalationLevel.allocationSize(value.`escalation`) +
-            FfiConverterUByte.allocationSize(value.`riskBand`) +
             FfiConverterString.allocationSize(value.`evidence`) +
+            FfiConverterBoolean.allocationSize(value.`sensingFull`) +
+            FfiConverterBoolean.allocationSize(value.`listening`) +
             FfiConverterUInt.allocationSize(value.`baselineSeconds`) +
             FfiConverterTypePlacement.allocationSize(value.`placement`) +
             FfiConverterBoolean.allocationSize(value.`nightMode`)
     )
 
     override fun write(value: Snapshot, buf: ByteBuffer) {
-            FfiConverterFloat.write(value.`pDanger`, buf)
-            FfiConverterTypeHmmState.write(value.`hmmState`, buf)
             FfiConverterTypeEscalationLevel.write(value.`escalation`, buf)
-            FfiConverterUByte.write(value.`riskBand`, buf)
             FfiConverterString.write(value.`evidence`, buf)
+            FfiConverterBoolean.write(value.`sensingFull`, buf)
+            FfiConverterBoolean.write(value.`listening`, buf)
             FfiConverterUInt.write(value.`baselineSeconds`, buf)
             FfiConverterTypePlacement.write(value.`placement`, buf)
             FfiConverterBoolean.write(value.`nightMode`, buf)
@@ -2727,11 +2759,6 @@ sealed class EngineEvent {
     object Resolved : EngineEvent()
     
     
-    data class RiskBandChanged(
-        val `band`: kotlin.UByte) : EngineEvent() {
-        companion object
-    }
-    
     object BatteryDying : EngineEvent()
     
     
@@ -2746,10 +2773,29 @@ sealed class EngineEvent {
         companion object
     }
     
+    /**
+     * microphone listening window opened / closed
+     */
+    data class AudioListening(
+        val `on`: kotlin.Boolean) : EngineEvent() {
+        companion object
+    }
+    
     data class SignalIncident(
         val `record`: IncidentRecord) : EngineEvent() {
         companion object
     }
+    
+    data class IncidentCleared(
+        val `record`: IncidentRecord) : EngineEvent() {
+        companion object
+    }
+    
+    /**
+     * the incident log was reset by the user
+     */
+    object IncidentLogCleared : EngineEvent()
+    
     
     data class CallOptionAvailable(
         val `summary`: kotlin.String) : EngineEvent() {
@@ -2781,21 +2827,25 @@ public object FfiConverterTypeEngineEvent : FfiConverterRustBuffer<EngineEvent>{
                 FfiConverterString.read(buf),
                 )
             5 -> EngineEvent.Resolved
-            6 -> EngineEvent.RiskBandChanged(
-                FfiConverterUByte.read(buf),
-                )
-            7 -> EngineEvent.BatteryDying
-            8 -> EngineEvent.LocationIntervalChanged(
+            6 -> EngineEvent.BatteryDying
+            7 -> EngineEvent.LocationIntervalChanged(
                 FfiConverterUInt.read(buf),
                 )
-            9 -> EngineEvent.SamplingRateChanged(
+            8 -> EngineEvent.SamplingRateChanged(
                 FfiConverterUInt.read(buf),
+                FfiConverterBoolean.read(buf),
+                )
+            9 -> EngineEvent.AudioListening(
                 FfiConverterBoolean.read(buf),
                 )
             10 -> EngineEvent.SignalIncident(
                 FfiConverterTypeIncidentRecord.read(buf),
                 )
-            11 -> EngineEvent.CallOptionAvailable(
+            11 -> EngineEvent.IncidentCleared(
+                FfiConverterTypeIncidentRecord.read(buf),
+                )
+            12 -> EngineEvent.IncidentLogCleared
+            13 -> EngineEvent.CallOptionAvailable(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
@@ -2838,13 +2888,6 @@ public object FfiConverterTypeEngineEvent : FfiConverterRustBuffer<EngineEvent>{
                 4UL
             )
         }
-        is EngineEvent.RiskBandChanged -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterUByte.allocationSize(value.`band`)
-            )
-        }
         is EngineEvent.BatteryDying -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
@@ -2866,11 +2909,31 @@ public object FfiConverterTypeEngineEvent : FfiConverterRustBuffer<EngineEvent>{
                 + FfiConverterBoolean.allocationSize(value.`gyro`)
             )
         }
+        is EngineEvent.AudioListening -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterBoolean.allocationSize(value.`on`)
+            )
+        }
         is EngineEvent.SignalIncident -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
                 + FfiConverterTypeIncidentRecord.allocationSize(value.`record`)
+            )
+        }
+        is EngineEvent.IncidentCleared -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeIncidentRecord.allocationSize(value.`record`)
+            )
+        }
+        is EngineEvent.IncidentLogCleared -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
             )
         }
         is EngineEvent.CallOptionAvailable -> {
@@ -2909,24 +2972,24 @@ public object FfiConverterTypeEngineEvent : FfiConverterRustBuffer<EngineEvent>{
                 buf.putInt(5)
                 Unit
             }
-            is EngineEvent.RiskBandChanged -> {
-                buf.putInt(6)
-                FfiConverterUByte.write(value.`band`, buf)
-                Unit
-            }
             is EngineEvent.BatteryDying -> {
-                buf.putInt(7)
+                buf.putInt(6)
                 Unit
             }
             is EngineEvent.LocationIntervalChanged -> {
-                buf.putInt(8)
+                buf.putInt(7)
                 FfiConverterUInt.write(value.`seconds`, buf)
                 Unit
             }
             is EngineEvent.SamplingRateChanged -> {
-                buf.putInt(9)
+                buf.putInt(8)
                 FfiConverterUInt.write(value.`hz`, buf)
                 FfiConverterBoolean.write(value.`gyro`, buf)
+                Unit
+            }
+            is EngineEvent.AudioListening -> {
+                buf.putInt(9)
+                FfiConverterBoolean.write(value.`on`, buf)
                 Unit
             }
             is EngineEvent.SignalIncident -> {
@@ -2934,8 +2997,17 @@ public object FfiConverterTypeEngineEvent : FfiConverterRustBuffer<EngineEvent>{
                 FfiConverterTypeIncidentRecord.write(value.`record`, buf)
                 Unit
             }
-            is EngineEvent.CallOptionAvailable -> {
+            is EngineEvent.IncidentCleared -> {
                 buf.putInt(11)
+                FfiConverterTypeIncidentRecord.write(value.`record`, buf)
+                Unit
+            }
+            is EngineEvent.IncidentLogCleared -> {
+                buf.putInt(12)
+                Unit
+            }
+            is EngineEvent.CallOptionAvailable -> {
+                buf.putInt(13)
                 FfiConverterString.write(value.`summary`, buf)
                 Unit
             }
@@ -2982,46 +3054,27 @@ public object FfiConverterTypeEscalationLevel: FfiConverterRustBuffer<Escalation
 
 
 
-enum class HmmState {
-    
-    NORMAL,
-    IMPAIRED,
-    INCIDENT,
-    UNRESPONSIVE;
-    companion object
-}
-
-
-/**
- * @suppress
- */
-public object FfiConverterTypeHmmState: FfiConverterRustBuffer<HmmState> {
-    override fun read(buf: ByteBuffer) = try {
-        HmmState.values()[buf.getInt() - 1]
-    } catch (e: IndexOutOfBoundsException) {
-        throw RuntimeException("invalid enum value, something is very wrong!!", e)
-    }
-
-    override fun allocationSize(value: HmmState) = 4UL
-
-    override fun write(value: HmmState, buf: ByteBuffer) {
-        buf.putInt(value.ordinal + 1)
-    }
-}
-
-
-
-
-
-
 enum class IncidentKind {
     
-    GAIT_DRIFT,
-    IMPACT,
+    PHONE_DROP,
+    POSSIBLE_FALL,
+    FALL_RECOVERED,
+    DOWN_AFTER_FALL,
+    HARD_IMPACT,
+    UNSTEADY_GAIT,
+    STUMBLE,
+    REPEATED_STUMBLES,
+    SLOWED_WALK,
+    PHONE_LEFT_BEHIND,
     GRAB,
-    STILLNESS,
     SEPARATED,
-    TYPING_OFF;
+    STOPPED_ON_WAY_HOME,
+    IN_VEHICLE,
+    BATTERY_CRITICAL,
+    CHECK_IN_MISSED,
+    TYPING_OFF,
+    SCREAM_SHOUT,
+    SNORING_WHILE_DOWN;
     companion object
 }
 
@@ -3039,6 +3092,40 @@ public object FfiConverterTypeIncidentKind: FfiConverterRustBuffer<IncidentKind>
     override fun allocationSize(value: IncidentKind) = 4UL
 
     override fun write(value: IncidentKind, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Context: logged only · Watch: full sensing, counts toward a check-in · Danger: asks "You okay?" on its own
+ */
+
+enum class IncidentTier {
+    
+    CONTEXT,
+    WATCH,
+    DANGER;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeIncidentTier: FfiConverterRustBuffer<IncidentTier> {
+    override fun read(buf: ByteBuffer) = try {
+        IncidentTier.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: IncidentTier) = 4UL
+
+    override fun write(value: IncidentTier, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -3169,6 +3256,34 @@ public object FfiConverterSequenceULong: FfiConverterRustBuffer<List<kotlin.ULon
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterULong.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
         }
     }
 }

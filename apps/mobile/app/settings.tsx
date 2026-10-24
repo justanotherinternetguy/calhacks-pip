@@ -84,12 +84,12 @@ export default function Settings() {
       </Card>
       <Card>
         <H2>Personal dashboard</H2>
-        <Toggle label="Personal dashboard" hint="Live metrics vs your baseline, state probabilities and the engine's incident log. Only you can see it; friends get a one-line summary at most." value={dashboardEnabled} onChange={(v) => void writeDashboardEnabled(v)} />
+        <Toggle label="Personal dashboard" hint="Live metrics vs your baseline and the engine's incident log. Only you can see it; friends get a one-line summary at most." value={dashboardEnabled} onChange={(v) => void writeDashboardEnabled(v)} />
         {dashboardEnabled && <Button title="Open dashboard" onPress={() => router.push('/dashboard')} />}
       </Card>
       <Card>
         <H2>Live telemetry</H2>
-        <Toggle label="Stream telemetry to monitor" hint="Raw motion, metrics, state probabilities and engine events go to your group's web monitor over one live connection (10 frames/s). Keeps the sensors at full rate and the CPU awake, so it costs battery. Location is never included." value={telemetry.value} onChange={(v) => void telemetry.toggle(v)} />
+        <Toggle label="Stream telemetry to monitor" hint="Raw motion, metrics, incidents and engine events go to your group's web monitor over one live connection (10 frames/s). Keeps the sensors at full rate and the CPU awake, so it costs battery. Location is never included." value={telemetry.value} onChange={(v) => void telemetry.toggle(v)} />
         <P muted style={{ fontSize: 13 }}>{telemetryHint}</P>
       </Card>
       <Card>
@@ -103,10 +103,11 @@ export default function Settings() {
         <Button title={demoHelp ? 'Hide: how to trigger' : 'How to trigger'} kind="ghost" onPress={() => setDemoHelp((h) => !h)} />
         {demoHelp && (
           <>
-            <P style={{ fontSize: 14 }}>Fall: phone in a pocket, drop onto a couch or bed and lie still for about 30 s.</P>
+            <P style={{ fontSize: 14 }}>Possible fall: phone in a pocket, drop onto a couch or bed (a firm hit with a tilt is enough). "High-g impact" appears at once, "Possible fall" about 2 s later. Don't touch it for 15 s → down after fall (red). Walk again → fall recovered.</P>
             <P style={{ fontSize: 14 }}>Grab: screen on, phone in hand; yank it away sharply with a twist, then jog for 2 to 3 s.</P>
-            <P style={{ fontSize: 14 }}>Gait drift: walk for 10 s or more very slowly or staggering.</P>
-            <P style={{ fontSize: 14 }}>Check-in: wait for "You okay?" and do not answer for 30 s. Friends get a heads-up, then the location unlocks.</P>
+            <P style={{ fontSize: 14 }}>Unsteady gait: stagger or sway while walking for 10 s. Slowed walk: walk very slowly for 15 s. Stumble: trip mid-stride and keep walking (3 in 5 min → repeated stumbles).</P>
+            <P style={{ fontSize: 14 }}>Phone left behind: leave it flat on a table, untouched, for 2 min while night mode is on.</P>
+            <P style={{ fontSize: 14 }}>Incidents are logged only (no automatic check-in or alerts); see them in the personal dashboard.</P>
           </>
         )}
       </Card>
@@ -135,8 +136,10 @@ function useNativeSwitch(get: () => Promise<boolean>, set: (on: boolean) => Prom
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
+    // `() => get()`, not `.then(get)`: the latter passes the resolved value as an argument, and a native getter
+    // that takes none rejects it ("received 1 arguments, but 0 was expected").
     Promise.resolve()
-      .then(get)
+      .then(() => get())
       .then((on) => { if (alive) { setValue(on); setError(null); } })
       .catch((e: unknown) => { if (alive) setError(e instanceof Error ? e.message : 'not supported by this build'); });
     return () => { alive = false; };

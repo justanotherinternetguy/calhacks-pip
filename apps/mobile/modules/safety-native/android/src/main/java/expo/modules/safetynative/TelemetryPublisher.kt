@@ -8,7 +8,6 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import uniffi.safety.EscalationLevel
-import uniffi.safety.HmmState
 import uniffi.safety.IncidentRecord
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToLong
@@ -28,15 +27,16 @@ class RawSamples(val accel: FloatArray, val gyro: FloatArray, val lastTMs: Long,
  * Rate policy (re-evaluated every iteration): [HZ_STREAM] while `SafetyRuntime.telemetryOn` or `dashboardStreamingOn`,
  * [HZ_NIGHT] while night mode is active, otherwise idle (socket closed). The engine is still ticked at 1 s by
  * SensingService; a frame only drains the per-sample rings (|a|, |ω| with timestamps) and the engine-event ring,
- * and attaches the full state block (metrics, probabilities, mode pills, check-in) when the engine has ticked since
+ * and attaches the full state block (metrics, risk band, mode pills, check-in) when the engine has ticked since
  * the previous state block or at least every [STATE_EVERY_MS], so a subscriber joining mid-stream is complete within a second.
  *
  * Latency probe: while streaming fast the channel is joined with `self = true`, so the server echoes our frames back;
  * `rttMs` (phone → Realtime → phone, same clock, no skew) rides on the next frame and is shown by the monitor and Settings.
  *
  * Delivery: a frame that lands while the socket is not joined is dropped (counted), never queued. Incident deltas are
- * the records with `id > lastSentIncidentId`, which advances when a frame was handed to the socket; every (re)join
- * replays the whole live log once (the monitor dedups by id). Logs one line per rate / socket state change, never per frame.
+ * the records with `id > lastSentIncidentId` or whose clearedMs / acknowledged / sequenceId changed since they were sent
+ * ([sentSignatures]); both advance when a frame was handed to the socket, and every (re)join replays the whole live log
+ * once (the monitor upserts by id). Logs one line per rate / socket state change, never per frame.
  */
 class TelemetryPublisher(private val rt: SafetyRuntime) {
   companion object {
@@ -55,6 +55,8 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
   /** Same pool / dispatcher as the PostgREST client; no call timeout (the socket is long-lived), short connect timeout. */
   private val http by lazy { rt.supabase.client.newBuilder().callTimeout(0, TimeUnit.SECONDS).connectTimeout(10, TimeUnit.SECONDS).readTimeout(0, TimeUnit.SECONDS).build() }
   private val socket by lazy { RealtimeSocket(rt.scope, http, TAG, ::onEcho) }
+  /** `telemetry-cmd:{uid}`: commands from the web monitor (subject or a group-mate may send, only this phone reads). */
+  private val cmdSocket by lazy { RealtimeSocket(rt.scope, http, "TelemetryCmd", ::onCommand) }
   private var job: Job? = null
 
   /** Current publish rate (0 = idle). */
@@ -72,6 +74,8 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
 
   private var seq = 0L
   @Volatile private var lastSentIncidentId = 0L
+  /** id → (clearedMs, acknowledged, sequenceId) as last sent, so a record that changed after it opened is re-sent. */
+  private val sentSignatures = HashMap<Long, Triple<Long, Boolean, Long>>()
   private var seenJoinEpoch = 0L
   private var lastStateMs = 0L
   private var lastStateTickMs = -1L
@@ -99,10 +103,10 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
   )
 
   /** Session refresh: the joined channel gets the new JWT without reconnecting. */
-  fun onTokenChanged(jwt: String) = socket.setToken(jwt)
+  fun onTokenChanged(jwt: String) { socket.setToken(jwt); cmdSocket.setToken(jwt) }
 
   /** Connectivity restored (SafetyRuntime's NetworkCallback): reconnect without waiting out the backoff. */
-  fun onNetworkAvailable() { if (hz != 0) socket.retryNow() }
+  fun onNetworkAvailable() { if (hz != 0) { socket.retryNow(); cmdSocket.retryNow() } }
 
   @Synchronized
   fun start() {
@@ -117,8 +121,9 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
           Log.i(TAG, if (h == 0) "idle (telemetry off, no dashboard, no night mode)" else "$h Hz (${rateReason()})")
           next = rt.now()
         }
-        if (h == 0 || cfg == null) { socket.stop(); setNetState("idle"); delay(IDLE_POLL_MS); continue }
+        if (h == 0 || cfg == null) { socket.stop(); cmdSocket.stop(); setNetState("idle"); delay(IDLE_POLL_MS); continue }
         socket.start(RealtimeSocket.Target(cfg.supabaseUrl, cfg.supabaseAnonKey, "telemetry:${cfg.userId}", selfEcho = h == HZ_STREAM), cfg.accessToken)
+        cmdSocket.start(RealtimeSocket.Target(cfg.supabaseUrl, cfg.supabaseAnonKey, "telemetry-cmd:${cfg.userId}", selfEcho = false), cfg.accessToken)
         val period = 1_000L / h
         val now = rt.now()
         publishOnce(now, cfg.userId)
@@ -140,6 +145,7 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
     job = null
     j.cancel()
     socket.stop()
+    cmdSocket.stop()
     if (hz != 0) { hz = 0; Log.i(TAG, "stopped") }
   }
 
@@ -156,21 +162,30 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
     if (socket.joinEpoch != seenJoinEpoch) {           // fresh join: replay the live log and send a state block right away
       seenJoinEpoch = socket.joinEpoch
       lastSentIncidentId = 0L
+      sentSignatures.clear()
       lastStateMs = 0L
       synchronized(probes) { probes.clear() }
     }
     val frame: JSONObject
-    val maxIncidentId: Long
+    val sentRecords: List<IncidentRecord>
     try {
-      val (f, maxId) = buildFrame(now, userId)
-      frame = f; maxIncidentId = maxId
+      val (f, records) = buildFrame(now, userId)
+      frame = f; sentRecords = records
     } catch (t: Throwable) {
       setNetState("build failed: ${t.javaClass.simpleName}: ${t.message?.take(80)}")
       return
     }
     if (socket.send("tick", frame)) {
       lastSentMs = now
-      if (maxIncidentId > lastSentIncidentId) lastSentIncidentId = maxIncidentId
+      if (sentRecords.isNotEmpty()) {
+        val live = cachedLog.mapTo(HashSet()) { it.id.toLong() }
+        sentSignatures.keys.retainAll(live)   // drop records the engine expired
+        for (r in sentRecords) {
+          val id = r.id.toLong()
+          if (id > lastSentIncidentId) lastSentIncidentId = id
+          sentSignatures[id] = r.signature()
+        }
+      }
       setNetState("ok")
     } else {
       dropped++
@@ -178,7 +193,19 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
     }
   }
 
-  /** Our own frame echoed by the server: round trip on the phone's clock. */
+  /** A command from a web monitor on `telemetry-cmd:{uid}` (the subject or a group-mate), e.g. `{ cmd: "reset_incidents" }`. */
+  private fun onCommand(event: String, payload: JSONObject, @Suppress("UNUSED_PARAMETER") receivedAtMs: Long) {
+    if (event != "command") return
+    when (val cmd = payload.optString("cmd")) {
+      "reset_incidents" -> rt.scope.launch {
+        Log.i(TAG, "monitor command: reset_incidents")
+        runCatching { rt.resetIncidents() }.onFailure { Log.w(TAG, "remote reset failed", it) }
+      }
+      else -> Log.w(TAG, "unknown monitor command: $cmd")
+    }
+  }
+
+  /** Our own frame echoed back by the server: round trip on the phone's clock. */
   private fun onEcho(event: String, payload: JSONObject, receivedAtMs: Long) {
     if (event != "tick") return
     val s = payload.optLong("seq", -1L)
@@ -196,20 +223,22 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
     Log.i(TAG, "$s; dropped=$dropped failures=${socket.failures} reconnects=${socket.reconnects}${rttMs?.let { " rtt=${it} ms" } ?: ""}")
   }
 
-  /** The §7 v2 frame plus the highest incident id it carries (acknowledged once the socket took the frame). */
-  private fun buildFrame(now: Long, userId: String): Pair<JSONObject, Long> {
+  private fun IncidentRecord.signature() = Triple(clearedMs.toLong(), acknowledged, sequenceId.toLong())
+
+  /** The §7 v2 frame plus the incident records it carries (marked as sent once the socket took the frame). */
+  private fun buildFrame(now: Long, userId: String): Pair<JSONObject, List<IncidentRecord>> {
     val engine = runCatching { rt.engine.get() }.getOrNull()
     val events = rt.drainTelemetryEvents()
     val raw = rt.sensing?.drainTelemetrySamples() ?: RawSamples.EMPTY
 
-    // The log (with raw_json per record) is re-read once a second or as soon as a SignalIncident was dispatched.
-    if (engine != null && (now - logReadMs >= LOG_REFRESH_MS || "signal_incident" in events)) {
+    // The log (with raw_json per record) is re-read once a second or as soon as an incident opened or cleared.
+    if ("incident_log_cleared" in events) sentSignatures.clear()   // the monitor empties its list on this event
+    if (engine != null && (now - logReadMs >= LOG_REFRESH_MS || "signal_incident" in events || "incident_cleared" in events || "incident_log_cleared" in events)) {
       cachedLog = runCatching { engine.incidentLog() }.getOrDefault(cachedLog)
       logReadMs = now
     }
     val sentId = lastSentIncidentId
-    val fresh = cachedLog.filter { it.id.toLong() > sentId }
-    val maxId = fresh.maxOfOrNull { it.id.toLong() } ?: sentId
+    val fresh = cachedLog.filter { val id = it.id.toLong(); id > sentId || sentSignatures[id]?.let { s -> s != it.signature() } == true }
 
     val o = JSONObject()
       .put("v", 2)
@@ -241,7 +270,7 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
         while (probes.size > 8) probes.remove(probes.keys.first())
       }
     }
-    return o to maxId
+    return o to fresh
   }
 
   private fun stateBlock(now: Long, engine: uniffi.safety.SafetyEngine?): JSONObject {
@@ -250,10 +279,8 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
     if (now - batteryReadMs >= BATTERY_REFRESH_MS) { batteryPct = rt.batteryPct(); batteryReadMs = now }
     val s = JSONObject()
       .put("metrics", jsonOf(metrics))
-      .put("hmm", rt.hmmName(snap?.hmmState ?: HmmState.NORMAL))
       .put("escalation", rt.escalationName(snap?.escalation ?: EscalationLevel.IDLE))
-      .put("riskBand", snap?.riskBand?.toInt() ?: 0)
-      .put("pDanger", jsonOf(snap?.pDanger?.toDouble() ?: 0.0))
+      .put("listening", snap?.listening ?: false)
       .put("nightMode", rt.nightActive)
       .put("battery", batteryPct)
       .put("activity", metrics["activity"] ?: "unknown")

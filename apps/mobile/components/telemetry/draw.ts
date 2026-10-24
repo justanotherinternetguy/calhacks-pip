@@ -7,7 +7,6 @@ import { colors } from '@/lib/theme';
 export type Rect = { x: number; y: number; w: number; h: number };
 export const FONT = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 export const SERIES = { accel: '#7c9cff', gyro: '#c084fc', danger: colors.danger, grid: '#1b2130', axis: '#2a3245' } as const;
-export const STATE_FILL = ['#34d399', '#fbbf24', '#ff3b5c', '#9f1239'] as const; // normal, impaired, incident, unresponsive
 
 export const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 export const yFor = (r: Rect, v: number, lo: number, hi: number) => r.y + r.h - ((clamp(v, lo, hi) - lo) / (hi - lo)) * r.h;
@@ -170,35 +169,18 @@ export function drawTrendLine(
   ctx.restore();
 }
 
-/** Four HMM probabilities as a 100 % stacked area: normal at the bottom, unresponsive on top. */
-export function drawStack(ctx: CanvasRenderingContext2D, r: Rect, pts: TrendPoint[], nowMs: number, windowSec: number) {
-  if (!pts.length) return;
+/** Shade the time spans where `on(p)` holds (e.g. the microphone listening window). */
+export function drawSpans(ctx: CanvasRenderingContext2D, r: Rect, pts: TrendPoint[], nowMs: number, windowSec: number, on: (p: TrendPoint) => boolean, color: string) {
   const windowMs = windowSec * 1000;
-  const visible = pts.filter((p) => nowMs - p.at <= windowMs);
-  if (!visible.length) return;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(r.x, r.y, r.w, r.h);
-  ctx.clip();
-  // Draw the largest cumulative first; each lower layer paints over it.
-  for (let layer = 3; layer >= 0; layer--) {
-    ctx.beginPath();
-    let firstX = 0, lastX = 0;
-    visible.forEach((p, i) => {
-      let cum = 0;
-      for (let j = 0; j <= layer; j++) cum += p.p[j];
-      const x = xForTrend(r, p, nowMs, windowMs);
-      const y = yFor(r, cum, 0, 1);
-      if (i === 0) { ctx.moveTo(x, y); firstX = x; } else ctx.lineTo(x, y);
-      lastX = x;
-    });
-    ctx.lineTo(lastX, r.y + r.h);
-    ctx.lineTo(firstX, r.y + r.h);
-    ctx.closePath();
-    ctx.fillStyle = STATE_FILL[layer];
-    ctx.fill();
+  ctx.fillStyle = color;
+  for (let i = 0; i < pts.length; i++) {
+    if (!on(pts[i])) continue;
+    const next = pts[i + 1];
+    if (next && nowMs - next.at > windowMs) continue;
+    const x0 = Math.max(r.x, xForTrend(r, pts[i], nowMs, windowMs));
+    const x1 = next ? xForTrend(r, next, nowMs, windowMs) : r.x + r.w;
+    ctx.fillRect(x0, r.y, Math.max(1, x1 - x0), r.h);
   }
-  ctx.restore();
 }
 
 /** One metric's signed SD distance over the last `windowSec`, with the ±2.5 SD band shaded. */

@@ -7,12 +7,12 @@ import { colors, radius } from '@/lib/theme';
 import { TelemetryTile } from './TelemetryTile';
 import { ACTIVITY_LABEL, PLACEMENT_LABEL } from './labels';
 
-/** Middle column top: the eight metric bands as tiles (2 per row) and the engine's evidence line. */
+/** Under the motion waveforms: the eight metric bands as compact tiles (4 per row) and the engine's notes. */
 export function MetricsPanel({ tick, buffers, now }: { tick: TelemetryTick | null; buffers: TelemetryBuffers; now: number }) {
   const m = tick?.metrics ?? null;
   const bandSd = m ? (m.baselineTrusted ? 2.5 : 3.5) : 2.5;
   return (
-    <View style={{ gap: 10 }}>
+    <View style={{ gap: 6 }}>
       <View style={styles.head}>
         <Text style={styles.title}>Metrics vs baseline</Text>
         <Text style={styles.meta}>band = mean ± {bandSd} SD{m && !m.baselineTrusted ? ' (population defaults)' : ''}</Text>
@@ -39,9 +39,9 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' },
   title: { color: colors.text, fontSize: 15, fontWeight: '700' },
   meta: { color: colors.muted, fontSize: 12, fontVariant: ['tabular-nums'] },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  cell: { flexBasis: '47%', flexGrow: 1, minWidth: 150 },
-  evidence: { backgroundColor: colors.card, borderRadius: radius, padding: 12, gap: 8, borderWidth: 1, borderColor: colors.border },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  cell: { flexBasis: '23%', flexGrow: 1, minWidth: 120 },
+  evidence: { backgroundColor: colors.card, borderRadius: radius, paddingVertical: 8, paddingHorizontal: 10, gap: 6, borderWidth: 1, borderColor: colors.border },
   pills: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  evidenceText: { color: colors.text, fontSize: 14, lineHeight: 20 },
+  evidenceText: { color: colors.text, fontSize: 13, lineHeight: 18 },
 });

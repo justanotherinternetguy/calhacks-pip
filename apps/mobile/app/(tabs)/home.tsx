@@ -101,11 +101,11 @@ export default function Home() {
       <Card style={{ opacity: 0.8 }}>
         <Row style={{ justifyContent: 'space-between' }}>
           <P muted>evidence</P>
-          <Pill text={`${eng?.hmmState ?? '-'} · ${eng?.escalation ?? '-'}`} color={levelColor(eng?.escalation ?? 'idle')} />
+          {eng && eng.escalation !== 'idle' && <Pill text={eng.escalation} color={levelColor(eng.escalation)} />}
         </Row>
         <P style={{ fontSize: 14 }}>{eng?.evidence ?? '—'}</P>
         <P muted style={{ fontSize: 13 }}>
-          p(danger) {eng ? eng.pDanger.toFixed(2) : '-'} · band {eng?.riskBand ?? '-'} · {eng?.placement ?? '-'} · baseline {eng?.baselineSeconds ?? 0}s · battery {status?.batteryPct ?? '-'}%
+          {eng?.sensingFull ? 'full sensing' : 'low-rate sensing'} · {eng?.listening ? 'mic listening' : 'mic off'} · {eng?.placement ?? '-'} · baseline {eng?.baselineSeconds ?? 0}s · battery {status?.batteryPct ?? '-'}%
           {SafetyNative.isMock ? ' · MOCK' : ''}
         </P>
       </Card>
@@ -137,7 +137,7 @@ function EscalationCard({ level, evidence, onOpenSnatch }: { level: EscalationLe
       return (
         <Card tint={colors.danger}>
           <P style={{ fontWeight: '700' }}>Location shared with your friends</P>
-          <P muted>{evidence ?? 'The danger estimate crossed the unlock threshold.'} Your friends can see where you are and decide what to do.</P>
+          <P muted>{evidence ?? 'Your location was unlocked.'} Your friends can see where you are and decide what to do.</P>
         </Card>
       );
     case 'snatch':

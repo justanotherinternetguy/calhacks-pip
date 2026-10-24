@@ -1,5 +1,4 @@
 //! sim: replay / synthesize / batch-evaluate traces through safety_core::Engine.
-use safety_core::config::DEFAULT_TOML;
 use safety_core::synth::{self, Expect, Scenario, Trace};
 use safety_core::{Engine, EngineEvent};
 use std::path::{Path, PathBuf};
@@ -7,7 +6,7 @@ use std::process::exit;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  sim replay [--lowrate] <file.json|dir>\n  sim synth --scenario walk|drunk|fall|drop|still|dance|snatch --minutes N --out file.json [--seed S]\n  sim batch <dir>\n\nSIM_DEBUG=1 prints the posterior every 30 s during replay."
+        "usage:\n  sim replay [--lowrate] <file.json|dir>\n  sim synth --scenario walk|drunk|fall|drop|still|dance|snatch --minutes N --out file.json [--seed S]\n  sim batch <dir>\n\nSIM_DEBUG=1 prints the escalation level and active incidents every 30 s during replay."
     );
     exit(2)
 }
@@ -71,19 +70,19 @@ struct Result_ {
     incident_t: Option<u64>,
     hour: u8,
     minutes: f32,
-    p_final: f32,
     pass: bool,
 }
 
 fn run(path: &Path, verbose: bool, lowrate: bool) -> Result_ {
     let tr = load(path);
     let tr = if lowrate { synth::decimate(&tr, 5) } else { tr };
-    let mut e = Engine::new(DEFAULT_TOML, None, 0).expect("config");
+    // traces carry escalation expectations (unlock / quiet / snatch): replay with automatic escalation on
+    let mut e = Engine::new("[thresholds]\nauto_escalate = true\n", None, 0).expect("config");
     let debug = verbose && std::env::var_os("SIM_DEBUG").is_some();
     let evs = synth::replay_with(&mut e, &tr, &mut |t, e| {
         if debug && t % 30_000 == 0 {
-            let p = e.posterior();
-            println!("  [{}] p=[{:.3} {:.3} {:.3} {:.3}] danger={:.3} {:?} still={:?}", mmss(t), p[0], p[1], p[2], p[3], e.snapshot().p_danger, e.snapshot().escalation, e.snapshot().evidence);
+            let s = e.snapshot();
+            println!("  [{}] {:?} listening={} active={:?}", mmss(t), s.escalation, s.listening, s.evidence);
         }
     });
     let find = |f: &dyn Fn(&EngineEvent) -> bool| evs.iter().find(|(_, e)| f(e)).map(|(t, _)| *t);
@@ -100,15 +99,18 @@ fn run(path: &Path, verbose: bool, lowrate: bool) -> Result_ {
         println!("== {} ({}, expect {:?}{})", path.display(), tr.meta.scenario, tr.meta.expect, if lowrate { ", 10 Hz accel-only" } else { "" });
         for (t, ev) in &evs {
             match ev {
-                EngineEvent::SignalIncident { record } => println!("  [{}] SignalIncident #{} {:?}: {}", mmss(*t), record.id, record.kind, record.summary),
+                EngineEvent::SignalIncident { record } => {
+                    println!("  [{}] SignalIncident #{} {:?} ({:?}): {}", mmss(*t), record.id, record.kind, record.tier, record.summary)
+                }
+                EngineEvent::IncidentCleared { record } => println!("  [{}] IncidentCleared #{} {:?}", mmss(*t), record.id, record.kind),
                 _ => println!("  [{}] {:?}", mmss(*t), ev),
             }
         }
         println!("  final snapshot: {:#?}", e.snapshot());
         let m = e.metrics();
         println!(
-            "  live metrics @{} placement={:?} activity={:?} full={} trusted={} walk_days={:.0} p=[{:.3} {:.3} {:.3} {:.3}] evidence={:?}",
-            mmss(m.t_ms), m.placement, m.activity, m.sampling_full, m.baseline_trusted, m.baseline_walk_days, m.p_normal, m.p_impaired, m.p_incident, m.p_unresponsive, m.evidence
+            "  live metrics @{} placement={:?} activity={:?} full={} trusted={} walk_days={:.0} listening={} context={:?} evidence={:?}",
+            mmss(m.t_ms), m.placement, m.activity, m.sampling_full, m.baseline_trusted, m.baseline_walk_days, m.listening, m.context, m.evidence
         );
         println!("  {:<10} {:>9} {:>9} {:>8} {:>7} band", "metric", "value", "mean", "sd", "sd_dist");
         for b in &m.bands {
@@ -116,9 +118,10 @@ fn run(path: &Path, verbose: bool, lowrate: bool) -> Result_ {
         }
         println!("  incident log ({} records):", log.len());
         for r in &log {
+            let state = if r.cleared_ms == 0 { "active".to_string() } else { format!("cleared {}", mmss(r.cleared_ms)) };
             println!(
-                "    #{} [{}] {:?} seq={} watched={} sd={:+.1} p=[{:.2} {:.2} {:.2} {:.2}] {} raw={}",
-                r.id, mmss(r.t_ms), r.kind, r.sequence_id, r.watched, r.sd_distance, r.p_normal, r.p_impaired, r.p_incident, r.p_unresponsive, r.summary, r.raw_json
+                "    #{} [{}] {:?} {:?} {state}{} seq={} sd={:+.1} {} raw={}",
+                r.id, mmss(r.t_ms), r.kind, r.tier, if r.acknowledged { " ack" } else { "" }, r.sequence_id, r.sd_distance, r.summary, r.raw_json
             );
         }
         if let Some(s) = e.sequence_summary() {
@@ -138,7 +141,6 @@ fn run(path: &Path, verbose: bool, lowrate: bool) -> Result_ {
         incident_t: tr.meta.incident_t_ms,
         hour: tr.meta.hour_local,
         minutes,
-        p_final: e.snapshot().p_danger,
         pass,
     }
 }
@@ -148,14 +150,14 @@ fn opt(t: Option<u64>) -> String {
 }
 
 fn summary(results: &[Result_]) {
-    println!("\n{:<28} {:<8} {:<7} {:>6} {:>7} {:>7} {:>7} {:>6} {:>4} {:<5} {}", "trace", "scenario", "expect", "check", "unlock", "snatch", "delay", "p_end", "inc", "ok", "sequence");
+    println!("\n{:<28} {:<8} {:<7} {:>6} {:>7} {:>7} {:>7} {:>4} {:<5} {}", "trace", "scenario", "expect", "check", "unlock", "snatch", "delay", "inc", "ok", "sequence");
     for r in results {
         let delay = match (r.incident_t, r.unlock_t.or(r.snatch_t)) {
             (Some(i), Some(u)) if u >= i => format!("{}s", (u - i) / 1000),
             _ => "-".into(),
         };
         println!(
-            "{:<28} {:<8} {:<7} {:>6} {:>7} {:>7} {:>7} {:>6.2} {:>4} {:<5} {}",
+            "{:<28} {:<8} {:<7} {:>6} {:>7} {:>7} {:>7} {:>4} {:<5} {}",
             r.name,
             r.scenario,
             format!("{:?}", r.expect).to_lowercase(),
@@ -163,7 +165,6 @@ fn summary(results: &[Result_]) {
             opt(r.unlock_t),
             opt(r.snatch_t),
             delay,
-            r.p_final,
             r.incidents,
             if r.pass { "PASS" } else { "FAIL" },
             r.sequence.clone().unwrap_or_default()

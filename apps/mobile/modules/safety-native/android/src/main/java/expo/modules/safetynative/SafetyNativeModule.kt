@@ -75,7 +75,7 @@ class SafetyNativeModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("SafetyNative")
-    Events("statusChanged", "checkRequested", "escalation", "snatch", "sos", "dashboard", "signalIncident", "callOption", "sessionRefreshed")
+    Events("statusChanged", "checkRequested", "escalation", "snatch", "sos", "dashboard", "signalIncident", "incidentCleared", "incidentLogCleared", "callOption", "sessionRefreshed")
 
     OnCreate {
       runCatching {
@@ -171,6 +171,7 @@ class SafetyNativeModule : Module() {
 
     AsyncFunction("getDashboard") { rt.freshDashboardMap() }   // ticks first if the last tick is > 1 s old
     AsyncFunction("setDashboardStreaming") { on: Boolean -> rt.setDashboardStreaming(on) }
+    AsyncFunction("resetIncidents") { rt.resetIncidents() }
 
     // ---- telemetry stream (CONTRACTS §7) ----------------------------------------
 

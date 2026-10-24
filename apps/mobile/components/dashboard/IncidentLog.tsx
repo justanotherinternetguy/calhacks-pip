@@ -4,7 +4,7 @@ import { format } from 'date-fns';
 import type { IncidentRecord } from '@/modules/safety-native';
 import { Pill } from '@/components/ui';
 import { colors, radius } from '@/lib/theme';
-import { KIND_LABEL, PLACEMENT_LABEL, fmtSd, kindColor } from './labels';
+import { PLACEMENT_LABEL, TIER_LABEL, fmtSd, kindLabel, tierColor } from './labels';
 
 function prettyJson(raw: string) {
   try { return JSON.stringify(JSON.parse(raw), null, 2); } catch { return raw; }
@@ -15,7 +15,8 @@ function Entry({ r }: { r: IncidentRecord }) {
   return (
     <Pressable onPress={() => setOpen((v) => !v)} style={({ pressed }) => [styles.entry, pressed && { opacity: 0.8 }]} accessibilityRole="button" accessibilityState={{ expanded: open }}>
       <View style={styles.head}>
-        <Pill text={KIND_LABEL[r.kind] ?? r.kind} color={kindColor(r.kind)} />
+        <Pill text={kindLabel(r.kind)} color={tierColor(r.tier)} />
+        <Text style={[styles.tier, { color: tierColor(r.tier) }]}>{TIER_LABEL[r.tier] ?? r.tier}</Text>
         <Text style={styles.time}>{format(r.tMs, 'HH:mm:ss')}</Text>
         <View style={{ flex: 1 }} />
         <Text style={[styles.sd, { color: Math.abs(r.sdDistance) > 2.5 ? colors.danger : colors.muted }]}>{fmtSd(r.sdDistance)}</Text>
@@ -23,16 +24,17 @@ function Entry({ r }: { r: IncidentRecord }) {
       <Text style={styles.summary}>{r.summary}</Text>
       <Text style={styles.meta} numberOfLines={1}>
         {PLACEMENT_LABEL[r.placement] ?? r.placement}
+        {r.clearedMs > 0 ? ` · cleared ${format(r.clearedMs, 'HH:mm:ss')}` : ''}
+        {r.acknowledged ? ' · answered at check-in' : ''}
         {r.sequenceId ? ` · seq #${r.sequenceId}` : ''}
         {r.watched ? ' · watching' : ''}
-        {` · P(inc) ${(r.pIncident * 100).toFixed(0)}% · P(unresp) ${(r.pUnresponsive * 100).toFixed(0)}%`}
       </Text>
       {open && <Text style={styles.raw} selectable>{prettyJson(r.rawJson)}</Text>}
     </Pressable>
   );
 }
 
-/** Engine incident log, newest first. Tap an entry to expand its raw_json. */
+/** Engine incident log, newest first, coloured by tier. Tap to expand raw_json. */
 export function IncidentLog({ records }: { records: IncidentRecord[] }) {
   const sorted = [...records].sort((a, b) => b.tMs - a.tMs || b.id - a.id);
   if (!sorted.length) return <View style={styles.empty}><Text style={styles.emptyText}>No signals in the last 8 hours.</Text></View>;
@@ -42,6 +44,7 @@ export function IncidentLog({ records }: { records: IncidentRecord[] }) {
 const styles = StyleSheet.create({
   entry: { backgroundColor: colors.card, borderRadius: radius, padding: 12, gap: 6, borderWidth: 1, borderColor: colors.border },
   head: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  tier: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
   time: { color: colors.muted, fontSize: 12, fontVariant: ['tabular-nums'] },
   sd: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
   summary: { color: colors.text, fontSize: 15, lineHeight: 20 },

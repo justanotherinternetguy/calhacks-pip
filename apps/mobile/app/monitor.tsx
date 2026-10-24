@@ -6,7 +6,7 @@ import type { TelemetryTick } from '@/modules/safety-native';
 import { Pill } from '@/components/ui';
 import { activeIncidents, useStore, useUserId } from '@/lib/store';
 import { subscribe } from '@/lib/db';
-import { NO_STREAM_HINT_MS, type TickDelta } from '@/lib/telemetry';
+import { NO_STREAM_HINT_MS, sendTelemetryCommand, type TickDelta } from '@/lib/telemetry';
 import type { Incident, IncidentEvent, Presence } from '@/lib/types';
 import { colors, levelColor } from '@/lib/theme';
 import { StatusRail } from '@/components/monitor/StatusRail';
@@ -32,7 +32,7 @@ const BEEP_RECORD_AGE_MS = 30_000;
 /**
  * /monitor — the friend's desktop telemetry console (laptop browser). The subject's Android phone broadcasts
  * 10 Hz frames on a private Realtime channel (CONTRACTS §7); this page subscribes as a group-mate and draws it:
- *   left   live |a| / |ω| traces, P(danger) strip, HMM probability stack (canvas, rAF)
+ *   left   live |a| / |ω| traces + mic listening window (canvas, rAF)
  *   middle metric band tiles, evidence line, the engine's incident log, the engine event ticker
  *   right  the escrow-side incident panel (map after unlock, Ring / I'm going / Found / Request location) + group rail
  * Location never travels over telemetry: the map still comes from released_keys + location_blobs.
@@ -147,11 +147,32 @@ export default function MonitorScreen() {
     </>
   );
 
-  const left = <WaveformPanel buffers={buffers} tick={tick} />;
+  // motion waveforms with the metrics-vs-baseline tiles right underneath
+  // Clear incidents: any group member can clear the shown member's log (the phone resets its log + sensing too).
+  const [clearNote, setClearNote] = useState<string | null>(null);
+  const clearIncidents = async () => {
+    if (!subjectId) return;
+    const ok = Platform.OS !== 'web' || globalThis.confirm?.(`Clear every incident record of ${subjectName}, including earlier ones, and reset sensing on their phone?`);
+    if (!ok) return;
+    buffers.clearIncidents();
+    setClearNote('Clearing…');
+    const status = await sendTelemetryCommand(subjectId, 'reset_incidents').catch((e: unknown) => (e instanceof Error ? e.message : 'error'));
+    setClearNote(status === 'ok' ? `Cleared here; ${subjectName}'s phone resets its log and sensing.` : `Cleared here, but the phone did not get the command (${status}).`);
+    setTimeout(() => setClearNote(null), 6_000);
+  };
+  const left = (
+    <View style={{ gap: 8 }}>
+      <WaveformPanel buffers={buffers} tick={tick} />
+      <MetricsPanel tick={tick} buffers={buffers} now={now} />
+    </View>
+  );
   const middle = (
     <View style={{ gap: 16 }}>
-      <MetricsPanel tick={tick} buffers={buffers} now={now} />
-      <LiveIncidentLog records={buffers.incidentList()} onPhone={buffers.incidentCountOnPhone} phoneNow={phoneNow} />
+      <LiveIncidentLog
+        records={buffers.incidentList()} onPhone={buffers.incidentCountOnPhone} phoneNow={phoneNow}
+        onClear={subjectId ? () => void clearIncidents() : undefined}
+        clearNote={clearNote ?? undefined}
+      />
       <EventTicker events={buffers.events} />
     </View>
   );
@@ -185,7 +206,7 @@ export default function MonitorScreen() {
       />
       {wide ? (
         <View style={styles.columns}>
-          <ScrollView style={styles.colLeft} contentContainerStyle={styles.pad}>{hints}{left}</ScrollView>
+          <ScrollView style={styles.colLeft} contentContainerStyle={styles.padTight}>{hints}{left}</ScrollView>
           <ScrollView style={styles.colMid} contentContainerStyle={styles.pad}>{middle}</ScrollView>
           <ScrollView style={styles.colRight} contentContainerStyle={styles.pad}>{right}</ScrollView>
         </View>
@@ -224,6 +245,7 @@ const styles = StyleSheet.create({
   colMid: { flex: 4, minWidth: 320, borderRightWidth: 1, borderRightColor: colors.border },
   colRight: { width: RIGHT_W },
   pad: { padding: 14, paddingBottom: 40, gap: 12 },
+  padTight: { padding: 10, gap: 8 },
   divider: { height: 1, backgroundColor: colors.border },
   banner: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: 12, borderWidth: 1, backgroundColor: colors.card },
   bannerText: { color: colors.text, fontSize: 13, lineHeight: 18, flex: 1 },

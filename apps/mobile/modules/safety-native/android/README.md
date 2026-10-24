@@ -26,7 +26,7 @@ android/
     EscrowManager.kt          identity, day/hour keys, Shamir shares, release, friend-side caches
     Uploaders.kt              Heartbeat (2 min), Location (1–5 min, encrypted), Proximity (2 min)
     SupabaseRest.kt           OkHttp PostgREST / RPC / functions client
-    AudioMonitor.kt           AudioRecord 16 kHz duty cycle; YamnetClassifier.kt (TFLite)
+    AudioMonitor.kt           AudioRecord 16 kHz while the engine's listening window is open; YamnetClassifier.kt (TFLite)
     AlertManager.kt           channels, check-in notification, remote ring, push fan-out
     SosManager.kt             manual SOS + biometric cancel
     SafetyNativeTypingView.kt native typing view (per-key timing) + TypingTracker
@@ -61,9 +61,9 @@ android/
    `u64`→`ULong`, `u32`→`UInt`, `u8`→`UByte`, `Vec<u8>`→`ByteArray`.
 3. **YAMNet assets**: download the TFLite YAMNet from TF Hub / Kaggle (`yamnet.tflite`, ~4 MB, input
    `[15600]` float32 @ 16 kHz, output 0 = 521 scores) and its `yamnet_class_map.csv` into
-   `src/main/assets/`. `YamnetClassifier` resolves the Screaming / Shout / Yell / Glass / Shatter indices by
-   name from the CSV so a re-exported model cannot silently shift them. Without the asset the audio
-   booster is simply disabled; the model works without it.
+   `src/main/assets/`. `YamnetClassifier` resolves the Screaming / Shout / Yell / Snoring indices by
+   name from the CSV so a re-exported model cannot silently shift them. Without the asset audio is
+   simply disabled; every other incident rule works without it.
 4. `core/build-mobile.sh` is expected to run steps 1–2; `model-v1.toml` is copied into assets by the
    `copyModelConfig` Gradle task.
 5. The app's Expo config plugin must add the permissions and the `foregroundServiceType` declaration to the
@@ -76,6 +76,12 @@ android/
   background. `BootReceiver` restarts `SensingService` with `allowMic=false` and posts a "tap to re-arm"
   notification. Opening the app calls `configure`, which restarts the service with `allowMic=true`; the
   microphone type is only added to the service when a night session starts.
+- **Listening window.** The mic is off by default, also at night. The engine opens a listening window
+  (`EngineEvent.AudioListening { on = true }`) after a fall, drop, grab, missed check-in or unsteady gait in night mode and
+  closes it 10 min later; `SensingService.setListening` starts / stops `AudioMonitor` accordingly, and only while the night
+  session holds the microphone FGS type (a window that opens earlier takes effect when the session starts). While open, every
+  ~0.975 s frame pushes `AudioScores { scream, shout, snore, levelDb }`; `levelDb` is an estimated dB SPL from the frame RMS
+  (dBFS + 112.3, the CDD 5.4.2 `VOICE_RECOGNITION` calibration of 90 dB SPL → RMS 2500).
 - **Pre-permission start.** Before the location permission is granted, the service runs as `specialUse`
   (Android 14+ throws on a location-type FGS without the permission). `requestPermission` sends
   `ACTION_RECHECK` so the type is upgraded.
@@ -98,7 +104,7 @@ The engine owns the sampling rate; native only executes it.
 | Mode | Sensors | Rate | Batching | When |
 |---|---|---|---|---|
 | **LOW** (default, all day) | `TYPE_LINEAR_ACCELERATION` + `TYPE_GRAVITY`, no gyro | ~10 Hz (`SENSOR_DELAY` 100 000 µs) | `maxReportLatency` 1 s, flushed to `push_motion` once a second | From `SensingService.onCreate`; outside night sessions the engine still needs motion activity/stillness, so LOW never stops while the service runs |
-| **FULL** | + `TYPE_GYROSCOPE` (rad/s → `MotionSample.rx/ry/rz`) | 50 Hz (20 000 µs) | same, flush at 50 samples or 1 s | `EngineEvent.SamplingRateChanged { hz, gyro }` with `gyro` or `hz > 15` (engine: away from home 21:00–06:00, or after any incident); also forced natively during a baseline walk, while learning gait on a daytime walk (`learningEnabled` + WALKING), while the dashboard streams and while the telemetry stream is on (`SafetyRuntime.telemetryOn`, default on once configured) |
+| **FULL** | + `TYPE_GYROSCOPE` (rad/s → `MotionSample.rx/ry/rz`) | 50 Hz (20 000 µs) | same, flush at 50 samples or 1 s | `EngineEvent.SamplingRateChanged { hz, gyro }` with `gyro` or `hz > 15` (engine: away from home 21:00–06:00, while a watch / danger incident is active, or shortly after any incident); also forced natively during a baseline walk, while learning gait on a daytime walk (`learningEnabled` + WALKING), while the dashboard streams and while the telemetry stream is on (`SafetyRuntime.telemetryOn`, default on once configured) |
 
 `SamplingRateChanged` → `SafetyRuntime.samplingFull` → `SensingService.applySampling()` (idempotent; unregisters, flushes,
 re-registers). `rx/ry/rz` are 0 whenever the gyro is not registered; `Context.sampling_full` reports what is actually being
@@ -134,12 +140,17 @@ context from `SafetyRuntime` so tracking works whenever the process is alive, no
   `SignalIncident` records is returned instead.
 - `setDashboardStreaming(on)` → a 1 s coroutine ticker in `SafetyRuntime` that emits `dashboard` with the same payload while
   on and a JS listener is attached; stopped on `false` and when the module is destroyed.
-- Events: `signalIncident` (one `IncidentRecord`, emitted for every `EngineEvent.SignalIncident`), `callOption` (`{ summary }`,
+- Events: `signalIncident` (one `IncidentRecord`, emitted for every `EngineEvent.SignalIncident`; point kinds such as `stumble`
+  and `fall_recovered` arrive already cleared), `incidentCleared` (the same record with `clearedMs` set, for every
+  `EngineEvent.IncidentCleared`; the native ring entry is replaced too), `callOption` (`{ summary }`,
   after 10 min without a response — native also inserts `incident_events.kind='call_option'` on the current incident and pushes
   to the group with title "No response for 10 minutes"), `dashboard` (see above).
 - Serialisation (`EngineMaps.kt`): `u64`/`u32` → JS number via `Long`, `f32` → `Double`, enums → lowercase snake strings
-  (`IncidentKind.GAIT_DRIFT` → `"gait_drift"`, `Placement` / `Activity` → `"pocket"`, `"walking"`, …). Field names are the
-  Rust names camelCased (`sdDistance`, `rawJson`, `sequenceId`, `baselineWalkDays`).
+  (`IncidentKind.POSSIBLE_FALL` → `"possible_fall"`, `IncidentTier.WATCH` → `"watch"`, `Placement` / `Activity` → `"pocket"`,
+  `"walking"`, …). Field names are the Rust names camelCased (`sdDistance`, `rawJson`, `clearedMs`, `sequenceId`,
+  `baselineWalkDays`). Incidents are rule-based with a tier (`context` logged only · `watch` full sensing, counts
+  toward a check-in · `danger` asks "You okay?" by itself); `clearedMs` 0 = still active, `acknowledged` = answered a check-in
+  while active.
 - Grab path: `HeadsUp` is now also emitted on a grab. Native treats it exactly like a gait heads-up — incident row + push,
   **no** hour-key release and no location; keys are released only on `UnlockLocation` (2 min later unless
   `PHONE_UNLOCKED` / `BIOMETRIC_DISMISS`) or `SnatchDetected`.
@@ -176,9 +187,10 @@ whenever events / incidents are present. The publisher starts with `SensingServi
 **Payload** (`v: 2`, camelCase, exact type in §7): every frame carries `t`, `seq`, `user`; `accel` / `gyro` = per-sample |a| (g)
 and |ω| (rad/s) since the previous frame, newest last, 4 decimals, capped at 128 (gyro all zeros in LOW mode); `st` = wall-clock
 ms of the newest sample; `sampleHz` = measured delivery rate (EMA of sensor-hub timestamps); `incidents` = `IncidentRecord`s with
-`id > lastSentId` (the watermark advances when the socket took the frame; every rejoin replays the whole live log once);
+`id > lastSentId` or whose `clearedMs` / `acknowledged` / `sequenceId` changed since they were last sent (both advance when the
+socket took the frame; every rejoin replays the whole live log once; the monitor upserts by id);
 `incidentCount`; `events` (snake_case engine events since the previous frame); `rttMs` once measured. `state` = `metrics`,
-`hmm`, `escalation`, `riskBand`, `pDanger`, `nightMode`, `battery` (read at most every 10 s), `activity`, `placement`,
+`escalation`, `listening`, `nightMode`, `battery` (read at most every 10 s), `activity`, `placement`,
 `samplingFull`, and `checkPhrase` / `checkDeadlineMs` only while the engine is in `check`.
 
 **Delivery rules.** A frame that fires while the channel is not joined is dropped (counted in `dropped`), never queued. Socket
@@ -199,7 +211,7 @@ over the refresh token, native rotates the pair 5 min before `exp`, pushes the n
 `sessionRefreshed`. Logcat tag `Session`.
 
 **Privacy.** Telemetry carries **no location** — no coordinates, no distance-from-home, no home places. Location stays on the
-escrow path (`location_blobs` + `released_keys`). What does go out: gait metrics vs. bands, state probabilities, raw acceleration /
+escrow path (`location_blobs` + `released_keys`). What does go out: gait metrics vs. bands, raw acceleration /
 rotation *magnitudes* (not axes), incident summaries, battery, night-mode flag and engine event names.
 
 ## Protocol conventions (CONTRACTS.md §5; iOS must match)
@@ -222,4 +234,5 @@ rotation *magnitudes* (not axes), incident summaries, battery, night-mode flag a
 `injectTrace(json)` (debuggable builds only) replays `{speed, motion[], context[], audio[]}` through the
 live engine with timestamps re-based to now; events fire exactly like real ones, so point it at a test
 Supabase project. Motion rows may carry `rx/ry/rz` (default 0) and context rows `lastTouchMs` (re-based like `tMs`; 0 =
-unknown), `distanceHomeM` (default -1) and `samplingFull` (default true).
+unknown), `distanceHomeM` (default -1), `samplingFull` (default true) and `charging` (default false); audio rows are
+`{tMs, scream, shout, snore?, levelDb?}` (snore default 0, levelDb default 50 dB SPL).

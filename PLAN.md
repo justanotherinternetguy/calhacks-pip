@@ -18,7 +18,7 @@ Every existing safety app needs the person in danger to act (press a button, set
 │   audio classifier · screen/unlock events · battery   │
 │        │ windows of samples                           │
 │ Rust safety-core (uniffi)                             │
-│   features → baselines → HMM → escalation policy      │
+│   features → baselines → incidents → escalation       │
 │   crypto: epoch keys, Shamir, AEAD, HPKE, proximity   │
 └───────────────┬───────────────────────────────────────┘
                 │ only ciphertext, tokens, coarse status
@@ -39,10 +39,10 @@ safe/
     modules/safety-native/        Expo module: ios/*.swift, android/*.kt
     modules/safety-native/rust/   generated uniffi Swift/Kotlin bindings + prebuilt libs
   core/
-    crates/safety-core/           signal, baseline, hmm, escalation, crypto, proximity, typing
+    crates/safety-core/           signal, baseline, incident rules, log, escalation, typing
     crates/safety-ffi/            uniffi interface (.udl or proc-macro)
     crates/sim/                   CLI: replay recorded traces through the full pipeline
-    config/model-v1.toml          hand-set HMM params + thresholds (signed, versioned)
+    config/model-v1.toml          incident rules + thresholds (signed, versioned)
   supabase/
     migrations/  functions/{push,watchdog,proximity,purge,unlock}/  tests/ (pgTAP)
   tools/collect/                  data-collection build flavor + labeling export
@@ -59,7 +59,7 @@ Build: `cargo-ndk` (Android .so for arm64/x86_64) and `cargo` + `xcframework` (i
 - **Night mode starts automatically** when the user is away from home *and* inside their evening window (default 8pm–6am, adjusted as the app learns their habits). It ends when they get home or the window ends.
 - **iOS:** home geofence exit (`CLCircularRegion`) plus significant-location-change monitoring wake the app, even after it was killed. It then starts continuous location (`allowsBackgroundLocationUpdates`, `pausesLocationUpdatesAutomatically = false`, ~100 m accuracy), which keeps the process alive so `CMMotionManager` can keep sampling at 50 Hz.
 - **Android:** a persistent foreground service (`foregroundServiceType="location|microphone"`) is started while the app is visible and stays up all the time. During the day it does minimal work; in night mode it runs everything. Geofence and Activity Recognition transitions switch modes. After a reboot it restarts without mic access (an Android rule) and posts a "tap to re-arm" notification.
-- Both platforms send a **heartbeat** every 2 min in night mode: status level, battery, and a coarse risk band. No location.
+- Both platforms send a **heartbeat** every 2 min in night mode: status level and battery. No location.
 
 ### Signals (all computed on the device)
 | Signal | Implementation |
@@ -74,9 +74,9 @@ Build: `cargo-ndk` (Android .so for arm64/x86_64) and `cargo` + `xcframework` (i
 | Separated | Private proximity tokens (§5). The server only learns together or separated. |
 | Typing on check-in | Native input view records per-key timestamps: inter-key median and CV, backspace rate, edit distance to the phrase, completion time. |
 
-### Mic duty cycle
-- **Android:** `AudioRecord` runs 5 s of every 30 s during night mode, and continuously for 2 min after any motion signal fires.
-- **iOS:** iOS may not let the app restart the mic while it's in the background. Day-1 spike: confirm this. If it's true, keep `AVAudioEngine` running through the night-mode session and run the classifier only on windows, which saves CPU. If the session started in the background and the mic can't start, post a one-tap "enable sound detection" notification.
+### Mic: listening windows only (v2)
+- The mic is off by default. The engine opens a **listening window** (night mode) after a fall, a phone drop, a grab, a missed check-in or unsteady gait, and closes it 10 min after the last such incident cleared. Inside a window `AudioRecord` captures continuously; ~1 s frames become YAMNet labels (scream, shout, snoring) plus a sound level (dB SPL). Only labels reach the engine.
+- Scream/shout counts only within 2 min of a fall or grab and not in a loud venue (median level ≥ 80 dB); snoring counts only while down after a fall with a missed check-in. Vomiting and distress words were considered and left out: YAMNet has no vomiting class, and on-device speech recognition is not reliable from a background service.
 - Either way, the mic is a **booster signal**. The model must work without it.
 
 ### Personal baselines
@@ -86,29 +86,33 @@ Build: `cargo-ndk` (Android .so for arm64/x86_64) and `cargo` + `xcframework` (i
 
 ---
 
-## 3. Context-aware reasoning: HMM (Rust `hmm/`)
-- States: **Normal, Impaired, Incident, Unresponsive**. A log-space forward filter runs once a minute. Impact events also trigger an immediate update.
-- **Emissions are conditioned on the current state** and treated as independent given that state: gait-drift z, impact likelihood, stillness duration bucket, agitation, audio score, phone-touched.
-  - Example: stillness is likely under Normal (sitting at a table) but strongly favors Unresponsive once mass is in Incident.
-- **Context shifts transitions, not scores.** `T(ctx) = softmax(base_logits + Σ ctx_i · w_i)` applied only to forward moves (Normal→Impaired→Incident→Unresponsive). Context: away from home, separated, late, rapid drift onset (possible drink spiking).
-- **Recovery transitions** are built in: Incident→Impaired when walking resumes, Impaired→Normal. This resolves story B with no alarm.
-- Gait drift mainly raises P(Impaired), which then changes how an impact and the stillness after it are read.
-- Parameters live in `config/model-v1.toml` (hand-set in v1, learned from data in v2), signed by the server and updatable without an app release.
-- Output: `P(danger) = P(Incident) + P(Unresponsive)` plus the evidence summary, e.g. "hard fall, no movement 4 min".
+## 3. Reasoning: rule-based incidents (Rust `engine` + `log`)
+v1 used a 4-state HMM producing `P(danger)`; v2 replaced it with explicit incidents, because a probability was hard to
+explain to the subject or friends and hid *why* something escalated.
+- Every signal opens and clears **incidents** (full list and rules: `docs/OVERVIEW.md` §1, `config/model-v1.toml`
+  `[incidents]`). Each has a **tier**: context (logged only), watch (full sensing, counts toward a check-in), danger
+  (asks on its own), and a **family** (fall, gait, phone, location, check-in, audio).
+- **Check-in trigger:** a danger incident (down after fall, …), or watch incidents from two independent families at once
+  (e.g. unsteady gait while separated; a fall then screaming). One family never asks alone.
+- **Recovery is explicit:** steps after a fall log "fall, recovered" and clear it; in-band walking clears unsteady gait;
+  rejoining the group clears separated. This resolves story B with no alarm.
+- Episodes: a check-in / grab / SOS links the last hour of incidents into one sequence for the friends' summary,
+  e.g. "Unsteady walking, then a hard fall, then down for 2 min".
+- Parameters live in `config/model-v1.toml`, signed by the server and updatable without an app release.
 
 ---
 
 ## 4. Layer 2: Escalation and alarm (Rust `escalation/` + native notifications)
 A state machine with hysteresis, cooldowns, and per-step timers:
 
-1. **Check:** `P(danger) ≥ T_check` (e.g. 0.6). A high-priority notification says "You okay?". Opening it requires unlocking the phone, which blocks a thief. The user types a 3-word random phrase in the native input. They can also tap **"I need help"**, which counts as consent and skips straight to step 3.
-2. **Soft heads-up:** no response within 90 s, or typing far off baseline, and `P ≥ T_heads_up`. Friends get "Sam might not be okay", **with no location**.
-3. **Location unlock:** `P ≥ T_unlock` (e.g. 0.95) and no successful dismiss. The phone releases the current epoch key to friends (§5) and keeps uploading encrypted live location.
+1. **Check:** the check-in trigger holds (§3). A high-priority notification says "You okay?". Opening it requires unlocking the phone, which blocks a thief. The user types a 3-word random phrase in the native input. They can also tap **"I need help"**, which counts as consent and skips straight to step 3.
+2. **Soft heads-up:** no response within 2 min (logged as "check-in missed") while the trigger still holds, or typing far off baseline. Friends get "Sam might not be okay", **with no location**. If the evidence clears on its own, the episode resolves.
+3. **Location unlock:** still no answer 4 min after the check and the trigger still holds. The phone releases the current epoch key to friends (§5) and keeps uploading encrypted live location.
 4. **Friends act:** ring the phone loudly, call, tap "I'm going" (visible to the other friends), mark found/safe.
 5. **Option to escalate:** a one-tap call to the group's configured campus safety number or 911, with a prefilled info card (name, last location, what was detected) to read out or text. **The app never calls on its own.**
 
-- A good dismiss resets the posterior toward Normal and lowers sensitivity for 30 min.
-- A wrong-phrase dismiss counts as evidence, not as a dismiss.
+- A good dismiss acknowledges every active incident: they stay logged (and keep full sensing on) but only a new incident can ask again.
+- A wrong phrase leaves the check open for another try.
 
 **Other paths into escalation:**
 - **Snatch detector** → immediate "Sam's phone may have been snatched; Sam may be without a phone" alert. It includes the location *at the snatch moment*, plus a "don't chase" warning. Only the owner's biometric unlock can dismiss it.
@@ -207,7 +211,7 @@ Auth: Supabase Auth with phone OTP + Apple/Google sign-in. One active device per
    - **File the Critical Alerts entitlement request.**
 2. **M1 foundation:** monorepo, CI (cargo test, pgTAP, tsc, EAS), Supabase schema + RLS, auth, onboarding, QR friends, groups.
 3. **M2 sensing:** native services, night-mode controller, feature extraction in Rust, baselines, debug trace recorder.
-4. **M3 reasoning:** HMM + escalation engine + check-in with typing. Runs fully on the device against replayed traces.
+4. **M3 reasoning:** incident rules + escalation engine + check-in with typing. Runs fully on the device against replayed traces.
 5. **M4 escrow:** epochs, Shamir, HPKE, location blobs, normal + fallback unlock, proximity tokens, push fan-out, watchdog.
 6. **M5 friend response:** incident screens, ring/call/en-route/resolve, escalate card, audit log.
 7. **M6 extra paths:** audio classifier, snatch detector, manual SOS (App Intents, widgets, QS tile).

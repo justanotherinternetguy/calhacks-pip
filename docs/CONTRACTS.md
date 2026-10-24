@@ -11,20 +11,18 @@ Generated bindings expose module `safety` (Swift: `import safety`; Kotlin: `unif
 #[derive(uniffi::Enum)] pub enum Activity { Unknown, Stationary, Walking, Running, Vehicle }
 #[derive(uniffi::Enum)] pub enum Placement { Unknown, Pocket, Hand, Bag }
 #[derive(uniffi::Record)] pub struct Context { pub t_ms: u64, pub away_from_home: bool, pub separated: bool, pub hour_local: u8, pub screen_on: bool, pub activity: Activity, pub battery_pct: u8, pub speed_mps: f32 /* -1 = unknown */ }
-#[derive(uniffi::Record)] pub struct AudioScores { pub t_ms: u64, pub scream: f32, pub shout: f32, pub glass: f32 } // raw YAMNet probs; engine does background subtraction
+#[derive(uniffi::Record)] pub struct AudioScores { pub t_ms: u64, pub scream: f32, pub shout: f32, pub snore: f32, pub level_db: f32 } // §9: raw YAMNet probs + dB SPL, listening windows only
 #[derive(uniffi::Record)] pub struct TypingSample { pub phrase: String, pub typed: String, pub key_times_ms: Vec<u64>, pub backspaces: u32, pub duration_ms: u64 }
 #[derive(uniffi::Record)] pub struct TypingVerdict { pub accepted: bool, pub z_score: f32, pub reason: String }
 #[derive(uniffi::Enum)] pub enum UserAction { DismissOk, DismissWrongPhrase, NeedHelp, ManualSos, BiometricDismiss, FriendMarkedSafe, CheckTimeout }
-#[derive(uniffi::Enum)] pub enum HmmState { Normal, Impaired, Incident, Unresponsive }
 #[derive(uniffi::Enum)] pub enum EscalationLevel { Idle, Check, HeadsUp, Unlocked, Snatch, Resolved }
-#[derive(uniffi::Record)] pub struct Snapshot { pub p_danger: f32, pub hmm_state: HmmState, pub escalation: EscalationLevel, pub risk_band: u8 /*0..3*/, pub evidence: String, pub baseline_seconds: u32, pub placement: Placement, pub night_mode: bool }
+#[derive(uniffi::Record)] pub struct Snapshot { pub escalation: EscalationLevel, pub evidence: String, pub sensing_full: bool, pub listening: bool, pub baseline_seconds: u32, pub placement: Placement, pub night_mode: bool }
 #[derive(uniffi::Enum)] pub enum EngineEvent {
   CheckRequested { phrase: String, deadline_ms: u64 },
   HeadsUp { summary: String },
   UnlockLocation { summary: String },
   SnatchDetected { summary: String },
   Resolved,
-  RiskBandChanged { band: u8 },
   BatteryDying,
   LocationIntervalChanged { seconds: u32 },
 }
@@ -40,7 +38,7 @@ Generated bindings expose module `safety` (Swift: `import safety`; Kotlin: `unif
   pub fn push_action(&self, a: UserAction, now_ms: u64);
   pub fn set_night_mode(&self, active: bool, now_ms: u64);
   pub fn set_learning(&self, enabled: bool);          // opportunistic baseline learning on/off
-  pub fn tick(&self, now_ms: u64) -> Vec<EngineEvent>; // call every ~1 s in night mode; HMM step runs internally once/min + on impact
+  pub fn tick(&self, now_ms: u64) -> Vec<EngineEvent>; // call every ~1 s in night mode; every incident rule and the escalation run inside
   pub fn snapshot(&self) -> Snapshot;
   pub fn export_baseline(&self) -> Vec<u8>;            // opaque, store encrypted on device
 }
@@ -75,9 +73,8 @@ Module name `SafetyNative`. iOS class `SafetyNativeModule` (Swift, ExpoModulesCo
 ```ts
 export type NightMode = 'auto' | 'on' | 'off' | 'paused_tonight';
 export type NightModeStatus = { active: boolean; since?: number; reason: 'away_from_home' | 'manual' | 'window' | 'off' };
-export type HmmState = 'normal' | 'impaired' | 'incident' | 'unresponsive';
 export type EscalationLevel = 'idle' | 'check' | 'heads_up' | 'unlocked' | 'snatch' | 'resolved';
-export type EngineSnapshot = { pDanger: number; hmmState: HmmState; escalation: EscalationLevel; riskBand: 0|1|2|3; evidence: string; baselineSeconds: number; placement: 'unknown'|'pocket'|'hand'|'bag'; nightMode: boolean };
+export type EngineSnapshot = { escalation: EscalationLevel; evidence: string; sensingFull: boolean; listening: boolean; baselineSeconds: number; placement: 'unknown'|'pocket'|'hand'|'bag'; nightMode: boolean };
 export type PermissionState = 'granted' | 'denied' | 'undetermined';
 export type Permissions = { locationAlways: PermissionState; motion: PermissionState; microphone: PermissionState; notifications: PermissionState; batteryUnrestricted?: PermissionState /* android */ };
 export type HomePlace = { id: string; label: string; lat: number; lng: number; radiusM: number };
@@ -140,7 +137,7 @@ Native owns: sensing, night-mode controller, heartbeats, location blob upload, p
 - `audit_log(id, subject_user_id uuid, actor_id uuid, kind text, payload jsonb, created_at)`
 - `model_configs(version text pk, toml text, signature text, created_at)`
 
-Heartbeat = device `PATCH devices set last_heartbeat=now(), night_mode, battery_pct, risk_band, status_level` every 2 min in night mode.
+Heartbeat = device `PATCH devices set last_heartbeat=now(), night_mode, battery_pct, status_level` every 2 min in night mode.
 
 Edge functions (Deno, `supabase/functions/<name>/index.ts`): `push`, `watchdog`, `proximity`, `unlock`, `purge`, `config`. Client (native or app) calls `POST {supabaseUrl}/functions/v1/push` with `{ incidentId, kind, title, body, recipients?: userId[], critical?: boolean, data?: {} }`.
 
@@ -164,7 +161,7 @@ Edge functions (Deno, `supabase/functions/<name>/index.ts`): `push`, `watchdog`,
 - `location_blobs.seq` = upload wall-clock unix ms (monotonic enough); AAD inside `encrypt_location` is `"{user_id}|{epoch_id}|{seq}"` as in §1.
 - Group proximity key (v1, accepted weakness: server can brute-force cells) = `SHA-256("safe/proximity|{groupId}|{YYYY-MM-DD UTC}")`.
 - Shamir parameters: n = active members excluding self; k = clamp(max(2, groups.threshold_k), 2, n); n < 2 → k = 0, no shares, fallback unlock disabled. An epoch row is still created (group_id may be null) so location blobs have an epoch.
-- Heartbeat = `PATCH /rest/v1/devices?id=eq.{deviceId}` with `{last_heartbeat: now, night_mode, battery_pct, risk_band, status_level}` (the `heartbeat` RPC is an equivalent alternative).
+- Heartbeat = `PATCH /rest/v1/devices?id=eq.{deviceId}` with `{last_heartbeat: now, night_mode, battery_pct, status_level}` (the `heartbeat` RPC is an equivalent alternative).
 - `incidents` row is first created at `heads_up` (first friend-visible level); `check` is device-local only.
 
 ## 6. Addendum: live signals, incident log, grab detection (spec v1.1)
@@ -175,18 +172,16 @@ Edge functions (Deno, `supabase/functions/<name>/index.ts`): `push`, `watchdog`,
 - `UserAction` gains `PhoneUnlocked` (owner unlocked the device; clears a grab within its 2-minute window).
 - `EngineEvent` gains:
   - `SamplingRateChanged { hz: u32, gyro: bool }` — native must reconfigure sensors (10 Hz/no gyro by default; 50 Hz + gyro when away from home 21:00–06:00 or after any incident).
-  - `SignalIncident { record: IncidentRecord }` — a metric left its band (or a grab/impact/stillness/separation/typing rule fired). Native appends to its own notification/dashboard stream; the engine keeps the log itself.
+  - `SignalIncident { record: IncidentRecord }` — an incident opened (kinds and rules in §9). Native appends to its own notification/dashboard stream; the engine keeps the log itself.
   - `CallOptionAvailable { summary: String }` — 10 min with no response: friends get the one-tap campus safety / 911 option (native posts `incident_events.kind='call_option'`).
   - `HeadsUp` is now emitted immediately on a grab (no location); `UnlockLocation` follows after 2 min unless `PhoneUnlocked`/`BiometricDismiss`.
 - New records/enums:
 ```rust
-#[derive(uniffi::Enum)] pub enum IncidentKind { GaitDrift, Impact, Grab, Stillness, Separated, TypingOff }
+// IncidentKind, IncidentTier, LiveMetrics and IncidentRecord were redefined in v2: see §9.
 #[derive(uniffi::Record)] pub struct MetricBand { pub name: String, pub value: f32, pub mean: f32, pub sd: f32, pub sd_distance: f32, pub in_band: bool }
-#[derive(uniffi::Record)] pub struct LiveMetrics { pub t_ms: u64, pub placement: Placement, pub sampling_full: bool, pub activity: Activity, pub bands: Vec<MetricBand> /* cadence, stride_cv, regularity, sway, wobble, jerk, rotation, peak_g */, pub p_normal: f32, pub p_impaired: f32, pub p_incident: f32, pub p_unresponsive: f32, pub baseline_trusted: bool, pub baseline_walk_days: f32, pub evidence: String }
-#[derive(uniffi::Record)] pub struct IncidentRecord { pub id: u32, pub t_ms: u64, pub kind: IncidentKind, pub summary: String, pub sd_distance: f32, pub placement: Placement, pub raw_json: String, pub p_normal: f32, pub p_impaired: f32, pub p_incident: f32, pub p_unresponsive: f32, pub sequence_id: u32 /* 0 = none */, pub watched: bool }
 ```
 - New `SafetyEngine` methods: `metrics() -> LiveMetrics`, `incident_log() -> Vec<IncidentRecord>` (newest last; entries expire after 8 h). The incident log is included in the opaque `export_baseline()` blob so it survives restarts (expired entries dropped on load).
-- Thresholds (config/model-v1.toml): `t_check = 0.7`; unlock when no response for 120 s and P ≥ 0.9; `CallOptionAvailable` after 600 s with no response; bands = baseline mean ± 2.5 SD, out-of-band must persist 30 s of walking; impact = peak > 2.5 g with orientation change; stillness = still 3+ min AND no touch 3+ min after an impact; separated = > 150 m from all friends for 10+ min and `distance_home_m` not decreasing.
+- Thresholds: superseded by §9 (config/model-v1.toml `[thresholds]` and `[incidents]`). Bands = baseline mean ± 2.5 SD.
 - Baselines: per placement; trusted after 7 days (≥ 7 distinct local days with walking); rolling 14-day window; nights that produced an incident are excluded; population defaults with wider bands (3.5 SD) until trusted.
 
 ### Native facade additions (§2)
@@ -204,7 +199,7 @@ Native tracks `last_touch_ms` from: any touch in the app (root view touch listen
 Default n = 4 friends, k = 2; fallback unlock requires ≥ 3 active members (enforced in `open_unlock_request` and in the UI).
 
 ### Display
-`/dashboard` (personal, off by default, opened from Settings) shows live metrics vs bands, the four state probabilities, and the incident log. Friends get only the one-line triggering-sequence summary on unlock; never another user's dashboard.
+`/dashboard` (personal, off by default, opened from Settings) shows live metrics vs bands, sensing / mic status and context, and the incident log. Friends get only the one-line triggering-sequence summary on unlock; never another user's dashboard.
 
 ## 7. Live telemetry stream (Android → web monitor). iOS is out of scope (module removed).
 
@@ -224,13 +219,13 @@ type TelemetryFrame = {
   gyro: number[];                           // |ω| rad/s, same length (zeros in low-rate mode)
   st: number;                               // phone unix ms of the newest sample (0 when the frame carries none)
   sampleHz: number;                         // measured accelerometer delivery rate (e.g. 49.9)
-  incidents: IncidentRecord[];              // records with id > lastSentId (deltas; the whole live log again after a rejoin)
+  incidents: IncidentRecord[];              // new records (id > lastSentId) and records whose clearedMs / acknowledged / sequenceId changed — UPSERT by id; the whole live log again after a rejoin
   incidentCount: number;                    // total live log size, lets the UI detect gaps
-  events: string[];                         // engine events since the last frame, snake_case: check_requested, heads_up, unlock_location, snatch_detected, resolved, risk_band_changed, battery_dying, sampling_rate_changed, signal_incident, call_option
+  events: string[];                         // engine events since the last frame, snake_case: check_requested, heads_up, unlock_location, snatch_detected, resolved, battery_dying, sampling_rate_changed, audio_listening, signal_incident, incident_cleared, call_option
   rttMs?: number;                           // self-echo round trip, smoothed
   state?: {
-    metrics: LiveMetrics;                   // §6 shape (bands[], p*, placement, samplingFull, evidence, …)
-    hmm: HmmState; escalation: EscalationLevel; riskBand: 0|1|2|3; pDanger: number;
+    metrics: LiveMetrics;                   // §9 shape (bands[], listening, context, placement, samplingFull, evidence, …)
+    escalation: EscalationLevel; listening: boolean;   // v2 dropped hmm / pDanger / riskBand (older phones may still send them)
     nightMode: boolean; battery: number; activity: Activity; placement: Placement; samplingFull: boolean;
     checkPhrase?: string; checkDeadlineMs?: number;   // while a check-in is pending
   };
@@ -250,3 +245,60 @@ JS (supabase-js) refreshes the JWT only while it is awake and in the foreground;
 - Native (`SessionKeeper`) refreshes 5 min before `exp` via `POST /auth/v1/token?grant_type=refresh_token`, stores the new pair, installs it in the PostgREST client and the telemetry channel (`access_token` push), and emits `sessionRefreshed`; JS answers with `supabase.auth.setSession(pair)`. A refusal (400/401/403: token used, revoked, signed out) parks the keeper until JS delivers a different refresh token.
 - At JS startup, before `supabase.auth.getSession()`, `adoptNativeSession()` compares the persisted supabase-js session with `getSession()` and installs native's pair when it is newer (same user) — otherwise supabase-js would refresh with a refresh token the server already rotated and sign the user out.
 - Whoever refreshes first wins and the other side adopts; both refreshing within Supabase's reuse interval returns the same new pair.
+
+## 9. v2: rule-based incidents (replaces the HMM and P(danger))
+
+The 4-state HMM, `HmmState`, `P(danger)` and the per-state probabilities are gone. Signals open and clear explicit
+incidents; the incident log decides when to ask "You okay?". Parameters: `core/config/model-v1.toml` (header comment,
+`[thresholds]`, `[incidents]`); the backend serves them as model config `v2` (migration 0011).
+
+```rust
+#[derive(uniffi::Enum)] pub enum IncidentKind {
+  PhoneDrop, PossibleFall, FallRecovered, DownAfterFall, HardImpact,      // falls
+  UnsteadyGait, Stumble, RepeatedStumbles, SlowedWalk,                    // gait
+  PhoneLeftBehind, Grab,                                                  // phone
+  Separated, StoppedOnWayHome, InVehicle,                                 // location
+  BatteryCritical, CheckInMissed, TypingOff,                              // device, check-in
+  ScreamShout, SnoringWhileDown }                                         // audio
+#[derive(uniffi::Enum)] pub enum IncidentTier { Context, Watch, Danger }
+#[derive(uniffi::Record)] pub struct IncidentRecord { pub id: u32, pub t_ms: u64, pub kind: IncidentKind, pub tier: IncidentTier, pub summary: String, pub sd_distance: f32, pub placement: Placement, pub raw_json: String, pub cleared_ms: u64 /* 0 = active */, pub acknowledged: bool, pub sequence_id: u32 /* episode, 0 = none */, pub watched: bool }
+#[derive(uniffi::Record)] pub struct LiveMetrics { pub t_ms: u64, pub placement: Placement, pub sampling_full: bool, pub activity: Activity, pub bands: Vec<MetricBand>, pub listening: bool, pub context: Vec<String>, pub baseline_trusted: bool, pub baseline_walk_days: f32, pub evidence: String }
+// Context gains `charging: bool`. AudioScores is { t_ms, scream, shout, snore, level_db } (glass removed).
+// EngineEvent gains AudioListening { on: bool } and IncidentCleared { record: IncidentRecord }.
+```
+- **`thresholds.auto_escalate`** (bundled default `false`): incident logging only. Incidents open, clear, log and
+  drive sensing / listening, but no automatic check-in, heads-up, unlock or grab alert is raised; NeedHelp /
+  ManualSos still unlock. Everything below about triggers and escalation applies with it set to `true`.
+- **Tiers.** Context: logged only. Watch: full sensing (50 Hz + gyro) and counts toward a
+  check-in. Danger: asks on its own. Point kinds (`Stumble`, `FallRecovered`) are logged already cleared.
+- **Check-in trigger.** An unacknowledged Danger incident, or unacknowledged Watch incidents from ≥ `check_min_families`
+  (2) families: fall · gait · phone · location · check-in · audio (`CheckInMissed` and `Grab` never trigger one).
+  Answering (`DismissOk`, `BiometricDismiss`, `FriendMarkedSafe`) acknowledges every active incident and clears
+  `CheckInMissed` / `TypingOff` / `SnoringWhileDown`. `DismissWrongPhrase` leaves the check open.
+- **Escalation.** Check → at `check_deadline_s` (120) still triggered ⇒ `CheckInMissed` + `HeadsUp`, else `Resolved` →
+  `UnlockLocation` at `unlock_no_response_s` (240, since the check) if still triggered, `Resolved` if it stops →
+  `CallOptionAvailable` at `call_option_s` (600). Grab / NeedHelp / ManualSos unchanged.
+- **No risk band.** The engine exposes no score or band; the heartbeat no longer writes `devices.risk_band` (column
+  kept, default 0). Location uploads every `location_upload_s` (300), every `location_upload_alert_s` (60) once friends
+  were alerted.
+- **Listening window.** The engine emits `AudioListening { on: true }` (night mode) when a `PhoneDrop`, `PossibleFall`,
+  `DownAfterFall`, `HardImpact`, `Grab`, `CheckInMissed`, `UnsteadyGait` or `RepeatedStumbles` incident opens or an
+  escalation is running, and `on: false` `listen_hold_min` (10) after the newest of those (a long-lasting incident
+  does not keep the mic on by itself). Native captures continuously only inside the window
+  and pushes ~1 s frames; `push_audio` outside a window is ignored. `level_db` = dBFS + 112.3 (CDD 5.4.2 calibration of
+  the voice-recognition source).
+- **Episodes.** A check-in, grab or SOS starts an episode: incidents of the last `sequence.window_min` (60) join it
+  (`sequence_id`, `watched`), later ones join until it resolves. Summaries are built from it (single stumbles omitted).
+- **Night mode off** (home) clears every active incident.
+- **Persisted log.** A log written by the HMM-era engine loads empty; the gait / typing baseline in the same blob is kept.
+- JS: kinds and tiers are lowercase snake strings (`possible_fall`, `watch`); native emits `incidentCleared`
+  (IncidentRecord) next to `signalIncident`.
+
+### Monitor → phone commands (migration 0012)
+Private broadcast channel `telemetry-cmd:{subjectUserId}`, event `command`, payload `{ cmd: "reset_incidents", t }`.
+RLS: the subject **or any active group-mate** may publish; only the subject may subscribe (their phone). The phone
+joins it next to `telemetry:{uid}` whenever the publisher runs and on `reset_incidents` empties the incident log and
+rests sensing (`SafetyEngine.reset_incidents`). Kept apart from `telemetry:{uid}` because Realtime authorizes publishing
+per channel, so group-mates must never get write access to the tick stream. The web monitor's "Clear incidents" button
+sends it (acked) and empties its own list.
+

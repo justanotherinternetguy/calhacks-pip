@@ -14,6 +14,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -40,7 +41,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import uniffi.safety.Activity
 import uniffi.safety.Context as EngineContext
-import uniffi.safety.HmmState
 import uniffi.safety.MotionSample
 import java.time.LocalTime
 import kotlin.math.atan2
@@ -52,7 +52,8 @@ import kotlin.math.sqrt
  * Persistent foreground service. Day mode: geofence + activity transitions, LOW-rate motion
  * (~10 Hz accel + gravity, batched once a second, no gyro) and a 1-min ticker so the engine sees
  * activity/stillness all day. Night mode: fused location (~100 m / 60 s), screen/battery context,
- * duty-cycled audio, uploaders, and `engine.tick` every second with event dispatch.
+ * audio while the engine holds a listening window open (`EngineEvent.AudioListening`), uploaders, and
+ * `engine.tick` every second with event dispatch.
  *
  * Sampling mode (CONTRACTS §6) is owned by the engine: `EngineEvent.SamplingRateChanged` flips
  * between LOW and FULL (50 Hz + gyroscope). Native additionally forces FULL during a baseline walk,
@@ -291,7 +292,7 @@ class SensingService : Service(), SensorEventListener {
     rt.engine.get().setNightMode(true, rt.now().toULong())
     applySampling()
     startLocation()
-    if (micGrantedToService) audio.start()
+    applyListening()
     rt.scope.launch { rt.escrow.rotateIfNewDay() }
     rt.heartbeat.start(); rt.locationUploader.start(); rt.proximityUploader.start()
     rt.scope.launch { rt.heartbeat.sendNow() }
@@ -302,13 +303,28 @@ class SensingService : Service(), SensorEventListener {
         val now = rt.now()
         runCatching {
           tickNow(now)
-          val snap = rt.engine.get().snapshot()
-          if (snap.riskBand.toInt() >= 1 || snap.hmmState != HmmState.NORMAL) audio.boost()
           if (now - lastRotateCheck > 60_000) { lastRotateCheck = now; rt.escrow.rotateIfNewDay() }
         }.onFailure { Log.e(TAG, "tick failed", it) }
         delay(1_000L - (rt.now() - now).coerceIn(0L, 900L))
       }
     }
+  }
+
+  /** Last `EngineEvent.AudioListening` state (the engine's listening window); the mic follows it only during a night session. */
+  @Volatile private var listeningWanted = false
+
+  /** Engine opened / closed the listening window. Capture needs the night session to hold the microphone FGS type. */
+  fun setListening(on: Boolean) {
+    listeningWanted = on
+    applyListening()
+  }
+
+  @Synchronized
+  private fun applyListening() {
+    val run = listeningWanted && rt.nightActive && micGrantedToService
+    if (run == audio.isRunning()) return
+    if (run) audio.start() else audio.stop()
+    Log.i(TAG, "audio ${if (run) "listening" else "off"}${if (listeningWanted && !run) " (no night session / mic FGS type)" else ""}")
   }
 
   private fun stopNightSession() {
@@ -412,9 +428,14 @@ class SensingService : Service(), SensorEventListener {
         lastTouchMs = rt.touch.lastTouchMs.coerceAtLeast(0L).toULong(),
         distanceHomeM = distanceHomeM(),
         samplingFull = fullActive,
+        charging = charging(),
       ),
     )
   }
+
+  /** Context.charging: plugged in, so battery_critical / BatteryDying do not apply. */
+  private fun charging(): Boolean =
+    runCatching { (getSystemService(BATTERY_SERVICE) as BatteryManager).isCharging }.getOrDefault(false)
 
   /** Haversine distance from the last fix to the nearest saved home place; -1 when either is unknown. */
   private fun distanceHomeM(): Float {

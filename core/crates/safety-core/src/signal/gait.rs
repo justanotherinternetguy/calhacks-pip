@@ -39,6 +39,27 @@ pub struct GaitFeatures {
     /// median gravity vector over the window
     pub gravity: [f32; 3],
     pub gravity_var: f32,
+    /// newest stumble in the window (see `StumbleInfo`); only set by `GaitAnalyzer` with stumble thresholds
+    pub stumble: Option<StumbleInfo>,
+}
+
+/// One step interval far off the window's median interval with a sideways spike inside it, followed by at least one
+/// more step (walking continued).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StumbleInfo {
+    /// time of the step that ended the odd interval
+    pub t_ms: u64,
+    /// |interval / median − 1|
+    pub interval_dev: f32,
+    /// peak horizontal acceleration inside the interval (g)
+    pub lateral_g: f32,
+}
+
+/// Stumble thresholds: interval deviation (fraction) and sideways spike (g).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StumbleRule {
+    pub interval_dev: f32,
+    pub lateral_g: f32,
 }
 
 /// RBJ biquad (direct form 1), applied statelessly per window.
@@ -185,6 +206,11 @@ pub fn observed_fs(win: &[MotionSample], nominal: f32) -> f32 {
 /// Compute features for a window. `allow_full` = native says it delivers full-rate data; gait and
 /// gyro metrics are also skipped whenever the observed rate is below `min_sample_hz`.
 pub fn compute_features(cfg: &GaitCfg, win: &[MotionSample], allow_full: bool) -> GaitFeatures {
+    compute_features_with(cfg, win, allow_full, None)
+}
+
+/// `compute_features` plus stumble detection on walking windows.
+pub fn compute_features_with(cfg: &GaitCfg, win: &[MotionSample], allow_full: bool, stumble: Option<StumbleRule>) -> GaitFeatures {
     let n = win.len();
     let fs = observed_fs(win, cfg.sample_hz);
     let full = allow_full && fs >= cfg.min_sample_hz && n >= 8;
@@ -300,19 +326,54 @@ pub fn compute_features(cfg: &GaitCfg, win: &[MotionSample], allow_full: bool) -
     f.is_walking = is_walking;
     f.is_running = is_running;
     f.agitation = agitation;
+    if let (Some(rule), true) = (stumble, is_walking) {
+        f.stumble = find_stumble(&rule, &peaks, &horiz[skip.min(horiz.len())..], &win[skip.min(n)..], fs);
+    }
     f
 }
 
-/// Keeps a time-based ring buffer of samples and emits features every `hop_s`.
+/// Newest step interval that deviates from the window median by more than `rule.interval_dev` with a horizontal
+/// spike above `rule.lateral_g` between its two steps, after two steady steps (not a walk starting up) and with
+/// another step after it (walking continued).
+fn find_stumble(rule: &StumbleRule, peaks: &[usize], horiz: &[f32], win: &[MotionSample], fs: f32) -> Option<StumbleInfo> {
+    if peaks.len() < 5 {
+        return None;
+    }
+    let iv: Vec<f32> = peaks.windows(2).map(|w| (w[1] - w[0]) as f32 / fs).collect();
+    let med = median(&mut iv.clone()).max(1e-3);
+    let dev_of = |i: usize| (iv[i] / med - 1.0).abs();
+    // the last interval has no step after it yet: it is judged in a later window
+    for k in (2..iv.len() - 1).rev() {
+        let dev = dev_of(k);
+        if dev <= rule.interval_dev || dev_of(k - 1) > rule.interval_dev / 2.0 || dev_of(k - 2) > rule.interval_dev / 2.0 {
+            continue;
+        }
+        let (a, b) = (peaks[k], peaks[k + 1].min(horiz.len().saturating_sub(1)));
+        let lateral = horiz.get(a..=b).map(|h| h.iter().cloned().fold(0.0f32, f32::max)).unwrap_or(0.0);
+        if lateral > rule.lateral_g {
+            let t_ms = win.get(peaks[k + 1]).map(|s| s.t_ms).unwrap_or(0);
+            return Some(StumbleInfo { t_ms, interval_dev: dev, lateral_g: lateral });
+        }
+    }
+    None
+}
+
+/// Keeps a time-based ring buffer of samples and emits features every `hop_s`. Each stumble is reported once
+/// (overlapping windows see the same step several times).
 pub struct GaitAnalyzer {
     cfg: GaitCfg,
     buf: VecDeque<MotionSample>,
     last_emit_ms: u64,
+    stumble: Option<StumbleRule>,
+    last_stumble_ms: u64,
 }
 
 impl GaitAnalyzer {
     pub fn new(cfg: &GaitCfg) -> Self {
-        GaitAnalyzer { cfg: cfg.clone(), buf: VecDeque::new(), last_emit_ms: 0 }
+        GaitAnalyzer { cfg: cfg.clone(), buf: VecDeque::new(), last_emit_ms: 0, stumble: None, last_stumble_ms: 0 }
+    }
+    pub fn with_stumbles(cfg: &GaitCfg, rule: StumbleRule) -> Self {
+        GaitAnalyzer { stumble: Some(rule), ..Self::new(cfg) }
     }
     pub fn window_len(&self) -> usize {
         (self.cfg.window_s * self.cfg.sample_hz) as usize
@@ -340,7 +401,16 @@ impl GaitAnalyzer {
         }
         self.last_emit_ms = s.t_ms;
         let win: Vec<MotionSample> = self.buf.iter().copied().collect();
-        Some(compute_features(&self.cfg, &win, allow_full))
+        let mut f = compute_features_with(&self.cfg, &win, allow_full, self.stumble);
+        if let Some(st) = f.stumble {
+            // the same step reappears in the next windows (± one sample of peak jitter)
+            if st.t_ms <= self.last_stumble_ms + 200 {
+                f.stumble = None;
+            } else {
+                self.last_stumble_ms = st.t_ms;
+            }
+        }
+        Some(f)
     }
 }
 
