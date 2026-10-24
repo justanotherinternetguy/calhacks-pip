@@ -1,25 +1,33 @@
 import Foundation
 
-// uniffi maps Rust `Vec<u8>` to Swift `[UInt8]`; everything crossing the JS bridge is base64.
+// uniffi maps Rust `Vec<u8>` to Swift `Data` (see Generated/safety.swift: `FfiConverterData`); everything
+// crossing the JS bridge is base64.
 
-extension Array where Element == UInt8 {
-    var b64: String { Data(self).base64EncodedString() }
+extension Data {
+    var b64: String { base64EncodedString() }
 
     init?(b64: String) {
         guard let d = Data(base64Encoded: b64, options: [.ignoreUnknownCharacters]) else { return nil }
-        self = [UInt8](d)
+        self = d
     }
 
-    /// Best-effort zeroization of key material before the buffer is released.
+    /// Best-effort zeroization of key material before the buffer is released. `Data` is copy-on-write, so
+    /// this only clears the storage this value owns (other copies, including the `[UInt8]` the uniffi
+    /// lowering code makes, are out of reach).
     mutating func zeroize() {
-        for i in indices { self[i] = 0 }
+        if !isEmpty {
+            withUnsafeMutableBytes { (buf: UnsafeMutableRawBufferPointer) in
+                guard let base = buf.baseAddress, buf.count > 0 else { return }
+                memset(base, 0, buf.count)
+            }
+        }
         removeAll()
     }
 }
 
 /// Decodes base64 or throws a readable error (used for every key that arrives from JS / the server).
-func bytes(_ b64: String, _ what: String = "value") throws -> [UInt8] {
-    guard let b = [UInt8](b64: b64) else { throw SafeError("\(what): invalid base64") }
+func bytes(_ b64: String, _ what: String = "value") throws -> Data {
+    guard let b = Data(b64: b64) else { throw SafeError("\(what): invalid base64") }
     return b
 }
 

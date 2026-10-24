@@ -3,9 +3,6 @@ import Foundation
 #if canImport(TensorFlowLite)
 import TensorFlowLite
 #endif
-#if canImport(safety)
-import safety
-#endif
 
 /// YAMNet (TFLite / LiteRT) over 0.975 s @ 16 kHz windows (15600 samples). Output 0 is [1, 521] scores.
 /// Class indices come from `yamnet_class_map.csv` in the bundle when present, else the published defaults.

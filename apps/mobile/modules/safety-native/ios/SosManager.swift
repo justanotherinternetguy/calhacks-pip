@@ -1,8 +1,5 @@
 import Foundation
 import LocalAuthentication
-#if canImport(safety)
-import safety
-#endif
 
 /// Manual SOS (in-app hold button, App Intent, widget). Counts as consent: the engine skips the bar and
 /// emits `UnlockLocation` on the next tick. Cancelling requires the owner's biometric / passcode.

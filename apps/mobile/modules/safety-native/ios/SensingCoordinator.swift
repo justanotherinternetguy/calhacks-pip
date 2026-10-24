@@ -1,9 +1,6 @@
 import CoreLocation
 import Foundation
 import UIKit
-#if canImport(safety)
-import safety
-#endif
 
 struct NativeConfig: Codable {
     var supabaseUrl: String
@@ -109,7 +106,7 @@ final class SensingCoordinator {
     }
 
     private func makeEngine(_ c: NativeConfig) throws {
-        let blob = Store.read("baseline.bin").map { [UInt8]($0) }
+        let blob: Data? = Store.read("baseline.bin")
         let e = try SafetyEngine(configToml: c.modelConfigToml, baselineBlob: blob, nowMs: nowMs())
         e.setLearning(enabled: UserDefaults.standard.object(forKey: "safe.learning") as? Bool ?? true)
         engine = e
@@ -117,7 +114,7 @@ final class SensingCoordinator {
 
     private func saveBaseline() {
         guard let engine else { return }
-        Store.write(Data(engine.exportBaseline()), "baseline.bin")
+        Store.write(engine.exportBaseline(), "baseline.bin")
     }
 
     // MARK: configuration (called from the Expo module)

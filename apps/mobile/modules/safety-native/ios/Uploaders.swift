@@ -1,8 +1,5 @@
 import CoreLocation
 import Foundation
-#if canImport(safety)
-import safety
-#endif
 
 /// `PATCH devices` every 2 min in night mode: last_heartbeat, night_mode, battery_pct, risk_band, status_level. No location.
 final class HeartbeatUploader {

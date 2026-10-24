@@ -19,7 +19,7 @@ class SosManager(private val rt: SafetyRuntime) {
     if (rt.sosActive) return
     rt.sosActive = true
     rt.emit("sos", mapOf("active" to true))
-    // Engine turns ManualSos into UnlockLocation on the next tick; SafetyRuntime.dispatch then
+    // Engine turns UserAction.MANUAL_SOS into EngineEvent.UnlockLocation on the next tick; SafetyRuntime.dispatch then
     // opens the incident, releases hour keys and fans out push.
     rt.pushAction(UserAction.MANUAL_SOS)
     rt.scope.launch {

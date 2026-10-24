@@ -1,8 +1,7 @@
 import CryptoKit
 import Foundation
-#if canImport(safety)
-import safety
-#endif
+
+// The uniffi bindings (Generated/safety.swift) are compiled into this same module: no import needed.
 
 struct GroupMember: Codable {
     var userId: String
@@ -34,6 +33,8 @@ struct ActiveEpoch: Codable {
 /// hourly K_h derivation, normal unlock (release K_h), and the friend-side caches for decryption
 /// and the fallback unlock.
 ///
+/// All byte strings are `Data` (uniffi's mapping of Rust `Vec<u8>`).
+///
 /// AAD conventions (CONTRACTS §5; must match Android byte-for-byte, friends may be on either platform):
 ///   share    : "share|{epochId}|{recipientUserId}"
 ///   release  : "hour|{epochId}|{hourIndex}"
@@ -42,14 +43,14 @@ final class EscrowManager {
     private let lock = NSLock()
     private(set) var identity: Identity
     private(set) var activeEpoch: ActiveEpoch? = Keychain.getJSON("epoch")
-    private var hourKeyCache: [String: [UInt8]] = [:]   // "subject|epoch|hour" → K_h (friend side)
-    private var dayKeyCache: [String: [UInt8]] = [:]    // "subject|epoch" → K_day (after fallback recovery)
+    private var hourKeyCache: [String: Data] = [:]   // "subject|epoch|hour" → K_h (friend side)
+    private var dayKeyCache: [String: Data] = [:]    // "subject|epoch" → K_day (after fallback recovery)
     private var rotating = false
 
     init() {
         if let s: StoredIdentity = Keychain.getJSON("identity"),
-           let xs = [UInt8](b64: s.x25519Secret), let xp = [UInt8](b64: s.x25519Public),
-           let es = [UInt8](b64: s.ed25519Secret), let ep = [UInt8](b64: s.ed25519Public) {
+           let xs = Data(b64: s.x25519Secret), let xp = Data(b64: s.x25519Public),
+           let es = Data(b64: s.ed25519Secret), let ep = Data(b64: s.ed25519Public) {
             identity = Identity(x25519Secret: xs, x25519Public: xp, ed25519Secret: es, ed25519Public: ep)
         } else {
             let id = generateIdentity()
@@ -63,9 +64,9 @@ final class EscrowManager {
         fingerprint(userId: userId, x25519Public: identity.x25519Public, ed25519Public: identity.ed25519Public)
     }
 
-    static func shareAad(_ epochId: String, _ recipientUserId: String) -> [UInt8] { Array("share|\(epochId)|\(recipientUserId)".utf8) }
-    static func releaseAad(_ epochId: String, _ hourIndex: UInt32) -> [UInt8] { Array("hour|\(epochId)|\(hourIndex)".utf8) }
-    static func approvalAad(_ subjectUserId: String, _ epochId: String) -> [UInt8] { Array("approval|\(subjectUserId)|\(epochId)".utf8) }
+    static func shareAad(_ epochId: String, _ recipientUserId: String) -> Data { Data("share|\(epochId)|\(recipientUserId)".utf8) }
+    static func releaseAad(_ epochId: String, _ hourIndex: UInt32) -> Data { Data("hour|\(epochId)|\(hourIndex)".utf8) }
+    static func approvalAad(_ subjectUserId: String, _ epochId: String) -> Data { Data("approval|\(subjectUserId)|\(epochId)".utf8) }
 
     // MARK: subject side
 
@@ -84,7 +85,7 @@ final class EscrowManager {
 
     /// New K_day → epochs row → k-of-n Shamir shares sealed to each other member → key_shares rows.
     func rotate(cfg: NativeConfig, group: GroupConfig?, rest: SupabaseRest) async throws {
-        var dayKey = newDayKey()
+        var dayKey: Data = newDayKey()
         defer { dayKey.zeroize() }
         let today = SafeClock.localDay()
         let others = group?.members.filter { $0.userId != cfg.userId } ?? []
@@ -100,12 +101,13 @@ final class EscrowManager {
         guard let epochId = rows.first?["id"] as? String else { throw SafeError("epochs insert returned no id") }
 
         if sharesEnabled {
-            let shares = try splitDayKey(dayKey: dayKey, k: UInt8(k), n: UInt8(n))
+            guard n <= 255 else { throw SafeError("too many members for Shamir split (\(n))") }
+            let shares: [Share] = try splitDayKey(dayKey: dayKey, k: UInt8(k), n: UInt8(n))
             var shareRows: [[String: Any]] = []
             for (m, s) in zip(others, shares) {
-                let sealed = try sealTo(recipientX25519Public: try bytes(m.x25519Pub, "member x25519"),
-                                        senderEd25519Secret: identity.ed25519Secret,
-                                        plaintext: s.data, aad: Self.shareAad(epochId, m.userId))
+                let sealed: Data = try sealTo(recipientX25519Public: try bytes(m.x25519Pub, "member x25519"),
+                                              senderEd25519Secret: identity.ed25519Secret,
+                                              plaintext: s.data, aad: Self.shareAad(epochId, m.userId))
                 shareRows.append(["epoch_id": epochId, "recipient_user_id": m.userId, "share_index": Int(s.index),
                                   "sealed": sealed.b64, "sender_ed25519_pub": identity.ed25519Public.b64])
             }
@@ -117,7 +119,7 @@ final class EscrowManager {
         activeEpoch = ActiveEpoch(id: epochId, groupId: group?.groupId, day: today, dayKey: dayKey.b64, k: k, n: n)
         Keychain.setJSON(activeEpoch, for: "epoch")
         // Zeroize what we can of the previous day key; the Keychain copy was just overwritten.
-        var oldKey = old.flatMap { [UInt8](b64: $0.dayKey) } ?? []
+        var oldKey = old.flatMap { Data(b64: $0.dayKey) } ?? Data()
         oldKey.zeroize()
         hourKeyCache.removeAll()
         lock.unlock()
@@ -126,9 +128,9 @@ final class EscrowManager {
     }
 
     /// Current `K_h = HKDF(K_day, hourIndex)` for the subject's own active epoch.
-    func hourKey(index: UInt32) -> [UInt8]? {
+    func hourKey(index: UInt32) -> Data? {
         lock.lock(); defer { lock.unlock() }
-        guard let e = activeEpoch, var dk = [UInt8](b64: e.dayKey) else { return nil }
+        guard let e = activeEpoch, var dk = Data(b64: e.dayKey) else { return nil }
         defer { dk.zeroize() }
         return deriveHourKey(dayKey: dk, hourIndex: index)
     }
@@ -141,9 +143,9 @@ final class EscrowManager {
         for hi in [h, h + 1] {
             guard let key = hourKey(index: hi) else { continue }
             for m in group.members where m.userId != cfg.userId {
-                let sealed = try sealTo(recipientX25519Public: try bytes(m.x25519Pub, "member x25519"),
-                                        senderEd25519Secret: identity.ed25519Secret,
-                                        plaintext: key, aad: Self.releaseAad(e.id, hi))
+                let sealed: Data = try sealTo(recipientX25519Public: try bytes(m.x25519Pub, "member x25519"),
+                                              senderEd25519Secret: identity.ed25519Secret,
+                                              plaintext: key, aad: Self.releaseAad(e.id, hi))
                 rows.append(["incident_id": incidentId, "subject_user_id": cfg.userId, "recipient_user_id": m.userId,
                              "epoch_id": e.id, "hour_index": Int(hi), "sealed": sealed.b64,
                              "sender_ed25519_pub": identity.ed25519Public.b64])
@@ -155,18 +157,19 @@ final class EscrowManager {
     /// Group epoch key for proximity tokens (CONTRACTS §5, v1):
     /// `SHA-256("safe/proximity|{groupId}|{YYYY-MM-DD UTC}")`. Accepted weakness: the server knows both
     /// inputs and can brute-force cells on its own; a sealed per-group key is planned for v1.1.
-    func groupEpochKey(for group: GroupConfig) -> [UInt8] {
+    func groupEpochKey(for group: GroupConfig) -> Data {
         let material = "safe/proximity|\(group.groupId)|\(SafeClock.utcDay())"
-        return Array(SHA256.hash(data: Data(material.utf8)))
+        return Data(SHA256.hash(data: Data(material.utf8)))
     }
 
     // MARK: friend side
 
     func openReleasedKey(subjectUserId: String, epochId: String, hourIndex: Int, sealedB64: String, senderEd25519Pub: String) throws {
-        let key = try openSealed(recipientX25519Secret: identity.x25519Secret,
-                                 senderEd25519Public: try bytes(senderEd25519Pub, "sender ed25519"),
-                                 sealed: try bytes(sealedB64, "sealed"),
-                                 aad: Self.releaseAad(epochId, UInt32(hourIndex)))   // hourIndex = released_keys.hour_index
+        guard hourIndex >= 0, hourIndex <= Int(UInt32.max) else { throw SafeError("hourIndex out of range") }
+        let key: Data = try openSealed(recipientX25519Secret: identity.x25519Secret,
+                                       senderEd25519Public: try bytes(senderEd25519Pub, "sender ed25519"),
+                                       sealedBlob: try bytes(sealedB64, "sealed"),
+                                       aad: Self.releaseAad(epochId, UInt32(hourIndex)))   // hourIndex = released_keys.hour_index
         lock.lock(); hourKeyCache["\(subjectUserId)|\(epochId)|\(hourIndex)"] = key; lock.unlock()
     }
 
@@ -176,9 +179,10 @@ final class EscrowManager {
         lock.lock(); let hours = hourKeyCache, days = dayKeyCache; lock.unlock()
         var out: [Location] = []
         for b in blobs {
-            let key = hours["\(subjectUserId)|\(b.epochId)|\(b.hourIndex)"]
+            guard b.hourIndex >= 0, b.hourIndex <= Int(UInt32.max) else { continue }
+            let key: Data? = hours["\(subjectUserId)|\(b.epochId)|\(b.hourIndex)"]
                 ?? days["\(subjectUserId)|\(b.epochId)"].map { deriveHourKey(dayKey: $0, hourIndex: UInt32(b.hourIndex)) }
-            guard let key, let ct = [UInt8](b64: b.ciphertextB64) else { continue }
+            guard let key, let ct = Data(b64: b.ciphertextB64) else { continue }
             if let loc = try? decryptLocation(hourKey: key, userId: subjectUserId, epochId: b.epochId, seq: b.seq, blob: ct) {
                 out.append(loc)
             }
@@ -196,13 +200,16 @@ final class EscrowManager {
               let sealed = row["sealed"] as? String, let senderPub = row["sender_ed25519_pub"] as? String else {
             throw SafeError("no key share for epoch \(epochId)")
         }
+        guard idx >= 0, idx <= 255 else { throw SafeError("share_index out of range (\(idx))") }
         if let expected = expectedSubjectEd25519Pub, expected != senderPub { throw SafeError("share signer mismatch") }
-        let share = try openSealed(recipientX25519Secret: identity.x25519Secret,
-                                   senderEd25519Public: try bytes(senderPub, "sender ed25519"),
-                                   sealed: try bytes(sealed, "sealed share"), aad: Self.shareAad(epochId, myUserId))
-        let resealed = try sealTo(recipientX25519Public: try bytes(requesterX25519Pub, "requester x25519"),
-                                  senderEd25519Secret: identity.ed25519Secret,
-                                  plaintext: [UInt8(idx)] + share, aad: Self.approvalAad(subjectUserId, epochId))
+        let share: Data = try openSealed(recipientX25519Secret: identity.x25519Secret,
+                                         senderEd25519Public: try bytes(senderPub, "sender ed25519"),
+                                         sealedBlob: try bytes(sealed, "sealed share"), aad: Self.shareAad(epochId, myUserId))
+        var plaintext = Data([UInt8(idx)])   // [index as u8] ++ share (CONTRACTS §5)
+        plaintext.append(share)
+        let resealed: Data = try sealTo(recipientX25519Public: try bytes(requesterX25519Pub, "requester x25519"),
+                                        senderEd25519Secret: identity.ed25519Secret,
+                                        plaintext: plaintext, aad: Self.approvalAad(subjectUserId, epochId))
         return resealed.b64
     }
 
@@ -210,13 +217,14 @@ final class EscrowManager {
     func recoverFromShares(subjectUserId: String, epochId: String, sealedShares: [(sealedB64: String, approverEd25519Pub: String)]) throws -> Bool {
         var shares: [Share] = []
         for s in sealedShares {
-            let pt = try openSealed(recipientX25519Secret: identity.x25519Secret,
-                                    senderEd25519Public: try bytes(s.approverEd25519Pub, "approver ed25519"),
-                                    sealed: try bytes(s.sealedB64, "sealed share"), aad: Self.approvalAad(subjectUserId, epochId))
+            let pt: Data = try openSealed(recipientX25519Secret: identity.x25519Secret,
+                                          senderEd25519Public: try bytes(s.approverEd25519Pub, "approver ed25519"),
+                                          sealedBlob: try bytes(s.sealedB64, "sealed share"), aad: Self.approvalAad(subjectUserId, epochId))
             guard pt.count > 1 else { continue }
-            shares.append(Share(index: pt[0], data: Array(pt[1...])))
+            // `Data` indices are not guaranteed to start at 0: index via startIndex and rebase the slice.
+            shares.append(Share(index: pt[pt.startIndex], data: Data(pt.dropFirst())))
         }
-        let dayKey = try combineShares(shares: shares)
+        let dayKey: Data = try combineShares(shares: shares)
         lock.lock(); dayKeyCache["\(subjectUserId)|\(epochId)"] = dayKey; lock.unlock()
         return true
     }

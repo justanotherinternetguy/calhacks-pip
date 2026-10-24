@@ -1,9 +1,6 @@
 import CoreMotion
 import Foundation
 import UIKit
-#if canImport(safety)
-import safety
-#endif
 
 /// CMMotionManager device motion at 50 Hz on a serial background OperationQueue, batched into ~1 s
 /// of `MotionSample` per `pushMotion`. Also runs CMPedometer (diagnostics / activity fallback).

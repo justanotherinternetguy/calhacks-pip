@@ -45,14 +45,21 @@ class EngineHolder(private val context: Context, private val prefs: Prefs) {
 
   fun snapshotOrNull(): Snapshot? = try { engine?.snapshot() } catch (e: Throwable) { null }
 
-  /** Replace the model config (from `configure`). Re-creates the engine, carrying the baseline over. */
+  /**
+   * Replace the model config (from `configure`). Re-creates the engine, carrying the baseline over.
+   * The new engine is built *before* the old one is closed: `SafetyEngine(...)` throws
+   * `EngineException.Config` on bad TOML, and a closed uniffi object throws on every later call,
+   * so a failed swap must leave the live engine (and the persisted config) untouched.
+   */
   @Synchronized
   fun setConfigToml(toml: String) {
     if (toml.isBlank()) return
+    val old = engine
+    old?.let { saveBaseline(it) }
+    val fresh = create(toml)          // throws EngineException → old engine stays live
     modelFile.writeText(toml)
-    engine?.let { old -> saveBaseline(old) ; old.close() }
-    engine = create(toml)
-    engine?.setLearning(prefs.learningEnabled)
+    engine = fresh
+    old?.close()
   }
 
   private fun loadConfigToml(): String =

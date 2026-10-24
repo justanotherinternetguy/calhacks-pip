@@ -17,21 +17,60 @@ encrypted location + proximity uploads, key escrow, notifications, alarm and man
 | `SosManager.swift` / `AppIntents.swift` / `Widget/SosWidget.swift` | Manual SOS: in-app, Action Button / Siri intent, lock-screen widget stub |
 | `TraceInjector.swift` | Debug replay of recorded traces with a virtual clock (simulator / Maestro) |
 | `SafetyNativeTypingView.swift` | Native check-in input with per-key timing (`onKey`, `onSubmit`) |
-| `SupabaseRest.swift`, `Keychain.swift`, `Base64.swift` | PostgREST/RPC/functions client; Keychain + protected file store; byte helpers |
+| `SupabaseRest.swift`, `Keychain.swift`, `Base64.swift` | PostgREST/RPC/functions client; Keychain + protected file store; `Data` base64/zeroize helpers + clock |
 
 ## Rust core (uniffi)
 
-`core/build-mobile.sh` writes **`ios/Frameworks/safety.xcframework`** (C FFI: `safetyFFI.h` + `module.modulemap`
-exposing Clang module `safetyFFI`, arm64 device + simulator) and **`ios/Generated/safety.swift`** (uniffi Swift
-bindings), plus `ios/Resources/model-v1.toml`. The podspec vendors the xcframework and compiles `Generated/*.swift`
-into this pod, so the uniffi types are part of the `SafetyNative` module itself. Every file guards
-`#if canImport(safety) import safety #endif`, which evaluates false in this layout and true if the core is ever
-shipped as a prebuilt binary Swift framework named `safety` instead. Nothing else changes.
+`core/build-mobile.sh` writes **`ios/Frameworks/safety.xcframework`** (static `libsafety_ffi.a`, arm64 device +
+simulator, headers attached) and **`ios/Generated/`**: `safety.swift` (uniffi Swift bindings), `safetyFFI.h`
+(the C FFI header) and a module map declaring Clang module **`safetyFFI`** (`module.modulemap` from the build
+script, `safetyFFI.modulemap` straight out of `uniffi-bindgen`; the podspec accepts either), plus
+`ios/Resources/model-v1.toml`.
 
-uniffi naming assumed: records → structs with labelled inits (`MotionSample(tMs:ax:…)`), enums → lowerCamel
-cases (`Activity.walking`, `EngineEvent.checkRequested(phrase:deadlineMs:)`), `Vec<u8>` → `[UInt8]`,
-snake_case → camelCase (`pushMotion(samples:)`, `deriveHourKey(dayKey:hourIndex:)`). Verified against
-`core/crates/safety-ffi/src/crypto.rs`.
+How it is wired (`SafetyNative.podspec`):
+
+- `Generated/*.swift` is compiled **into this pod**, so every uniffi type (`SafetyEngine`, `Identity`,
+  `EngineEvent`, `sealTo(...)`, ...) is part of the `SafetyNative` module itself. Hand-written files therefore
+  **do not import anything** for the Rust core (there is no `import safety`; the module is not called that).
+- `Generated/safety.swift` does `#if canImport(safetyFFI) import safetyFFI #endif`. The podspec hands the module
+  map to Clang explicitly via `OTHER_SWIFT_FLAGS = -Xcc -fmodule-map-file=$(PODS_TARGET_SRCROOT)/Generated/<map>`
+  and keeps `Generated/safetyFFI.h` + `Generated/*.modulemap` as `preserve_paths`. The header is intentionally
+  **not** a pod source/public header: putting it in the `SafetyNative` umbrella would define the FFI types twice.
+- The xcframework is vendored when present. Without it the pod still installs (JS work), but the app fails to
+  link with undefined `uniffi_safety_ffi_*` symbols.
+
+API facts the Swift side relies on (verified against `Generated/safety.swift`, 2026-10-24):
+
+- Rust `Vec<u8>` ↔ Swift **`Data`** (not `[UInt8]`): `Identity.{x25519Secret,x25519Public,ed25519Secret,ed25519Public}`,
+  `Share.data`, `newDayKey()`, `deriveHourKey(dayKey:hourIndex:)`, `combineShares(shares:)`, `sealTo(...)`,
+  `openSealed(...)`, `encryptLocation(...)`, `proximityTokens(...) -> [Data]`, `proximityMatch(a:b:)`,
+  `SafetyEngine(configToml:baselineBlob: Data?,nowMs:)`, `exportBaseline() -> Data`. `Base64.swift` provides
+  `Data.b64`, `Data(b64:)`, `Data.zeroize()` and `bytes(_:_:) throws -> Data`.
+- Labels are the Rust parameter names in camelCase. Note `openSealed(recipientX25519Secret:senderEd25519Public:`
+  **`sealedBlob:`**`aad:)`, `sealTo(recipientX25519Public:senderEd25519Secret:plaintext:aad:)`,
+  `splitDayKey(dayKey:k:n:)` (`UInt8`, `UInt8`), `encryptLocation(hourKey:userId:epochId:seq:loc:)`,
+  `decryptLocation(hourKey:userId:epochId:seq:blob:)`, `fingerprint(userId:x25519Public:ed25519Public:) -> String`.
+- Fallible functions `throws`. The error enums use **capitalised** cases: `CryptoError.Failed(msg:)`,
+  `EngineError.Config(msg:)`, `EngineError.Baseline(msg:)` (both are `Swift.Error` + `LocalizedError`).
+  `splitDayKey`, `combineShares`, `sealTo`, `openSealed`, `encryptLocation`, `decryptLocation` and the
+  `SafetyEngine` initialiser throw; everything else (including all `SafetyEngine` methods) does not.
+- Integer widths: `UInt64` for `tMs` / `nowMs` / `seq` / `deadlineMs` / `durationMs` / `keyTimesMs`;
+  `UInt8` for `hourLocal`, `batteryPct`, `riskBand`, `Share.index`, `k`, `n`; `UInt32` for `hourIndex`,
+  `baselineSeconds`, `backspaces`, `locationIntervalChanged(seconds:)`.
+- `SafetyEngineProtocol`: `pushMotion(samples:)`, `pushContext(ctx:)`, `pushAudio(s:)`,
+  `pushTyping(s:nowMs:) -> TypingVerdict`, `pushAction(a:nowMs:)`, `setNightMode(active:nowMs:)`,
+  `setLearning(enabled:)`, `tick(nowMs:) -> [EngineEvent]`, `snapshot() -> Snapshot`, `exportBaseline() -> Data`.
+- Enum cases are lowerCamel: `Activity.{unknown,stationary,walking,running,vehicle}`,
+  `Placement.{unknown,pocket,hand,bag}`, `HmmState.{normal,impaired,incident,unresponsive}`,
+  `EscalationLevel.{idle,check,headsUp,unlocked,snatch,resolved}`,
+  `UserAction.{dismissOk,dismissWrongPhrase,needHelp,manualSos,biometricDismiss,friendMarkedSafe,checkTimeout}`,
+  `EngineEvent.{checkRequested(phrase:deadlineMs:), headsUp(summary:), unlockLocation(summary:),
+  snatchDetected(summary:), resolved, riskBandChanged(band:), batteryDying, locationIntervalChanged(seconds:)}`.
+- Records are structs with labelled memberwise inits, e.g. `MotionSample(tMs:ax:ay:az:gx:gy:gz:)`,
+  `Context(tMs:awayFromHome:separated:hourLocal:screenOn:activity:batteryPct:speedMps:)`,
+  `AudioScores(tMs:scream:shout:glass:)`, `TypingSample(phrase:typed:keyTimesMs:backspaces:durationMs:)`,
+  `Location(lat:lng:accuracyM:tMs:)`, `Share(index:data:)`; `Snapshot` has
+  `pDanger, hmmState, escalation, riskBand, evidence, baselineSeconds, placement, nightMode`.
 
 ## Module registration (app agent: `expo-module.config.json`)
 

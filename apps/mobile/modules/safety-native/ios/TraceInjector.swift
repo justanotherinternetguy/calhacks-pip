@@ -1,7 +1,4 @@
 import Foundation
-#if canImport(safety)
-import safety
-#endif
 
 /// Debug-only: replays recorded `MotionSample[]` / `Context[]` / `AudioScores[]` through the engine
 /// with a virtual clock, at wall-clock speed or faster (`speed` multiplier). Used by Maestro E2E flows
