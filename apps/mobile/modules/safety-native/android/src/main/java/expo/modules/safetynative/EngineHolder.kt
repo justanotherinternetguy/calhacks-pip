@@ -43,7 +43,20 @@ class EngineHolder(private val context: Context, private val prefs: Prefs) {
 
   /** Returns the engine, creating it from persisted config + baseline on first use. */
   @Synchronized
-  fun get(): SafetyEngine = engine ?: create(loadConfigToml()).also { engine = it }
+  fun get(): SafetyEngine = engine ?: createFromPersisted().also { engine = it }
+
+  /** Persisted config first; if it no longer parses (older schema), drop it and use the bundled model-v1.toml. */
+  private fun createFromPersisted(): SafetyEngine {
+    if (modelFile.exists()) {
+      try {
+        return create(modelFile.readText())
+      } catch (e: EngineException) {
+        Log.w(TAG, "persisted model.toml rejected (${e.message}); falling back to bundled config")
+        modelFile.delete()
+      }
+    }
+    return create(bundledConfigToml())
+  }
 
   fun snapshotOrNull(): Snapshot? = try { engine?.snapshot() } catch (e: Throwable) { null }
 
@@ -64,9 +77,8 @@ class EngineHolder(private val context: Context, private val prefs: Prefs) {
     old?.close()
   }
 
-  private fun loadConfigToml(): String =
-    if (modelFile.exists()) modelFile.readText()
-    else context.assets.open("model-v1.toml").bufferedReader().use { it.readText() }
+  private fun bundledConfigToml(): String =
+    context.assets.open("model-v1.toml").bufferedReader().use { it.readText() }
 
   private fun create(toml: String): SafetyEngine {
     val baseline = loadBaseline()

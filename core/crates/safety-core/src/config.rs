@@ -203,8 +203,15 @@ pub struct TypingPriors {
 }
 
 impl Config {
+    /// Parses a model config. Keys missing from `s` (e.g. a TOML written for an older schema, or a
+    /// partial override served by the backend) fall back to the bundled `model-v1.toml`, so a
+    /// config update never bricks the engine. Unknown keys are ignored.
     pub fn from_toml(s: &str) -> Result<Config, EngineError> {
-        let cfg: Config = toml::from_str(s).map_err(|e| EngineError::Config { msg: e.to_string() })?;
+        let user: toml::Value = toml::from_str(s).map_err(|e| EngineError::Config { msg: e.to_string() })?;
+        let mut base: toml::Value =
+            toml::from_str(DEFAULT_TOML).map_err(|e| EngineError::Config { msg: format!("bundled config: {e}") })?;
+        merge_into(&mut base, user);
+        let cfg: Config = base.try_into().map_err(|e: toml::de::Error| EngineError::Config { msg: e.to_string() })?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -251,6 +258,59 @@ mod tests {
     }
     #[test]
     fn bad_config_is_error() {
-        assert!(matches!(Config::from_toml("nonsense = 1"), Err(EngineError::Config { .. })));
+        // Unknown keys are ignored (defaults fill the rest); wrong types and invalid thresholds are errors.
+        assert!(Config::from_toml("nonsense = 1").is_ok());
+        assert!(matches!(Config::from_toml("[hmm]\nstep_seconds = \"x\""), Err(EngineError::Config { .. })));
+        assert!(matches!(Config::from_toml("[thresholds]\nt_check = 1.5"), Err(EngineError::Config { .. })));
+        assert!(matches!(Config::from_toml("not toml ="), Err(EngineError::Config { .. })));
+    }
+}
+
+/// Deep-merge `over` into `base`: tables merge recursively, everything else is replaced.
+fn merge_into(base: &mut toml::Value, over: toml::Value) {
+    match (base, over) {
+        (toml::Value::Table(b), toml::Value::Table(o)) => {
+            for (k, v) in o {
+                match b.get_mut(&k) {
+                    Some(bv) if bv.is_table() && v.is_table() => merge_into(bv, v),
+                    _ => {
+                        b.insert(k, v);
+                    }
+                }
+            }
+        }
+        (b, o) => *b = o,
+    }
+}
+
+#[cfg(test)]
+mod compat_tests {
+    use super::*;
+
+    #[test]
+    fn older_schema_without_v11_sections_still_parses() {
+        // Strip the v1.1 additions the way a pre-addendum config would look.
+        let old: String = DEFAULT_TOML
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("sequence = "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cut = old.find("[sequence]").expect("fixture has a [sequence] table");
+        let next = old[cut + 1..].find("\n[").map(|i| cut + 1 + i).unwrap_or(old.len());
+        let old = format!("{}{}", &old[..cut], &old[next..]);
+        assert!(!old.contains("[sequence]"));
+        let cfg = Config::from_toml(&old).expect("missing keys fall back to defaults");
+        let fresh = Config::default_v1();
+        assert_eq!(cfg.hmm.context.sequence, fresh.hmm.context.sequence);
+    }
+
+    #[test]
+    fn empty_and_partial_overrides_use_defaults() {
+        let cfg = Config::from_toml("").unwrap();
+        assert_eq!(cfg.thresholds.t_check, Config::default_v1().thresholds.t_check);
+        let cfg = Config::from_toml("[thresholds]\nt_check = 0.75\n").unwrap();
+        assert_eq!(cfg.thresholds.t_check, 0.75);
+        assert_eq!(cfg.thresholds.call_option_s, Config::default_v1().thresholds.call_option_s);
+        assert!(Config::from_toml("[thresholds]\nt_check = \"nope\"\n").is_err());
     }
 }

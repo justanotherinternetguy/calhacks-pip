@@ -52,6 +52,7 @@ export async function onAuthSession(session: Session | null) {
     return;
   }
   configuredFor = session.user.id;
+  console.log(`native: configuring for user ${session.user.id.slice(0, 8)}`);
   const devId = await deviceId(session.user.id);
   await SafetyNative.configure({
     supabaseUrl: SUPABASE_URL, supabaseAnonKey: SUPABASE_ANON_KEY, accessToken: session.access_token,
