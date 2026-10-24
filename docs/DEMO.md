@@ -64,3 +64,19 @@ the key and the last location shows. Audit log on A shows it afterwards.
 - No second phone: use setup B's web friend view for every B-side step.
 - Push not delivered: the friend screen also updates via Realtime; narrate that.
 - Trace inject fails: `maestro test e2e/heads-up.yaml` runs the same path headlessly.
+
+## Friend on an iPhone (web client)
+
+The friend role needs no sensing, so an iPhone can use the web build in Safari with real crypto
+(Rust `safety-crypto` compiled to WebAssembly):
+
+```sh
+core/build-wasm.sh                 # → apps/mobile/public/wasm/
+cd apps/mobile && npx expo export --platform web
+npx serve -s dist -l 3000          # SPA fallback
+npx cloudflared tunnel --url http://localhost:3000   # prints a https://*.trycloudflare.com URL
+```
+
+Open the URL on the iPhone, tap "Demo (anonymous)", then add the friend to the group via QR from the
+subject's phone. Realtime updates work while the tab is open; there is no web push in v1.
+Native iOS needs a Mac with Xcode (free Apple ID, 7-day certificate) or an Apple Developer account for EAS.
