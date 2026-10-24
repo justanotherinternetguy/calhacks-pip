@@ -1,5 +1,6 @@
-//! Synthetic 50 Hz motion generators (walk / drunk walk / fall / drop / still / dance)
-//! and whole-night trace composition. Shared by tests and the `sim` CLI.
+//! Synthetic 50 Hz motion generators (walk / drunk walk / fall / drop / still / dance / snatch)
+//! with gyro (rotation rate implied by the gravity trajectory + yaw jitter / grab spin), whole-night
+//! trace composition and a low-rate decimator. Shared by tests and the `sim` CLI.
 use crate::types::{Activity, AudioScores, Context, MotionSample, UserAction};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -22,9 +23,12 @@ fn unit(v: [f32; 3]) -> [f32; 3] {
 fn q(x: f32) -> f32 {
     (x * 1000.0).round() / 1000.0
 }
-fn sample(t_ms: u64, a: [f32; 3], g: [f32; 3]) -> MotionSample {
+fn sample(t_ms: u64, a: [f32; 3], g: [f32; 3], w: [f32; 3]) -> MotionSample {
     let g = unit(g);
-    MotionSample { t_ms, ax: q(a[0]), ay: q(a[1]), az: q(a[2]), gx: q(g[0]), gy: q(g[1]), gz: q(g[2]) }
+    MotionSample { t_ms, ax: q(a[0]), ay: q(a[1]), az: q(a[2]), gx: q(g[0]), gy: q(g[1]), gz: q(g[2]), rx: q(w[0]), ry: q(w[1]), rz: q(w[2]) }
+}
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 /// Unit vector perpendicular to g (lateral axis).
 fn lateral(g: [f32; 3]) -> [f32; 3] {
@@ -37,11 +41,12 @@ pub struct Gen {
     pub rng: StdRng,
     pub t_ms: u64,
     pub out: Vec<MotionSample>,
+    prev_g: Option<[f32; 3]>,
 }
 
 impl Gen {
     pub fn new(start_ms: u64, seed: u64) -> Self {
-        Gen { rng: StdRng::seed_from_u64(seed), t_ms: start_ms, out: Vec::new() }
+        Gen { rng: StdRng::seed_from_u64(seed), t_ms: start_ms, out: Vec::new(), prev_g: None }
     }
     fn n(&mut self, sd: f32) -> f32 {
         // cheap approx normal
@@ -52,7 +57,25 @@ impl Gen {
         [self.n(sd), self.n(sd), self.n(sd)]
     }
     fn push(&mut self, a: [f32; 3], g: [f32; 3]) {
-        self.out.push(sample(self.t_ms, a, g));
+        self.push_w(a, g, [0.0; 3]);
+    }
+    /// Push a sample; the gyro is the rotation rate implied by the gravity change plus `w_extra`
+    /// (rotation about gravity is invisible to the accelerometer).
+    fn push_w(&mut self, a: [f32; 3], g: [f32; 3], w_extra: [f32; 3]) {
+        let gu = unit(g);
+        let dt = DT_MS as f32 / 1000.0;
+        let mut w = match self.prev_g {
+            Some(p) => {
+                let c = cross(p, gu);
+                [c[0] / dt, c[1] / dt, c[2] / dt]
+            }
+            None => [0.0; 3],
+        };
+        for k in 0..3 {
+            w[k] += w_extra[k];
+        }
+        self.prev_g = Some(gu);
+        self.out.push(sample(self.t_ms, a, gu, w));
         self.t_ms += DT_MS;
     }
 
@@ -88,7 +111,8 @@ impl Gen {
                 up[2] * v + lat[2] * h + noise[2],
             ];
             let wob = [wobble * (sway_phase * 0.7).sin(), wobble * (phase * 0.5).cos() * 0.5, wobble * (sway_phase * 1.3).sin()];
-            self.push(a, [g0[0] + wob[0], g0[1] + wob[1], g0[2] + wob[2]]);
+            let yaw = self.n(wobble * 3.0);
+            self.push_w(a, [g0[0] + wob[0], g0[1] + wob[1], g0[2] + wob[2]], [g0[0] * yaw, g0[1] * yaw, g0[2] * yaw]);
         }
     }
     pub fn walk(&mut self, secs: f32, g0: [f32; 3]) {
@@ -134,8 +158,8 @@ impl Gen {
             let nz = self.n3(0.03);
             self.push([-gb[0] + nz[0], -gb[1] + nz[1], -gb[2] + nz[2]], gb);
         }
-        for i in 0..4 {
-            let k = if i == 1 { 4.6 } else { 2.0 };
+        // ~200 ms impact: any 10 Hz decimation phase still sees a sample above 2.5 g
+        for k in [1.6f32, 2.0, 2.8, 4.6, 3.8, 3.2, 2.9, 2.6, 2.0, 1.5] {
             self.push([k * 0.3, k * 0.5, k * 0.8], gb);
         }
         let ga = unit(G_LYING);
@@ -188,7 +212,8 @@ impl Gen {
         for i in 0..6 {
             let k = if i < 3 { 2.5 } else { 1.0 };
             g = unit([g[0] + 0.25, g[1] + 0.2, g[2] - 0.3]);
-            self.push([k, k * 0.5, -k * 0.6], g);
+            // wrenched out of the hand: ~700 deg/s spin about the long axis on top of the tilt
+            self.push_w([k, k * 0.5, -k * 0.6], g, [0.0, 12.0, 0.0]);
         }
         self.run(run_secs, G_POCKET);
     }
@@ -274,7 +299,19 @@ pub struct Trace {
 }
 
 fn ctx(t_ms: u64, hour: u8, activity: Activity, screen_on: bool, speed: f32) -> Context {
-    Context { t_ms, away_from_home: true, separated: false, hour_local: hour, screen_on, activity, battery_pct: 55, speed_mps: speed }
+    Context {
+        t_ms,
+        away_from_home: true,
+        separated: false,
+        hour_local: hour,
+        screen_on,
+        activity,
+        battery_pct: 55,
+        speed_mps: speed,
+        last_touch_ms: if screen_on { t_ms } else { 0 },
+        distance_home_m: -1.0,
+        sampling_full: true,
+    }
 }
 
 /// Compose a full trace for a scenario. `minutes` is the total length.
@@ -363,6 +400,21 @@ pub fn trace(sc: Scenario, minutes: u32, seed: u64) -> Trace {
         audio: Vec::new(),
         actions,
     }
+}
+
+/// Low-rate view of a trace: keep every `factor`-th sample, zero the gyro, mark contexts `sampling_full = false`.
+pub fn decimate(tr: &Trace, factor: usize) -> Trace {
+    let mut out = tr.clone();
+    out.motion = tr
+        .motion
+        .iter()
+        .step_by(factor.max(1))
+        .map(|s| MotionSample { rx: 0.0, ry: 0.0, rz: 0.0, ..*s })
+        .collect();
+    for c in &mut out.context {
+        c.sampling_full = false;
+    }
+    out
 }
 
 /// Replay a trace through an engine at full speed with 1 s ticks. Returns (t_ms, event) pairs.

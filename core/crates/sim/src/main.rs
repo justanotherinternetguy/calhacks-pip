@@ -7,7 +7,7 @@ use std::process::exit;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  sim replay <file.json|dir>\n  sim synth --scenario walk|drunk|fall|drop|still|dance|snatch --minutes N --out file.json [--seed S]\n  sim batch <dir>"
+        "usage:\n  sim replay [--lowrate] <file.json|dir>\n  sim synth --scenario walk|drunk|fall|drop|still|dance|snatch --minutes N --out file.json [--seed S]\n  sim batch <dir>\n\nSIM_DEBUG=1 prints the posterior every 30 s during replay."
     );
     exit(2)
 }
@@ -66,6 +66,8 @@ struct Result_ {
     check_t: Option<u64>,
     unlock_t: Option<u64>,
     snatch_t: Option<u64>,
+    incidents: usize,
+    sequence: Option<String>,
     incident_t: Option<u64>,
     hour: u8,
     minutes: f32,
@@ -73,8 +75,9 @@ struct Result_ {
     pass: bool,
 }
 
-fn run(path: &Path, verbose: bool) -> Result_ {
+fn run(path: &Path, verbose: bool, lowrate: bool) -> Result_ {
     let tr = load(path);
+    let tr = if lowrate { synth::decimate(&tr, 5) } else { tr };
     let mut e = Engine::new(DEFAULT_TOML, None, 0).expect("config");
     let debug = verbose && std::env::var_os("SIM_DEBUG").is_some();
     let evs = synth::replay_with(&mut e, &tr, &mut |t, e| {
@@ -92,12 +95,35 @@ fn run(path: &Path, verbose: bool) -> Result_ {
         Expect::Quiet => check_t.is_none() && unlock_t.is_none() && snatch_t.is_none(),
         Expect::Snatch => snatch_t.is_some(),
     };
+    let log = e.incident_log();
     if verbose {
-        println!("== {} ({}, expect {:?})", path.display(), tr.meta.scenario, tr.meta.expect);
+        println!("== {} ({}, expect {:?}{})", path.display(), tr.meta.scenario, tr.meta.expect, if lowrate { ", 10 Hz accel-only" } else { "" });
         for (t, ev) in &evs {
-            println!("  [{}] {:?}", mmss(*t), ev);
+            match ev {
+                EngineEvent::SignalIncident { record } => println!("  [{}] SignalIncident #{} {:?}: {}", mmss(*t), record.id, record.kind, record.summary),
+                _ => println!("  [{}] {:?}", mmss(*t), ev),
+            }
         }
         println!("  final snapshot: {:#?}", e.snapshot());
+        let m = e.metrics();
+        println!(
+            "  live metrics @{} placement={:?} activity={:?} full={} trusted={} walk_days={:.0} p=[{:.3} {:.3} {:.3} {:.3}] evidence={:?}",
+            mmss(m.t_ms), m.placement, m.activity, m.sampling_full, m.baseline_trusted, m.baseline_walk_days, m.p_normal, m.p_impaired, m.p_incident, m.p_unresponsive, m.evidence
+        );
+        println!("  {:<10} {:>9} {:>9} {:>8} {:>7} band", "metric", "value", "mean", "sd", "sd_dist");
+        for b in &m.bands {
+            println!("  {:<10} {:>9.3} {:>9.3} {:>8.3} {:>+7.2} {}", b.name, b.value, b.mean, b.sd, b.sd_distance, if b.in_band { "in" } else { "OUT" });
+        }
+        println!("  incident log ({} records):", log.len());
+        for r in &log {
+            println!(
+                "    #{} [{}] {:?} seq={} watched={} sd={:+.1} p=[{:.2} {:.2} {:.2} {:.2}] {} raw={}",
+                r.id, mmss(r.t_ms), r.kind, r.sequence_id, r.watched, r.sd_distance, r.p_normal, r.p_impaired, r.p_incident, r.p_unresponsive, r.summary, r.raw_json
+            );
+        }
+        if let Some(s) = e.sequence_summary() {
+            println!("  sequence summary: {s}");
+        }
     }
     let minutes = tr.motion.last().map(|s| s.t_ms as f32 / 60_000.0).unwrap_or(0.0);
     Result_ {
@@ -107,6 +133,8 @@ fn run(path: &Path, verbose: bool) -> Result_ {
         check_t,
         unlock_t,
         snatch_t,
+        incidents: log.len(),
+        sequence: e.sequence_summary(),
         incident_t: tr.meta.incident_t_ms,
         hour: tr.meta.hour_local,
         minutes,
@@ -120,14 +148,14 @@ fn opt(t: Option<u64>) -> String {
 }
 
 fn summary(results: &[Result_]) {
-    println!("\n{:<28} {:<8} {:<7} {:>6} {:>7} {:>7} {:>7} {:>6} {}", "trace", "scenario", "expect", "check", "unlock", "snatch", "delay", "p_end", "ok");
+    println!("\n{:<28} {:<8} {:<7} {:>6} {:>7} {:>7} {:>7} {:>6} {:>4} {:<5} {}", "trace", "scenario", "expect", "check", "unlock", "snatch", "delay", "p_end", "inc", "ok", "sequence");
     for r in results {
         let delay = match (r.incident_t, r.unlock_t.or(r.snatch_t)) {
             (Some(i), Some(u)) if u >= i => format!("{}s", (u - i) / 1000),
             _ => "-".into(),
         };
         println!(
-            "{:<28} {:<8} {:<7} {:>6} {:>7} {:>7} {:>7} {:>6.2} {}",
+            "{:<28} {:<8} {:<7} {:>6} {:>7} {:>7} {:>7} {:>6.2} {:>4} {:<5} {}",
             r.name,
             r.scenario,
             format!("{:?}", r.expect).to_lowercase(),
@@ -136,7 +164,9 @@ fn summary(results: &[Result_]) {
             opt(r.snatch_t),
             delay,
             r.p_final,
-            if r.pass { "PASS" } else { "FAIL" }
+            r.incidents,
+            if r.pass { "PASS" } else { "FAIL" },
+            r.sequence.clone().unwrap_or_default()
         );
     }
 }
@@ -147,7 +177,7 @@ fn batch(dir: &Path) -> i32 {
         eprintln!("no traces in {}", dir.display());
         return 1;
     }
-    let results: Vec<Result_> = files.iter().map(|f| run(f, false)).collect();
+    let results: Vec<Result_> = files.iter().map(|f| run(f, false, false)).collect();
     summary(&results);
     // false alarms per night-hour (quiet traces only), detection delay per scenario
     let mut hours: std::collections::BTreeMap<u8, (f32, u32)> = Default::default();
@@ -182,8 +212,9 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(|s| s.as_str()) {
         Some("replay") => {
-            let p = args.get(1).map(PathBuf::from).unwrap_or_else(|| usage());
-            let results: Vec<Result_> = json_files(&p).iter().map(|f| run(f, true)).collect();
+            let lowrate = args.iter().any(|a| a == "--lowrate");
+            let p = args.iter().skip(1).find(|a| !a.starts_with("--")).map(PathBuf::from).unwrap_or_else(|| usage());
+            let results: Vec<Result_> = json_files(&p).iter().map(|f| run(f, true, lowrate)).collect();
             summary(&results);
         }
         Some("synth") => {

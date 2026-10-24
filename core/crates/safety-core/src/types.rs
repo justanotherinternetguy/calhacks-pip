@@ -1,5 +1,12 @@
-//! Plain Rust mirrors of the FFI contract types (docs/CONTRACTS.md §1).
+//! Plain Rust mirrors of the FFI contract types (docs/CONTRACTS.md §1 + §6 addendum).
 use serde::{Deserialize, Serialize};
+
+fn neg_one() -> f32 {
+    -1.0
+}
+fn yes() -> bool {
+    true
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MotionSample {
@@ -12,6 +19,13 @@ pub struct MotionSample {
     pub gx: f32,
     pub gy: f32,
     pub gz: f32,
+    /// gyroscope rotation rate (rad/s), device frame; all 0 when the gyro is off (low-rate mode)
+    #[serde(default)]
+    pub rx: f32,
+    #[serde(default)]
+    pub ry: f32,
+    #[serde(default)]
+    pub rz: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -55,6 +69,15 @@ pub struct Context {
     pub battery_pct: u8,
     /// -1 = unknown
     pub speed_mps: f32,
+    /// wall-clock ms of the last touch / interactive unlock; 0 = never/unknown
+    #[serde(default)]
+    pub last_touch_ms: u64,
+    /// metres from home; -1 = unknown
+    #[serde(default = "neg_one")]
+    pub distance_home_m: f32,
+    /// what native is currently delivering: true = 50 Hz + gyro, false = ~10 Hz accel only
+    #[serde(default = "yes")]
+    pub sampling_full: bool,
 }
 
 impl Default for Context {
@@ -68,6 +91,9 @@ impl Default for Context {
             activity: Activity::Unknown,
             battery_pct: 100,
             speed_mps: -1.0,
+            last_touch_ms: 0,
+            distance_home_m: -1.0,
+            sampling_full: true,
         }
     }
 }
@@ -105,6 +131,8 @@ pub enum UserAction {
     BiometricDismiss,
     FriendMarkedSafe,
     CheckTimeout,
+    /// owner unlocked the device; clears a grab within its 2-minute window
+    PhoneUnlocked,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +178,85 @@ pub struct Snapshot {
     pub night_mode: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum IncidentKind {
+    GaitDrift,
+    Impact,
+    Grab,
+    Stillness,
+    Separated,
+    TypingOff,
+}
+
+impl IncidentKind {
+    pub const ALL: [IncidentKind; 6] = [
+        IncidentKind::GaitDrift,
+        IncidentKind::Impact,
+        IncidentKind::Grab,
+        IncidentKind::Stillness,
+        IncidentKind::Separated,
+        IncidentKind::TypingOff,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            IncidentKind::GaitDrift => "gait_drift",
+            IncidentKind::Impact => "impact",
+            IncidentKind::Grab => "grab",
+            IncidentKind::Stillness => "stillness",
+            IncidentKind::Separated => "separated",
+            IncidentKind::TypingOff => "typing_off",
+        }
+    }
+}
+
+/// One live metric compared to the user's per-placement baseline band.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MetricBand {
+    pub name: String,
+    pub value: f32,
+    pub mean: f32,
+    pub sd: f32,
+    /// (value - mean) / sd, signed
+    pub sd_distance: f32,
+    pub in_band: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LiveMetrics {
+    pub t_ms: u64,
+    pub placement: Placement,
+    pub sampling_full: bool,
+    pub activity: Activity,
+    /// cadence, stride_cv, regularity, sway, wobble, jerk, rotation, peak_g
+    pub bands: Vec<MetricBand>,
+    pub p_normal: f32,
+    pub p_impaired: f32,
+    pub p_incident: f32,
+    pub p_unresponsive: f32,
+    pub baseline_trusted: bool,
+    pub baseline_walk_days: f32,
+    pub evidence: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct IncidentRecord {
+    pub id: u32,
+    pub t_ms: u64,
+    pub kind: IncidentKind,
+    pub summary: String,
+    pub sd_distance: f32,
+    pub placement: Placement,
+    /// compact JSON of the raw metric values behind the incident
+    pub raw_json: String,
+    pub p_normal: f32,
+    pub p_impaired: f32,
+    pub p_incident: f32,
+    pub p_unresponsive: f32,
+    /// 0 = none
+    pub sequence_id: u32,
+    pub watched: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum EngineEvent {
     CheckRequested { phrase: String, deadline_ms: u64 },
@@ -160,6 +267,12 @@ pub enum EngineEvent {
     RiskBandChanged { band: u8 },
     BatteryDying,
     LocationIntervalChanged { seconds: u32 },
+    /// native must reconfigure sensors (10 Hz/no gyro by default; 50 Hz + gyro away from home at night or after an incident)
+    SamplingRateChanged { hz: u32, gyro: bool },
+    /// a metric left its band or a grab/impact/stillness/separation/typing rule fired
+    SignalIncident { record: IncidentRecord },
+    /// 10 min with no response: friends get the one-tap campus safety / 911 option
+    CallOptionAvailable { summary: String },
 }
 
 #[derive(Debug, thiserror::Error)]

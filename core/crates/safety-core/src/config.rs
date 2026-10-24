@@ -11,7 +11,11 @@ pub struct Config {
     pub thresholds: ThresholdCfg,
     pub gait: GaitCfg,
     pub impact: ImpactCfg,
-    pub snatch: SnatchCfg,
+    pub grab: GrabCfg,
+    pub signals: SignalCfg,
+    pub sampling: SamplingCfg,
+    pub sequence: SequenceCfg,
+    pub log: LogCfg,
     pub baseline: BaselineCfg,
 }
 
@@ -29,6 +33,8 @@ pub struct ContextCfg {
     pub separated: [f32; 4],
     pub late: [f32; 4],
     pub rapid_drift: [f32; 4],
+    /// per-from-state multiplier applied to the sequence agent's log-odds boost
+    pub sequence: [f32; 4],
     pub late_hour_start: u8,
     pub late_hour_end: u8,
     pub rapid_drift_z_per_min: f32,
@@ -55,6 +61,12 @@ pub struct ThresholdCfg {
     pub t_heads_up: f32,
     pub t_unlock: f32,
     pub check_deadline_s: u32,
+    /// no response for this long (since the check) and P >= t_unlock => UnlockLocation
+    pub unlock_no_response_s: u32,
+    /// no response for this long => CallOptionAvailable (once per episode)
+    pub call_option_s: u32,
+    /// grab: UnlockLocation this long after the immediate HeadsUp unless PhoneUnlocked/BiometricDismiss
+    pub grab_unlock_s: u32,
     pub dismiss_cooldown_s: u32,
     pub cooldown_threshold_boost: f32,
     pub dismiss_posterior: [f32; 4],
@@ -70,6 +82,8 @@ pub struct ThresholdCfg {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GaitCfg {
     pub sample_hz: f32,
+    /// below this observed rate the window yields activity/energy only (no gait or gyro metrics)
+    pub min_sample_hz: f32,
     pub window_s: f32,
     pub hop_s: f32,
     pub band_low_hz: f32,
@@ -89,6 +103,8 @@ pub struct ImpactCfg {
     pub free_fall_g: f32,
     pub min_free_fall_ms: u64,
     pub peak_g: f32,
+    /// a peak above this (any rate, no free fall needed) with an orientation change is an Impact incident
+    pub incident_peak_g: f32,
     pub impact_window_ms: u64,
     pub post_window_ms: u64,
     pub orientation_change_deg: f32,
@@ -100,17 +116,61 @@ pub struct ImpactCfg {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SnatchCfg {
+pub struct GrabCfg {
     pub jerk_g_per_s: f32,
     pub rotation_deg_per_s: f32,
+    pub in_hand_touch_s: f32,
     pub arm_window_s: u32,
     pub speed_mps: f32,
     pub confirm_s: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SignalCfg {
+    pub band_sd: f32,
+    pub band_sd_untrusted: f32,
+    pub drift_persist_s: f32,
+    pub drift_refire_s: f32,
+    pub drift_gap_s: f32,
+    pub stillness_s: f32,
+    pub stillness_after_impact_min: f32,
+    pub separated_min: f32,
+    pub separated_home_margin_m: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SamplingCfg {
+    pub full_hz: u32,
+    pub low_hz: u32,
+    pub full_hour_start: u8,
+    pub full_hour_end: u8,
+    pub after_incident_min: f32,
+    pub learn_walks_full_rate: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SequenceCfg {
+    pub window_min: f32,
+    pub prune_isolated_gait_drift_min: f32,
+    pub max_boost: f32,
+    pub w_gait_drift: f32,
+    pub w_separated: f32,
+    pub w_impact: f32,
+    pub w_stillness: f32,
+    pub w_grab: f32,
+    pub w_typing_off: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LogCfg {
+    pub expiry_h: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BaselineCfg {
-    pub mature_walking_s: f32,
+    pub trusted_days: u32,
+    pub window_days: u32,
+    pub sd_floor_frac: f32,
     pub cold_start_z_scale: f32,
     pub min_samples: usize,
     pub max_samples: usize,
@@ -119,7 +179,7 @@ pub struct BaselineCfg {
     pub typing_priors: TypingPriors,
 }
 
-/// [median, sd] per feature
+/// [mean, sd] per feature
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GaitPriors {
     pub cadence: [f32; 2],
@@ -127,6 +187,10 @@ pub struct GaitPriors {
     pub regularity: [f32; 2],
     pub harmonic_ratio: [f32; 2],
     pub sway_rms: [f32; 2],
+    pub wobble: [f32; 2],
+    pub jerk: [f32; 2],
+    pub rotation: [f32; 2],
+    pub peak_g: [f32; 2],
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -160,8 +224,14 @@ impl Config {
         if (s - 1.0).abs() > 0.01 {
             return Err(EngineError::Config { msg: "hmm.initial must sum to 1".into() });
         }
-        if self.gait.window_s <= 0.0 || self.gait.sample_hz <= 0.0 {
-            return Err(EngineError::Config { msg: "gait window/sample rate must be positive".into() });
+        if self.gait.window_s <= 0.0 || self.gait.sample_hz <= 0.0 || self.gait.hop_s <= 0.0 {
+            return Err(EngineError::Config { msg: "gait window/hop/sample rate must be positive".into() });
+        }
+        if self.sequence.max_boost < 0.0 || self.sequence.max_boost > 5.0 {
+            return Err(EngineError::Config { msg: "sequence.max_boost must be within [0, 5]".into() });
+        }
+        if self.baseline.trusted_days == 0 || self.baseline.window_days < self.baseline.trusted_days {
+            return Err(EngineError::Config { msg: "baseline.window_days must be >= trusted_days >= 1".into() });
         }
         Ok(())
     }
@@ -174,7 +244,10 @@ mod tests {
     fn bundled_config_parses() {
         let c = Config::default_v1();
         assert_eq!(c.hmm.step_seconds, 60);
-        assert!((c.thresholds.t_check - 0.6).abs() < 1e-6);
+        assert!((c.thresholds.t_check - 0.7).abs() < 1e-6);
+        assert_eq!(c.thresholds.unlock_no_response_s, 120);
+        assert_eq!(c.thresholds.call_option_s, 600);
+        assert_eq!(c.baseline.trusted_days, 7);
     }
     #[test]
     fn bad_config_is_error() {

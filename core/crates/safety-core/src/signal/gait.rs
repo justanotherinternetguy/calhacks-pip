@@ -1,5 +1,7 @@
-//! Gait features from a sliding window of orientation-independent acceleration.
-use super::{project, rms};
+//! Gait features from a sliding window of orientation-independent acceleration (+ gyro).
+//! Rate-aware: every filter and lag is designed from the sample rate observed in the window, and a
+//! window below `min_sample_hz` (low-rate mode) yields only energy / peak / gravity.
+use super::{cross, dot, norm, project, rms, total_mag};
 use crate::config::GaitCfg;
 use crate::types::MotionSample;
 use std::collections::VecDeque;
@@ -8,12 +10,26 @@ use std::f32::consts::PI;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GaitFeatures {
     pub t_ms: u64,
+    /// observed sample rate of the window (Hz)
+    pub fs: f32,
+    /// gait / gyro metrics were computed (full-rate window)
+    pub full: bool,
+    /// the window carried non-zero gyro data
+    pub has_gyro: bool,
     pub steps: usize,
     pub cadence_spm: f32,
     pub step_cv: f32,
     pub regularity: f32,
     pub harmonic_ratio: f32,
     pub sway_rms: f32,
+    /// RMS rotation rate orthogonal to gravity (deg/s), 0 without gyro
+    pub wobble_dps: f32,
+    /// peak |d|a|/dt| in the window (g/s)
+    pub jerk_peak: f32,
+    /// peak rotation rate in the window (deg/s), 0 without gyro
+    pub rot_peak_dps: f32,
+    /// peak total acceleration magnitude (g)
+    pub peak_g: f32,
     /// RMS of total user-acceleration magnitude (g)
     pub energy_rms: f32,
     pub is_walking: bool,
@@ -32,9 +48,10 @@ struct Biquad {
 }
 impl Biquad {
     fn lowpass(f: f32, fs: f32) -> Self {
+        let f = f.min(fs * 0.45);
         let w0 = 2.0 * PI * f / fs;
         let (sn, cs) = (w0.sin(), w0.cos());
-        let alpha = sn / (2.0 * 0.7071);
+        let alpha = sn / (2.0 * std::f32::consts::FRAC_1_SQRT_2);
         let a0 = 1.0 + alpha;
         Biquad {
             b: [(1.0 - cs) / 2.0 / a0, (1.0 - cs) / a0, (1.0 - cs) / 2.0 / a0],
@@ -42,9 +59,10 @@ impl Biquad {
         }
     }
     fn highpass(f: f32, fs: f32) -> Self {
+        let f = f.min(fs * 0.45);
         let w0 = 2.0 * PI * f / fs;
         let (sn, cs) = (w0.sin(), w0.cos());
-        let alpha = sn / (2.0 * 0.7071);
+        let alpha = sn / (2.0 * std::f32::consts::FRAC_1_SQRT_2);
         let a0 = 1.0 + alpha;
         Biquad {
             b: [(1.0 + cs) / 2.0 / a0, -(1.0 + cs) / a0, (1.0 + cs) / 2.0 / a0],
@@ -66,6 +84,7 @@ impl Biquad {
     }
 }
 
+/// Band-pass designed for the given sample rate.
 pub fn bandpass(x: &[f32], lo: f32, hi: f32, fs: f32) -> Vec<f32> {
     let hp = Biquad::highpass(lo, fs).apply(x);
     Biquad::lowpass(hi, fs).apply(&hp)
@@ -93,7 +112,7 @@ pub fn find_peaks(x: &[f32], min_height: f32, min_dist: usize) -> Vec<usize> {
 /// Max normalized autocorrelation over lags in [min_lag, max_lag].
 pub fn autocorr_peak(x: &[f32], min_lag: usize, max_lag: usize) -> f32 {
     let n = x.len();
-    if n < max_lag + 10 {
+    if n < max_lag + 10 || min_lag == 0 {
         return 0.0;
     }
     let mean = x.iter().sum::<f32>() / n as f32;
@@ -151,21 +170,63 @@ fn median(v: &mut Vec<f32>) -> f32 {
     v[v.len() / 2]
 }
 
-pub fn compute_features(cfg: &GaitCfg, win: &[MotionSample]) -> GaitFeatures {
-    let fs = cfg.sample_hz;
+/// Sample rate observed in a window from its timestamps (falls back to the nominal rate).
+pub fn observed_fs(win: &[MotionSample], nominal: f32) -> f32 {
+    if win.len() < 2 {
+        return nominal;
+    }
+    let span = win.last().unwrap().t_ms.saturating_sub(win[0].t_ms) as f32 / 1000.0;
+    if span <= 0.0 {
+        return nominal;
+    }
+    (win.len() - 1) as f32 / span
+}
+
+/// Compute features for a window. `allow_full` = native says it delivers full-rate data; gait and
+/// gyro metrics are also skipped whenever the observed rate is below `min_sample_hz`.
+pub fn compute_features(cfg: &GaitCfg, win: &[MotionSample], allow_full: bool) -> GaitFeatures {
     let n = win.len();
+    let fs = observed_fs(win, cfg.sample_hz);
+    let full = allow_full && fs >= cfg.min_sample_hz && n >= 8;
     let mut vert = Vec::with_capacity(n);
     let mut horiz = Vec::with_capacity(n);
     let mut mags = Vec::with_capacity(n);
     let (mut gx, mut gy, mut gz) = (Vec::new(), Vec::new(), Vec::new());
+    let mut peak_g = 0.0f32;
+    let mut jerk_peak = 0.0f32;
+    let mut rot_peak = 0.0f32;
+    let mut wob_sq = 0.0f32;
+    let mut has_gyro = false;
+    let mut prev: Option<(u64, f32)> = None;
     for s in win {
         let (v, h) = project(s);
         vert.push(v);
         horiz.push(h);
-        mags.push((s.ax * s.ax + s.ay * s.ay + s.az * s.az).sqrt());
+        let m = (s.ax * s.ax + s.ay * s.ay + s.az * s.az).sqrt();
+        mags.push(m);
         gx.push(s.gx);
         gy.push(s.gy);
         gz.push(s.gz);
+        peak_g = peak_g.max(total_mag(s));
+        if let Some((pt, pm)) = prev {
+            let dt = s.t_ms.saturating_sub(pt) as f32 / 1000.0;
+            if dt > 0.0 {
+                jerk_peak = jerk_peak.max((m - pm).abs() / dt);
+            }
+        }
+        prev = Some((s.t_ms, m));
+        let w = [s.rx, s.ry, s.rz];
+        let wn = norm(w);
+        if wn > 1e-6 {
+            has_gyro = true;
+            rot_peak = rot_peak.max(wn);
+            let g = [s.gx, s.gy, s.gz];
+            let gn = norm(g).max(1e-6);
+            let gu = [g[0] / gn, g[1] / gn, g[2] / gn];
+            let along = dot(w, gu);
+            let perp = [w[0] - along * gu[0], w[1] - along * gu[1], w[2] - along * gu[2]];
+            wob_sq += dot(perp, perp);
+        }
     }
     let gm = [median(&mut gx.clone()), median(&mut gy.clone()), median(&mut gz.clone())];
     let gvar = {
@@ -175,6 +236,24 @@ pub fn compute_features(cfg: &GaitCfg, win: &[MotionSample]) -> GaitFeatures {
         }
         acc / n.max(1) as f32
     };
+    let energy = rms(&mags);
+    let wobble = if has_gyro { (wob_sq / n.max(1) as f32).sqrt().to_degrees() } else { 0.0 };
+    let t_ms = win.last().map(|s| s.t_ms).unwrap_or(0);
+
+    let mut f = GaitFeatures {
+        t_ms,
+        fs,
+        full,
+        has_gyro,
+        peak_g,
+        energy_rms: energy,
+        gravity: gm,
+        gravity_var: gvar,
+        ..Default::default()
+    };
+    if !full {
+        return f;
+    }
 
     let vb = bandpass(&vert, cfg.band_low_hz, cfg.band_high_hz, fs);
     let hb = bandpass(&horiz, cfg.band_low_hz, cfg.band_high_hz, fs);
@@ -196,12 +275,11 @@ pub fn compute_features(cfg: &GaitCfg, win: &[MotionSample]) -> GaitFeatures {
         step_cv = var.sqrt() / mean.max(1e-3);
         cadence = 60.0 / mean.max(1e-3);
     } else if steps == 1 {
-        cadence = 60.0 / dur_s;
+        cadence = 60.0 / dur_s.max(1e-3);
     }
     let regularity = autocorr_peak(vb, (0.25 * fs) as usize, (1.5 * fs) as usize);
     let hr = if cadence > 0.0 { harmonic_ratio(vb, cadence / 60.0 / 2.0, fs) } else { 0.0 };
     let sway = rms(hb);
-    let energy = rms(&mags);
     let periodic = regularity >= cfg.min_regularity_walk && steps >= (dur_s * 0.8) as usize;
     let is_walking = periodic && cadence >= cfg.walk_cadence_min && cadence < cfg.walk_cadence_max;
     let is_running = periodic && cadence >= cfg.run_cadence_min;
@@ -210,24 +288,22 @@ pub fn compute_features(cfg: &GaitCfg, win: &[MotionSample]) -> GaitFeatures {
     } else {
         0.0
     };
-    GaitFeatures {
-        t_ms: win.last().map(|s| s.t_ms).unwrap_or(0),
-        steps,
-        cadence_spm: cadence,
-        step_cv,
-        regularity,
-        harmonic_ratio: hr,
-        sway_rms: sway,
-        energy_rms: energy,
-        is_walking,
-        is_running,
-        agitation,
-        gravity: gm,
-        gravity_var: gvar,
-    }
+    f.steps = steps;
+    f.cadence_spm = cadence;
+    f.step_cv = step_cv;
+    f.regularity = regularity;
+    f.harmonic_ratio = hr;
+    f.sway_rms = sway;
+    f.wobble_dps = wobble;
+    f.jerk_peak = jerk_peak;
+    f.rot_peak_dps = rot_peak.to_degrees();
+    f.is_walking = is_walking;
+    f.is_running = is_running;
+    f.agitation = agitation;
+    f
 }
 
-/// Keeps a ring buffer of samples and emits features every `hop_s`.
+/// Keeps a time-based ring buffer of samples and emits features every `hop_s`.
 pub struct GaitAnalyzer {
     cfg: GaitCfg,
     buf: VecDeque<MotionSample>,
@@ -241,14 +317,22 @@ impl GaitAnalyzer {
     pub fn window_len(&self) -> usize {
         (self.cfg.window_s * self.cfg.sample_hz) as usize
     }
-    /// Push a sample; returns features when a new hop completes.
-    pub fn push(&mut self, s: MotionSample) -> Option<GaitFeatures> {
+    /// Push a sample; returns features when a new hop completes. `allow_full` gates gait/gyro metrics.
+    pub fn push(&mut self, s: MotionSample, allow_full: bool) -> Option<GaitFeatures> {
+        // a backwards jump in time (new session / replay) resets the buffer
+        if let Some(last) = self.buf.back() {
+            if s.t_ms + 5_000 < last.t_ms {
+                self.buf.clear();
+                self.last_emit_ms = 0;
+            }
+        }
         self.buf.push_back(s);
-        let wl = self.window_len();
-        while self.buf.len() > wl {
+        let span_ms = (self.cfg.window_s * 1000.0) as u64;
+        while self.buf.front().map(|f| s.t_ms.saturating_sub(f.t_ms) > span_ms).unwrap_or(false) {
             self.buf.pop_front();
         }
-        if self.buf.len() < wl {
+        let first = self.buf.front().map(|f| f.t_ms).unwrap_or(s.t_ms);
+        if s.t_ms.saturating_sub(first) + 50 < span_ms || self.buf.len() < 4 {
             return None;
         }
         if s.t_ms.saturating_sub(self.last_emit_ms) < (self.cfg.hop_s * 1000.0) as u64 {
@@ -256,6 +340,15 @@ impl GaitAnalyzer {
         }
         self.last_emit_ms = s.t_ms;
         let win: Vec<MotionSample> = self.buf.iter().copied().collect();
-        Some(compute_features(&self.cfg, &win))
+        Some(compute_features(&self.cfg, &win, allow_full))
     }
+}
+
+/// Rotation rate (rad/s) implied by two consecutive gravity vectors: ω ≈ (g0 × g1) / dt.
+pub fn gravity_rotation_rate(g0: [f32; 3], g1: [f32; 3], dt_s: f32) -> [f32; 3] {
+    if dt_s <= 0.0 {
+        return [0.0; 3];
+    }
+    let c = cross(g0, g1);
+    [c[0] / dt_s, c[1] / dt_s, c[2] / dt_s]
 }

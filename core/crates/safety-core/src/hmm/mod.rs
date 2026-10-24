@@ -27,6 +27,8 @@ pub struct ContextFlags {
     pub separated: bool,
     pub late: bool,
     pub rapid_drift: bool,
+    /// bounded log-odds boost from the incident-log sequence agent (0 = none)
+    pub sequence_boost: f32,
 }
 
 pub struct Hmm {
@@ -114,6 +116,9 @@ impl Hmm {
             }
             if ctx.rapid_drift {
                 bump += c.rapid_drift[from];
+            }
+            if ctx.sequence_boost > 0.0 {
+                bump += c.sequence[from] * ctx.sequence_boost;
             }
             for to in (from + 1)..4 {
                 logits[to] += bump;
@@ -232,8 +237,8 @@ impl Hmm {
         if o.typing_impaired {
             ev.push("impaired typing".into());
         }
-        // keep a fall in the summary while still
-        if ev.iter().all(|e| !e.contains("fall")) && o.stillness_s >= 60.0 {
+        // keep a fall in the summary until walking resumes
+        if ev.iter().all(|e| !e.contains("fall")) && !o.walking_seen {
             if let Some(prev) = self.evidence.iter().find(|e| e.contains("fall")) {
                 ev.insert(0, prev.clone());
             }
@@ -271,7 +276,7 @@ mod tests {
     fn context_only_changes_forward_transitions() {
         let h = hmm();
         let base = h.transition(&ContextFlags::default());
-        let ctx = h.transition(&ContextFlags { away_from_home: true, separated: true, late: true, rapid_drift: true });
+        let ctx = h.transition(&ContextFlags { away_from_home: true, separated: true, late: true, rapid_drift: true, sequence_boost: 2.5 });
         for from in 0..4 {
             // forward mass never decreases
             let fwd_base: f32 = (from + 1..4).map(|to| base[from][to]).sum();

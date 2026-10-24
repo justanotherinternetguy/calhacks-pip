@@ -1,5 +1,7 @@
 //! Impact / fall detector and "phone dropped alone" discrimination.
-//! Pattern: free fall (<0.5 g) → peak (>3 g) → orientation change → low motion.
+//! Fall pattern: free fall (<0.5 g) → peak (>3 g) → orientation change → low motion.
+//! Coarse path (any rate, no free fall needed): peak > `incident_peak_g` → orientation change.
+//! Timestamp-driven, so it works on 50 Hz and ~10 Hz input alike.
 use super::{angle_deg, gravity, rms, total_mag};
 use crate::config::ImpactCfg;
 use crate::types::MotionSample;
@@ -27,6 +29,16 @@ pub struct ImpactEvent {
     pub fall_likelihood: f32,
 }
 
+impl ImpactEvent {
+    /// Spec v1.1: an Impact incident is a peak above `incident_peak_g` with an orientation change
+    /// (or a fall-like impact), never a drop.
+    pub fn is_incident(&self, cfg: &ImpactCfg) -> bool {
+        self.kind != ImpactKind::Drop
+            && self.peak_g > cfg.incident_peak_g
+            && (self.orientation_change_deg >= cfg.orientation_change_deg || self.fall_likelihood >= 0.5)
+    }
+}
+
 enum St {
     Idle,
     FreeFall { start_ms: u64, g_before: [f32; 3] },
@@ -37,16 +49,24 @@ enum St {
 pub struct ImpactDetector {
     cfg: ImpactCfg,
     st: St,
-    /// recent gravity history (~0.5 s) for "orientation before"
+    /// recent gravity history (~0.6 s) for "orientation before"
     hist: VecDeque<(u64, [f32; 3])>,
     /// a drop is active until the phone is picked up
     pub drop_active: bool,
     drop_window: Vec<f32>,
+    drop_window_start: u64,
 }
 
 impl ImpactDetector {
     pub fn new(cfg: &ImpactCfg) -> Self {
-        ImpactDetector { cfg: cfg.clone(), st: St::Idle, hist: VecDeque::new(), drop_active: false, drop_window: Vec::new() }
+        ImpactDetector {
+            cfg: cfg.clone(),
+            st: St::Idle,
+            hist: VecDeque::new(),
+            drop_active: false,
+            drop_window: Vec::new(),
+            drop_window_start: 0,
+        }
     }
 
     pub fn push(&mut self, s: &MotionSample) -> Option<ImpactEvent> {
@@ -57,8 +77,11 @@ impl ImpactDetector {
             self.hist.pop_front();
         }
         if self.drop_active {
+            if self.drop_window.is_empty() {
+                self.drop_window_start = s.t_ms;
+            }
             self.drop_window.push(mag - 1.0);
-            if self.drop_window.len() >= 50 {
+            if s.t_ms.saturating_sub(self.drop_window_start) >= 1000 {
                 if rms(&self.drop_window) > self.cfg.pickup_rms_g {
                     self.drop_active = false;
                 }
@@ -72,6 +95,10 @@ impl ImpactDetector {
                 if mag < self.cfg.free_fall_g {
                     let g_before = self.hist.front().map(|(_, g)| *g).unwrap_or(g);
                     St::FreeFall { start_ms: s.t_ms, g_before }
+                } else if mag > self.cfg.incident_peak_g {
+                    // coarse path: hard peak without a preceding free fall
+                    let g_before = self.hist.front().map(|(_, g)| *g).unwrap_or(g);
+                    St::Impact { ff_ms: 0, start_ms: s.t_ms, peak: mag, g_before }
                 } else {
                     St::Idle
                 }
@@ -83,6 +110,8 @@ impl ImpactDetector {
                     let ff = s.t_ms - start_ms;
                     if ff >= self.cfg.min_free_fall_ms {
                         St::Impact { ff_ms: ff, start_ms: s.t_ms, peak: mag, g_before }
+                    } else if mag > self.cfg.incident_peak_g {
+                        St::Impact { ff_ms: 0, start_ms: s.t_ms, peak: mag, g_before }
                     } else {
                         St::Idle
                     }
@@ -91,7 +120,8 @@ impl ImpactDetector {
             St::Impact { ff_ms, start_ms, peak, g_before } => {
                 let peak = peak.max(mag);
                 if s.t_ms - start_ms >= self.cfg.impact_window_ms {
-                    if peak >= self.cfg.peak_g {
+                    let needed = if ff_ms > 0 { self.cfg.peak_g.min(self.cfg.incident_peak_g) } else { self.cfg.incident_peak_g };
+                    if peak >= needed {
                         St::Post { ff_ms, impact_ms: start_ms, peak, g_before, mags: Vec::new(), gs: Vec::new() }
                     } else {
                         St::Idle
@@ -109,14 +139,18 @@ impl ImpactDetector {
                     let post_rms = rms(&mags);
                     let orient = angle_deg(g_before, g_after);
                     let flat = g_after[2].abs() > self.cfg.drop_flat_gz;
+                    let hard = peak >= self.cfg.peak_g;
                     let (kind, like) = if ff_ms >= self.cfg.drop_min_free_fall_ms && flat && post_rms < self.cfg.drop_post_rms_g {
                         (ImpactKind::Drop, 0.1)
                     } else if orient >= self.cfg.orientation_change_deg && post_rms < self.cfg.post_still_rms_g {
-                        (ImpactKind::Fall, (0.6 + (peak - self.cfg.peak_g) * 0.1).clamp(0.6, 0.95))
-                    } else if post_rms < self.cfg.post_still_rms_g {
+                        let base = if ff_ms > 0 && hard { 0.6 } else { 0.5 };
+                        (ImpactKind::Fall, (base + (peak - self.cfg.peak_g) * 0.1).clamp(base, 0.95))
+                    } else if post_rms < self.cfg.post_still_rms_g && ff_ms > 0 && hard {
                         (ImpactKind::Fall, 0.5)
+                    } else if orient >= self.cfg.orientation_change_deg {
+                        (ImpactKind::Bump, 0.35)
                     } else {
-                        (ImpactKind::Bump, 0.3)
+                        (ImpactKind::Bump, if ff_ms > 0 { 0.3 } else { 0.15 })
                     };
                     if kind == ImpactKind::Drop {
                         self.drop_active = true;
