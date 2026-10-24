@@ -1,0 +1,23 @@
+[package]
+name = "safety-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "wasm-bindgen surface over safety-crypto for the web (friend-only) build of the app"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+safety-crypto = { path = "../safety-crypto" }
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+serde-wasm-bindgen = "0.6"
+# Feature-unifies safety-crypto's getrandom 0.4 onto the browser `crypto.getRandomValues` backend.
+# getrandom 0.4 selects `wasm_js` from the feature alone on wasm32-unknown-unknown (no --cfg needed).
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
+[package.metadata.wasm-pack.profile.release]
+# wasm-opt is downloaded on demand by wasm-pack; keep the build hermetic. Flip to true for ~15% smaller output.
+wasm-opt = false
