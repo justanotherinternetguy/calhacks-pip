@@ -3,9 +3,25 @@
   "compilerOptions": {
     "strict": true,
     "noUncheckedIndexedAccess": false,
-    "paths": { "@/*": ["./*"] },
-    "types": ["react", "react-native"]
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
+    "types": [
+      "react",
+      "react-native"
+    ]
   },
-  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
-  "exclude": ["node_modules", "ios", "android", "modules/safety-native/ios", "modules/safety-native/android"]
+  "include": [
+    "**/*.ts",
+    "**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "ios",
+    "android",
+    "modules/safety-native/ios",
+    "modules/safety-native/android"
+  ]
 }

@@ -16,3 +16,4 @@ web-build/
 # Firebase / Apple push credentials (per-developer, see docs/PUSH_SETUP.md)
 google-services.json
 GoogleService-Info.plist
+expo-env.d.ts
