@@ -46,7 +46,7 @@ class YamnetClassifier(context: Context) {
     }
     screamIdx = find("Screaming", fallback = intArrayOf(11))
     shoutIdx = find("Shout", "Yell", "Bellow", "Whoop", fallback = intArrayOf(6, 9, 7, 8))
-    glassIdx = find("Glass", "Shatter", fallback = intArrayOf(434, 435))
+    glassIdx = find("Glass", "Shatter", fallback = intArrayOf(435, 437))
     Log.i(TAG, "classes: scream=${screamIdx.toList()} shout=${shoutIdx.toList()} glass=${glassIdx.toList()}")
   }
 
