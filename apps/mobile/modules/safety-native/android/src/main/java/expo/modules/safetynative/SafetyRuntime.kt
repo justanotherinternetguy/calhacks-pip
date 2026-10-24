@@ -35,6 +35,7 @@ class SafetyRuntime private constructor(val app: Context) {
   companion object {
     private const val TAG = "SafetyRuntime"
     private const val SIGNAL_RING_MAX = 64
+    private const val EVENT_RING_MAX = 64
     @Volatile private var instance: SafetyRuntime? = null
     fun get(context: Context): SafetyRuntime =
       instance ?: synchronized(this) { instance ?: SafetyRuntime(context.applicationContext).also { instance = it } }
@@ -52,6 +53,8 @@ class SafetyRuntime private constructor(val app: Context) {
   val locationUploader = LocationUploader(this)
   val proximityUploader = ProximityUploader(this)
   val sos = SosManager(this)
+  /** Live telemetry stream to the web monitor (CONTRACTS §7). */
+  val telemetry = TelemetryPublisher(this)
 
   @Volatile var sink: RuntimeEventSink? = null
   @Volatile var lastLocation: Location? = null
@@ -78,8 +81,21 @@ class SafetyRuntime private constructor(val app: Context) {
   /** Wall-clock time of the last engine tick (any loop); getDashboard re-ticks when this is older than 1 s. */
   @Volatile var lastTickMs = 0L
 
+  /**
+   * Explicit telemetry switch (CONTRACTS §7, `setTelemetry`), persisted in Prefs and cached here because the 4 Hz
+   * publisher and `effectiveFull()` read it often. Defaults to ON, but only counts once `configure` ran (see [telemetryOn]).
+   */
+  @Volatile private var telemetryEnabled = prefs.telemetryOn
+  @Volatile private var telemetryConfigured = prefs.serverConfig != null
+  /** True while the telemetry stream is explicitly on: publisher at 4 Hz and FULL sampling forced, like dashboard streaming. */
+  val telemetryOn: Boolean get() = telemetryEnabled && telemetryConfigured
+  /** `(phrase, deadlineMs)` of the open check-in, for the telemetry tick; set on CheckRequested, cleared on Resolved. */
+  @Volatile var pendingCheck: Pair<String, Long>? = null
+
   /** Native-side copy of the last SignalIncident records (newest last, capped); the engine keeps the authoritative log. */
   private val signalRing = ArrayDeque<IncidentRecord>()
+  /** snake_case names of the engine events dispatched since the telemetry publisher last drained them (capped). */
+  private val eventRing = ArrayDeque<String>()
   /** Fallback 1 s ticker used only while streaming without a running service (no sensors, but the engine still ages). */
   private var dashboardJob: Job? = null
 
@@ -87,6 +103,13 @@ class SafetyRuntime private constructor(val app: Context) {
 
   val isDebuggable: Boolean get() = (app.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
   val configured: Boolean get() = prefs.serverConfig != null
+
+  /** `configure()` just stored a ServerConfig: telemetry (default on) becomes effective, sampling + publisher follow. */
+  fun onConfigured() {
+    telemetryConfigured = true
+    sensing?.onStreamingChanged()
+    syncTelemetryPublisher()
+  }
   fun now(): Long = System.currentTimeMillis()
 
   fun batteryPct(): Int {
@@ -159,7 +182,8 @@ class SafetyRuntime private constructor(val app: Context) {
     val svc = sensing
     val mode = if (on) "FULL (50 Hz + gyro, forced)" else "engine-requested (${if (samplingFull) "FULL" else "LOW"})"
     Log.i(TAG, "dashboard streaming ${if (on) "on" else "off"}: sampling $mode, tick ${if (on) "1 s" else "engine cadence"}${if (svc == null) ", service not running" else ""}")
-    svc?.onDashboardStreamingChanged()
+    svc?.onStreamingChanged()
+    syncTelemetryPublisher()
     if (!on) { dashboardJob?.cancel(); dashboardJob = null; return }
     dashboardJob = scope.launch {
       while (isActive) {
@@ -167,6 +191,47 @@ class SafetyRuntime private constructor(val app: Context) {
         delay(1_000L)
       }
     }
+  }
+
+  // ---- telemetry (CONTRACTS §7) ----------------------------------------------
+
+  /**
+   * `setTelemetry(on)`: persist the switch; while on, SensingService forces FULL sampling (the monitor wants real gait
+   * metrics) and the day ticker runs every second, and the publisher streams at 4 Hz (see [TelemetryPublisher]).
+   */
+  @Synchronized
+  fun setTelemetry(on: Boolean) {
+    prefs.telemetryOn = on
+    if (telemetryEnabled == on) return
+    telemetryEnabled = on
+    Log.i(TAG, "telemetry ${if (on) "on" else "off"}: sampling ${if (on) "FULL (forced)" else "per dashboard / engine request"}${if (sensing == null) ", service not running" else ""}")
+    sensing?.onStreamingChanged()
+    syncTelemetryPublisher()
+  }
+
+  /**
+   * The publisher runs while the service is alive (SensingService.onCreate starts it, onDestroy stops it) or while
+   * something explicitly asks for the stream without a service — then it publishes whatever the engine holds.
+   */
+  fun syncTelemetryPublisher() {
+    if (sensing != null || telemetryOn || dashboardStreaming) telemetry.start() else telemetry.stop()
+  }
+
+  /** Engine events (snake_case, CONTRACTS §7 `events`) since the previous call; clears the ring. */
+  fun drainTelemetryEvents(): List<String> = synchronized(eventRing) { val l = eventRing.toList(); eventRing.clear(); l }
+
+  private fun eventName(ev: EngineEvent): String = when (ev) {
+    is EngineEvent.CheckRequested -> "check_requested"
+    is EngineEvent.HeadsUp -> "heads_up"
+    is EngineEvent.UnlockLocation -> "unlock_location"
+    is EngineEvent.SnatchDetected -> "snatch_detected"
+    EngineEvent.Resolved -> "resolved"
+    is EngineEvent.RiskBandChanged -> "risk_band_changed"
+    EngineEvent.BatteryDying -> "battery_dying"
+    is EngineEvent.LocationIntervalChanged -> "location_interval_changed"
+    is EngineEvent.SamplingRateChanged -> "sampling_rate_changed"
+    is EngineEvent.SignalIncident -> "signal_incident"
+    is EngineEvent.CallOptionAvailable -> "call_option"
   }
 
   fun hmmName(s: HmmState) = when (s) {
@@ -196,6 +261,7 @@ class SafetyRuntime private constructor(val app: Context) {
   /** Called from the sensing service's tick loops (via [runTick]) and the trace injector. */
   fun dispatch(events: List<EngineEvent>) {
     for (ev in events) {
+      synchronized(eventRing) { eventRing.addLast(eventName(ev)); while (eventRing.size > EVENT_RING_MAX) eventRing.removeFirst() }
       try { handle(ev) } catch (e: Throwable) { Log.e(TAG, "event $ev failed", e) }
     }
     if (events.isNotEmpty()) emitStatus()
@@ -204,6 +270,7 @@ class SafetyRuntime private constructor(val app: Context) {
   private fun handle(ev: EngineEvent) {
     when (ev) {
       is EngineEvent.CheckRequested -> {
+        pendingCheck = ev.phrase to ev.deadlineMs.toLong()
         alerts.showCheckIn(ev.phrase, ev.deadlineMs.toLong())
         AlarmReceiver.scheduleCheckTimeout(app, ev.deadlineMs.toLong())
         emit("checkRequested", mapOf("phrase" to ev.phrase, "deadlineMs" to ev.deadlineMs.toLong()))
@@ -243,6 +310,7 @@ class SafetyRuntime private constructor(val app: Context) {
         emit("escalation", mapOf("level" to "snatch", "summary" to ev.summary))
       }
       EngineEvent.Resolved -> {
+        pendingCheck = null
         alerts.cancelCheckIn()
         AlarmReceiver.cancelCheckTimeout(app)
         scope.launch { resolveIncident() }

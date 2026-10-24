@@ -89,6 +89,10 @@ class Prefs(context: Context) {
   var learningEnabled: Boolean
     get() = getBool("learning", true)
     set(v) = putBool("learning", v)
+  /** Live telemetry stream switch (CONTRACTS §7, `setTelemetry`). Default on; only effective once `configure` has run. */
+  var telemetryOn: Boolean
+    get() = getBool("telemetry", true)
+    set(v) = putBool("telemetry", v)
   /** Last observed touch / interactive unlock (wall-clock ms; 0 = never). Written at most once a minute by TouchTracker. */
   var lastTouchMs: Long
     get() = getLong("last_touch", 0L)

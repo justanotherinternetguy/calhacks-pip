@@ -55,8 +55,10 @@ import kotlin.math.sqrt
  * Sampling mode (CONTRACTS §6) is owned by the engine: `EngineEvent.SamplingRateChanged` flips
  * between LOW and FULL (50 Hz + gyroscope). Native additionally forces FULL during a baseline walk,
  * while opportunistic daytime gait learning is active (walking + learning enabled), and while the
- * personal dashboard is streaming (`SafetyRuntime.dashboardStreaming`, which also makes the day
- * ticker run every second so `engine.metrics()` is fresh for each `dashboard` event).
+ * personal dashboard is streaming (`SafetyRuntime.dashboardStreaming`) or the telemetry stream is on
+ * (`SafetyRuntime.telemetryOn`, CONTRACTS §7); both also make the day ticker run every second so
+ * `engine.metrics()` is fresh for each `dashboard` event / telemetry tick. Per-sample |a| and |ω| are kept in
+ * small rings for the telemetry publisher ([drainTelemetrySamples]).
  */
 class SensingService : Service(), SensorEventListener {
   companion object {
@@ -82,6 +84,8 @@ class SensingService : Service(), SensorEventListener {
     private const val SENSOR_BATCH_US = 1_000_000
     private const val G = 9.80665f
     private const val EARTH_RADIUS_M = 6_371_000.0
+    /** Telemetry rings (CONTRACTS §7): samples kept between two publisher drains (4 Hz × 50 Hz = ~13; 64 covers a 1 Hz drain). */
+    private const val TELEMETRY_RING_MAX = 64
 
     fun sendAction(ctx: Context, action: String, fill: (Intent) -> Unit = {}) {
       val i = Intent(ctx, SensingService::class.java).setAction(action); fill(i)
@@ -119,6 +123,9 @@ class SensingService : Service(), SensorEventListener {
   private var registeredFull: Boolean? = null
   /** What we are currently delivering (mirrored into Context.sampling_full). */
   @Volatile private var fullActive = false
+  /** Telemetry rings: |a| (g) and |ω| (rad/s) per sample since the last [drainTelemetrySamples]; guarded by motionLock. */
+  private val telemetryAccel = ArrayDeque<Float>(TELEMETRY_RING_MAX + 1)
+  private val telemetryGyro = ArrayDeque<Float>(TELEMETRY_RING_MAX + 1)
   private val bootToWallMs get() = System.currentTimeMillis() - SystemClock.elapsedRealtime()
 
   // context
@@ -146,6 +153,7 @@ class SensingService : Service(), SensorEventListener {
     registerActivityTransitions()
     applySampling() // LOW mode from the start; the engine upgrades via SamplingRateChanged
     startDayTicker()
+    rt.telemetry.start() // rate policy decides whether it actually publishes (CONTRACTS §7)
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -170,6 +178,7 @@ class SensingService : Service(), SensorEventListener {
   override fun onDestroy() {
     stopNightSession()
     dayJob?.cancel()
+    rt.telemetry.stop()
     stopSensors()
     runCatching { unregisterReceiver(screenReceiver) }
     rt.engine.saveNow()
@@ -299,9 +308,9 @@ class SensingService : Service(), SensorEventListener {
   /**
    * Low-power loop outside night sessions: re-evaluate the window and feed the engine context + tick.
    * Once a minute in LOW mode; every second while FULL sampling is active (engine request after an
-   * incident, or the dashboard streaming) so grab/impact logic keeps running at the same cadence as at
-   * night and the dashboard gets a fresh `metrics()` each second. Restarted (ticks immediately) when the
-   * streaming flag flips, so a pending 60 s delay does not hold the first fresh frame back.
+   * incident, dashboard streaming or the telemetry stream) so grab/impact logic keeps running at the same
+   * cadence as at night and the dashboard / telemetry get a fresh `metrics()` each second. Restarted (ticks
+   * immediately) when a streaming flag flips, so a pending 60 s delay does not hold the first fresh frame back.
    */
   @Synchronized
   private fun startDayTicker() {
@@ -317,7 +326,7 @@ class SensingService : Service(), SensorEventListener {
             tickNow(now)
           }
         }.onFailure { Log.e(TAG, "day tick failed", it) }
-        delay(if (!rt.nightActive && (fullActive || rt.dashboardStreaming)) 1_000L else 60_000L)
+        delay(if (!rt.nightActive && (fullActive || rt.dashboardStreaming || rt.telemetryOn)) 1_000L else 60_000L)
       }
     }
   }
@@ -333,10 +342,21 @@ class SensingService : Service(), SensorEventListener {
     rt.runTick(now, emitDashboard)
   }
 
-  /** Streaming flag flipped: re-register sensors for the new effective mode and re-arm the day ticker cadence. */
-  fun onDashboardStreamingChanged() {
+  /** Dashboard-streaming / telemetry flag flipped: re-register sensors for the new effective mode and re-arm the day ticker cadence. */
+  fun onStreamingChanged() {
     applySampling()
     startDayTicker()
+  }
+
+  /**
+   * Hands the per-sample magnitudes collected since the previous call to the telemetry publisher (newest last, ≤ 64
+   * each; `gyro` is all zeros in LOW mode) and clears the rings. `sampleHz` is the nominal rate of the registered mode.
+   */
+  fun drainTelemetrySamples(): RawSamples = synchronized(motionLock) {
+    val a = FloatArray(telemetryAccel.size) { telemetryAccel[it] }
+    val g = FloatArray(telemetryGyro.size) { telemetryGyro[it] }
+    telemetryAccel.clear(); telemetryGyro.clear()
+    RawSamples(a, g, if (registeredFull == null) 0 else if (fullActive) 50 else 10)
   }
 
   private fun pushContext(now: Long) {
@@ -363,15 +383,15 @@ class SensingService : Service(), SensorEventListener {
 
   // ---- motion --------------------------------------------------------------
 
-  /** FULL when the engine asked for it, the dashboard is streaming, during a baseline walk, or while learning gait on a daytime walk. */
+  /** FULL when the engine asked for it, the dashboard or telemetry streams, during a baseline walk, or while learning gait on a daytime walk. */
   private fun effectiveFull(): Boolean =
-    rt.samplingFull || rt.dashboardStreaming || rt.baselineWalkStartMs != 0L || (activity == Activity.WALKING && rt.prefs.learningEnabled)
+    rt.samplingFull || rt.dashboardStreaming || rt.telemetryOn || rt.baselineWalkStartMs != 0L || (activity == Activity.WALKING && rt.prefs.learningEnabled)
 
   /**
    * (Re)registers the motion listeners for the current effective mode. Idempotent; safe from any thread
    * (SensorManager delivers to the main looper when no Handler is given). Called from onCreate, the
    * engine's SamplingRateChanged, activity transitions, baseline-walk start/stop, night start/stop and
-   * dashboard streaming on/off.
+   * dashboard streaming / telemetry on/off.
    */
   @Synchronized
   fun applySampling() {
@@ -418,16 +438,21 @@ class SensingService : Service(), SensorEventListener {
       Sensor.TYPE_LINEAR_ACCELERATION -> {
         if (!haveGravity) return
         val tMs = e.timestamp / 1_000_000L + bootToWallMs
+        val ax = e.values[0] / G; val ay = e.values[1] / G; val az = e.values[2] / G
         val full = synchronized(motionLock) {
           val gyroOn = fullActive
+          val rx = if (gyroOn) rotation[0] else 0f; val ry = if (gyroOn) rotation[1] else 0f; val rz = if (gyroOn) rotation[2] else 0f
           batch.add(
             MotionSample(
               tMs = tMs.toULong(),
-              ax = e.values[0] / G, ay = e.values[1] / G, az = e.values[2] / G,
+              ax = ax, ay = ay, az = az,
               gx = gravity[0], gy = gravity[1], gz = gravity[2],
-              rx = if (gyroOn) rotation[0] else 0f, ry = if (gyroOn) rotation[1] else 0f, rz = if (gyroOn) rotation[2] else 0f,
+              rx = rx, ry = ry, rz = rz,
             ),
           )
+          // Telemetry rings (CONTRACTS §7 accel/gyro): magnitudes only, drained by TelemetryPublisher at its own cadence.
+          telemetryAccel.addLast(sqrt(ax * ax + ay * ay + az * az)); if (telemetryAccel.size > TELEMETRY_RING_MAX) telemetryAccel.removeFirst()
+          telemetryGyro.addLast(sqrt(rx * rx + ry * ry + rz * rz)); if (telemetryGyro.size > TELEMETRY_RING_MAX) telemetryGyro.removeFirst()
           batch.size >= 50 || tMs - lastFlushMs >= 1000
         }
         if (full) flushMotion()

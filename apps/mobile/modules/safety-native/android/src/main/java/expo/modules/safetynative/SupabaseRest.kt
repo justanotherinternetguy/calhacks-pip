@@ -16,11 +16,12 @@ import java.util.concurrent.TimeUnit
  */
 class SupabaseRest(private val prefs: Prefs) {
   companion object {
-    private val JSON = "application/json".toMediaType()
+    internal val JSON = "application/json".toMediaType()
     fun isoNow(): String = Instant.now().toString()
   }
 
-  private val client = OkHttpClient.Builder()
+  /** Shared client; `client.newBuilder()` derives one with other timeouts on the same pool/dispatcher (TelemetryPublisher). */
+  internal val client = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).writeTimeout(20, TimeUnit.SECONDS)
     .build()
 
@@ -32,13 +33,18 @@ class SupabaseRest(private val prefs: Prefs) {
 
   private fun cfg(): ServerConfig = prefs.serverConfig ?: throw IOException("SafetyNative not configured")
 
-  private fun request(path: String, method: String, body: JSONObject?, prefer: String?, bodyArr: JSONArray? = null): String? {
+  /** `Request.Builder` for `{supabaseUrl}{path}` carrying the apikey / bearer / JSON headers; throws when not configured. */
+  internal fun authed(path: String): Request.Builder {
     val c = cfg()
     val token = tokenOverride ?: c.accessToken
-    val b = Request.Builder().url(c.supabaseUrl.trimEnd('/') + path)
+    return Request.Builder().url(c.supabaseUrl.trimEnd('/') + path)
       .header("apikey", c.supabaseAnonKey)
       .header("Authorization", "Bearer $token")
       .header("Content-Type", "application/json")
+  }
+
+  private fun request(path: String, method: String, body: JSONObject?, prefer: String?, bodyArr: JSONArray? = null): String? {
+    val b = authed(path)
     prefer?.let { b.header("Prefer", it) }
     val payload = (bodyArr?.toString() ?: body?.toString() ?: "{}").toRequestBody(JSON)
     when (method) {

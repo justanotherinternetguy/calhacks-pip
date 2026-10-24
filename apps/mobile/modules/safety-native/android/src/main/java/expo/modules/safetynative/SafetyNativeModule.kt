@@ -61,7 +61,7 @@ class GroupRecord : Record {
 }
 
 /**
- * JS facade (CONTRACTS §2). Thin: every method forwards to SafetyRuntime, which outlives the JS runtime.
+ * JS facade (CONTRACTS §2, §6 dashboard, §7 telemetry). Thin: every method forwards to SafetyRuntime, which outlives the JS runtime.
  */
 class SafetyNativeModule : Module() {
   private val rt: SafetyRuntime get() = SafetyRuntime.get(requireNotNull(appContext.reactContext) { "no react context" })
@@ -96,6 +96,7 @@ class SafetyNativeModule : Module() {
       r.prefs.serverConfig = ServerConfig(opts.supabaseUrl, opts.supabaseAnonKey, opts.accessToken, opts.userId, opts.deviceId)
       r.supabase.setAccessToken(opts.accessToken)
       if (opts.modelConfigToml.isNotBlank()) r.engine.setConfigToml(opts.modelConfigToml) else r.engine.get()
+      r.onConfigured()   // telemetry stream (CONTRACTS §7) defaults to ON from here
       r.scope.launch { r.escrow.publishKeys() }
       // The app is visible here, so the service may take the microphone type later tonight.
       r.startService(allowMic = true)
@@ -159,6 +160,11 @@ class SafetyNativeModule : Module() {
 
     AsyncFunction("getDashboard") { rt.freshDashboardMap() }   // ticks first if the last tick is > 1 s old
     AsyncFunction("setDashboardStreaming") { on: Boolean -> rt.setDashboardStreaming(on) }
+
+    // ---- telemetry stream (CONTRACTS §7) ----------------------------------------
+
+    AsyncFunction("setTelemetry") { on: Boolean -> rt.setTelemetry(on) }
+    AsyncFunction("getTelemetryStatus") { rt.telemetry.statusMap() }   // { on, hz, lastSentMs, failures }
 
     // ---- check-in / SOS ------------------------------------------------------
 
