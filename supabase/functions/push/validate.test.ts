@@ -10,6 +10,11 @@ Deno.test("validateBody rejects missing fields", () => {
   assertEquals(validateBody({ incidentId: "i", kind: "ring", title: "t", body: "b" }), null);
 });
 
+Deno.test("validateBody accepts the v1.1 'call_option' kind (kinds are not whitelisted here; the DB check is)", () => {
+  assertEquals(validateBody({ incidentId: "i", kind: "call_option", title: "Call campus safety?", body: "No response for 10 min" }), null);
+  assertEquals(validateBody({ incidentId: "i", kind: "call_option", title: "t", body: "b", data: { summary: "grab → still" } }), null);
+});
+
 Deno.test("resolveRecipients defaults to group minus caller and clamps explicit lists", () => {
   const allowed = new Set(["a", "b", "c"]);
   assertEquals(resolveRecipients(allowed, "a").sort(), ["b", "c"]);

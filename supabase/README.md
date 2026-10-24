@@ -105,8 +105,8 @@ Native talks PostgREST directly (`/rest/v1/<table>`), calls RPCs at
 | Function | Auth | Request → response |
 |---|---|---|
 | `POST /push` | user JWT (group member) | `{ incidentId, kind, title, body, recipients?, critical?, data? }` → `{ recipients, sent, results }` |
-| `POST /unlock` | user JWT | `{ incidentId }` → `201 { requestId }`; `409` wrong level, `403` not a member, `404` missing |
-| `GET /unlock?requestId=` | user JWT | `{ requestId, status, approvals, threshold, fulfilled, remaining }` |
+| `POST /unlock` | user JWT | `{ incidentId }` → `201 { requestId }`; `409` wrong level / fewer than 3 active members, `403` not a member, `404` missing |
+| `GET /unlock?requestId=` | user JWT | `{ requestId, status, approvals, threshold, fulfilled, remaining, members, enabled }` (`enabled` = ≥ 3 active members) |
 | `GET /config` | none | `{ version, toml, signature }` + `ETag` / `Cache-Control` (`?version=v1` pins) |
 | `POST /watchdog` | service key / `CRON_SECRET` | `{ incidentIds? }` → `{ opened, pushed }` |
 | `POST /proximity` | service key / `CRON_SECRET` | → `{ groups, updated }` |
@@ -144,7 +144,7 @@ update public.model_configs set toml = $toml$...$toml$, signature = '<base64 ed2
 - `location_blobs`: subject inserts; group-mates read; nobody updates/deletes (purge is a definer fn).
 - `proximity_tokens`: insert only; no user can read any (service role only).
 - `incidents`: subject opens/escalates; members read; `resolve_incident` for subject + members.
-- `unlock_requests`: created **only** by `open_unlock_request()`, which requires an open `offline`/`battery_dying` incident, membership, and not the subject.
+- `unlock_requests`: created **only** by `open_unlock_request()`, which requires an open `offline`/`battery_dying` incident, membership, not the subject, and ≥ 3 active members (v1.1).
 - `unlock_approvals`: approver inserts while request is open; requester/approver read.
-- `audit_log`: written only by definer triggers (released_keys, unlock_requests/approvals, ring/en_route/called_*/found/release events); subject + group-mates read.
+- `audit_log`: written only by definer triggers (released_keys, unlock_requests/approvals, ring/en_route/called_*/found/release/call_option events); subject + group-mates read.
 - `model_configs`: public read, service write.

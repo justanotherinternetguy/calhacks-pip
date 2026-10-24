@@ -1,7 +1,7 @@
 // POST /functions/v1/unlock  { incidentId }   → { requestId }
 //   runs open_unlock_request() as the caller; the RPC enforces the
 //   offline/battery_dying + membership rules and raises otherwise.
-// GET  /functions/v1/unlock?requestId=...      → approvals vs threshold
+// GET  /functions/v1/unlock?requestId=...      → approvals vs threshold (+ members, enabled = members >= 3)
 import { callerId, json, preflight, readJson, serviceClient, userClient } from "../_shared/supabase.ts";
 import { rpcErrorStatus, unlockStatus } from "./status.ts";
 
@@ -42,11 +42,11 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (!member && uid !== inc.user_id && uid !== reqRow.requester_id) return json({ error: "forbidden" }, 403);
 
-    const { count } = await db
-      .from("unlock_approvals")
-      .select("id", { count: "exact", head: true })
-      .eq("request_id", requestId);
-    const status = unlockStatus(requestId, reqRow.status, count ?? 0, inc.groups.threshold_k);
+    const [{ count }, { count: members }] = await Promise.all([
+      db.from("unlock_approvals").select("id", { count: "exact", head: true }).eq("request_id", requestId),
+      db.from("group_members").select("user_id", { count: "exact", head: true }).eq("group_id", inc.group_id).eq("status", "active"),
+    ]);
+    const status = unlockStatus(requestId, reqRow.status, count ?? 0, inc.groups.threshold_k, members ?? 0);
     if (status.fulfilled && reqRow.status === "open") {
       await db.from("unlock_requests").update({ status: "fulfilled" }).eq("id", requestId);
     }

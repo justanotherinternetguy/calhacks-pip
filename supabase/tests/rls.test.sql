@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(25);
+select plan(28);
 
 -- ------------------------------------------------------------ fixtures
 -- alice = subject (group owner), bob + carol = active group-mates, dave = outsider
@@ -13,7 +13,9 @@ insert into auth.users (id, instance_id, aud, role, email, raw_app_meta_data, ra
   ('00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'alice@test.local', '{}', '{"display_name":"Alice"}', now(), now()),
   ('00000000-0000-0000-0000-00000000000b', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'bob@test.local',   '{}', '{"display_name":"Bob"}',   now(), now()),
   ('00000000-0000-0000-0000-00000000000c', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'carol@test.local', '{}', '{"display_name":"Carol"}', now(), now()),
-  ('00000000-0000-0000-0000-00000000000d', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'dave@test.local',  '{}', '{"display_name":"Dave"}',  now(), now());
+  ('00000000-0000-0000-0000-00000000000d', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'dave@test.local',  '{}', '{"display_name":"Dave"}',  now(), now()),
+  ('00000000-0000-0000-0000-00000000000e', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'erin@test.local',  '{}', '{"display_name":"Erin"}',  now(), now()),
+  ('00000000-0000-0000-0000-00000000000f', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'frank@test.local', '{}', '{"display_name":"Frank"}', now(), now());
 
 insert into public.groups (id, name, owner_id, threshold_k)
 values ('11111111-1111-1111-1111-111111111111', 'crew', '00000000-0000-0000-0000-00000000000a', 2);
@@ -21,6 +23,12 @@ values ('11111111-1111-1111-1111-111111111111', 'crew', '00000000-0000-0000-0000
 insert into public.group_members (group_id, user_id, status, invited_by) values
   ('11111111-1111-1111-1111-111111111111', '00000000-0000-0000-0000-00000000000b', 'active', '00000000-0000-0000-0000-00000000000a'),
   ('11111111-1111-1111-1111-111111111111', '00000000-0000-0000-0000-00000000000c', 'active', '00000000-0000-0000-0000-00000000000a');
+
+-- a 2-member group (v1.1 §6: too small for a fallback unlock): erin = subject/owner, frank = only friend
+insert into public.groups (id, name, owner_id, threshold_k)
+values ('11111111-1111-1111-1111-111111111112', 'duo', '00000000-0000-0000-0000-00000000000e', 2);
+insert into public.group_members (group_id, user_id, status, invited_by) values
+  ('11111111-1111-1111-1111-111111111112', '00000000-0000-0000-0000-00000000000f', 'active', '00000000-0000-0000-0000-00000000000e');
 
 insert into public.devices (id, user_id, platform, push_token, push_kind, night_mode, battery_pct, last_heartbeat) values
   ('22222222-2222-2222-2222-22222222222a', '00000000-0000-0000-0000-00000000000a', 'ios',     'tok-alice', 'apns', false, 80, now() - interval '1 hour'),
@@ -38,6 +46,9 @@ values ('00000000-0000-0000-0000-00000000000b', '11111111-1111-1111-1111-1111111
 -- an ordinary escalation incident (not offline) for alice
 insert into public.incidents (id, user_id, group_id, level, summary)
 values ('44444444-4444-4444-4444-444444444441', '00000000-0000-0000-0000-00000000000a', '11111111-1111-1111-1111-111111111111', 'heads_up', 'gait drift');
+-- an offline incident for erin in the 2-member group
+insert into public.incidents (id, user_id, group_id, level, summary)
+values ('44444444-4444-4444-4444-444444444442', '00000000-0000-0000-0000-00000000000e', '11111111-1111-1111-1111-111111111112', 'offline', 'heartbeat stale');
 
 -- helper: impersonate a user through PostgREST-style claims
 create or replace function pg_temp.login(uid uuid) returns void language plpgsql as $$
@@ -79,6 +90,14 @@ select throws_ok(
   '42501', null, 'users cannot insert unlock_requests directly');
 reset role;
 
+-- v1.1: a group with fewer than 3 active members cannot do a fallback unlock, even for an offline incident
+select pg_temp.login('00000000-0000-0000-0000-00000000000f');
+select throws_ok(
+  $$select public.open_unlock_request('44444444-4444-4444-4444-444444444442')$$,
+  'P0001', 'fallback unlock needs at least 3 active members',
+  'open_unlock_request raises for a 2-member group in an offline incident');
+reset role;
+
 -- watchdog opens an offline incident for alice once her heartbeat is stale
 update public.devices set night_mode = true, last_heartbeat = now() - interval '11 minutes'
  where user_id = '00000000-0000-0000-0000-00000000000a';
@@ -87,7 +106,8 @@ select is((select count(*) from public.watchdog_tick()), 0::bigint, 'watchdog_ti
 select is((select level from public.incidents where user_id = '00000000-0000-0000-0000-00000000000a' and resolved_at is null and level = 'offline'),
           'offline', 'offline incident exists');
 -- stash the id where RLS cannot hide it from the impersonated users below
-create temp table fx as select id as offline_id from public.incidents where level = 'offline';
+create temp table fx as select id as offline_id from public.incidents
+  where level = 'offline' and user_id = '00000000-0000-0000-0000-00000000000a';
 grant select on pg_temp.fx to authenticated;
 
 select pg_temp.login('00000000-0000-0000-0000-00000000000d');
@@ -124,6 +144,17 @@ select is((select count(*) from public.audit_log where kind in ('unlock_requeste
 reset role;
 select pg_temp.login('00000000-0000-0000-0000-00000000000d');
 select is((select count(*) from public.audit_log), 0::bigint, 'outsider sees no audit_log rows');
+reset role;
+
+-- v1.1: 'call_option' is a valid incident_events.kind and is audited
+select pg_temp.login('00000000-0000-0000-0000-00000000000b');
+select lives_ok(
+  $$select public.add_incident_event('44444444-4444-4444-4444-444444444441', 'call_option', '{"target":"campus"}'::jsonb)$$,
+  'group-mate can log a call_option event');
+reset role;
+select pg_temp.login('00000000-0000-0000-0000-00000000000a');
+select is((select count(*) from public.audit_log where kind = 'call_option'), 1::bigint,
+          'subject sees the call_option event in audit_log');
 reset role;
 
 -- ------------------------------------------------------------ 3. no decrypt anywhere
