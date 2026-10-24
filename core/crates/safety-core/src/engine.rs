@@ -16,6 +16,9 @@ pub struct Engine {
     gait: GaitAnalyzer,
     impact: ImpactDetector,
     grab: GrabDetector,
+    /// An impact incident seen while the grab detector was armed: logged once the grab window lapses without a
+    /// confirmed grab (a yank that is actually a fall), dropped if the grab confirms (the wrench out of the hand is not a fall).
+    pending_impact: Option<(u64, String, f32, String)>,
     drift: DriftTracker,
     /// per-tick spike blocks (jerk / rotation / peak_g) for the live-metrics peak-hold
     spikes: SpikeTracker,
@@ -63,6 +66,7 @@ impl Engine {
             gait: GaitAnalyzer::new(&cfg.gait),
             impact: ImpactDetector::new(&cfg.impact),
             grab: GrabDetector::new(&cfg.grab),
+            pending_impact: None,
             drift: DriftTracker::new(),
             spikes: SpikeTracker::new(cfg.signals.spike_hold_s),
             voter: PlacementVoter::new(),
@@ -243,6 +247,12 @@ impl Engine {
 
     pub fn tick(&mut self, now_ms: u64) -> Vec<EngineEvent> {
         self.now_ms = now_ms;
+        if self.pending_impact.is_some() && !self.grab.is_armed(now_ms) {
+            let (t, summary, sd, raw) = self.pending_impact.take().unwrap();
+            if !self.grab.fired {
+                self.record_incident(IncidentKind::Impact, t, summary, sd, raw);
+            }
+        }
         let pending = std::mem::take(&mut self.pending);
         let full = self.ctx.sampling_full;
         for s in pending {
@@ -332,8 +342,6 @@ impl Engine {
             self.obs.impact = ev.fall_likelihood;
             self.obs.impact_peak_g = ev.peak_g;
         }
-        // Not gated on the grab detector being armed: a drop/fall while "in hand" also arms grab (jerk + rotation),
-        // and if the grab never confirms (no running away) the fall would otherwise vanish. If both fire, both are logged.
         if self.night_mode && ev.is_incident(&self.cfg.impact) {
             let summary = if ev.fall_likelihood >= 0.5 {
                 if ev.peak_g >= 4.0 { format!("Hard fall ({:.1} g)", ev.peak_g) } else { format!("Fall ({:.1} g)", ev.peak_g) }
@@ -345,6 +353,12 @@ impl Engine {
                 ev.peak_g, ev.free_fall_ms, ev.orientation_change_deg, ev.post_motion_rms, ev.fall_likelihood
             );
             let sd = self.bands.get("peak_g").map(|b| (ev.peak_g - b.mean) / b.sd.max(1e-6)).unwrap_or(0.0);
+            if self.grab.is_armed(ev.t_ms) {
+                // A drop/fall while "in hand" also arms the grab detector (jerk + rotation). Hold the impact until the
+                // grab window resolves: confirmed grab ⇒ discard, no grab ⇒ log the fall (see `tick`).
+                self.pending_impact = Some((ev.t_ms, summary, sd, raw));
+                return;
+            }
             self.record_incident(IncidentKind::Impact, ev.t_ms, summary, sd, raw);
             if ev.fall_likelihood < 0.5 {
                 // hard impact without a fall pattern: no full step below, so react now
@@ -407,6 +421,7 @@ impl Engine {
                         gr.jerk_g_per_s, gr.rotation_dps, gr.speed_mps, gr.running
                     );
                     let sd = self.bands.get("jerk").map(|b| (gr.jerk_g_per_s - b.mean) / b.sd.max(1e-6)).unwrap_or(0.0);
+                    self.pending_impact = None; // the wrench out of the hand is not a fall
                     self.record_incident(IncidentKind::Grab, gr.t_ms, summary.clone(), sd, raw);
                     let seq = self.log.sequence_summary(gr.t_ms).unwrap_or_else(|| summary.clone());
                     let ev = self.esc.grab(gr.t_ms, seq);
