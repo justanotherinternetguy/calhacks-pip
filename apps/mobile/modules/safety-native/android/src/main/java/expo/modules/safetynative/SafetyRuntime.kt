@@ -77,7 +77,7 @@ class SafetyRuntime private constructor(val app: Context) {
    * True while the personal dashboard is on screen (setDashboardStreaming). Forces FULL sampling and a 1 s engine
    * tick in SensingService; each tick is followed by a `dashboard` event so the UI never paints a stale snapshot.
    */
-  @Volatile var dashboardStreaming = false
+  @Volatile var dashboardStreamingOn = false
   /** Wall-clock time of the last engine tick (any loop); getDashboard re-ticks when this is older than 1 s. */
   @Volatile var lastTickMs = 0L
 
@@ -177,8 +177,8 @@ class SafetyRuntime private constructor(val app: Context) {
    */
   @Synchronized
   fun setDashboardStreaming(on: Boolean) {
-    if (dashboardStreaming == on) return
-    dashboardStreaming = on
+    if (dashboardStreamingOn == on) return
+    dashboardStreamingOn = on
     val svc = sensing
     val mode = if (on) "FULL (50 Hz + gyro, forced)" else "engine-requested (${if (samplingFull) "FULL" else "LOW"})"
     Log.i(TAG, "dashboard streaming ${if (on) "on" else "off"}: sampling $mode, tick ${if (on) "1 s" else "engine cadence"}${if (svc == null) ", service not running" else ""}")
@@ -214,7 +214,7 @@ class SafetyRuntime private constructor(val app: Context) {
    * something explicitly asks for the stream without a service — then it publishes whatever the engine holds.
    */
   fun syncTelemetryPublisher() {
-    if (sensing != null || telemetryOn || dashboardStreaming) telemetry.start() else telemetry.stop()
+    if (sensing != null || telemetryOn || dashboardStreamingOn) telemetry.start() else telemetry.stop()
   }
 
   /** Engine events (snake_case, CONTRACTS §7 `events`) since the previous call; clears the ring. */
@@ -253,7 +253,7 @@ class SafetyRuntime private constructor(val app: Context) {
     val events = engine.get().tick(now.toULong())
     lastTickMs = now
     dispatch(events)
-    if (emitDashboard && dashboardStreaming && sink != null) {
+    if (emitDashboard && dashboardStreamingOn && sink != null) {
       runCatching { emit("dashboard", dashboardMap()) }.onFailure { Log.w(TAG, "dashboard emit failed", it) }
     }
   }

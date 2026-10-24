@@ -78,7 +78,7 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
   private var netState = "idle"
 
   fun desiredHz(): Int = when {
-    rt.telemetryOn || rt.dashboardStreaming -> HZ_FAST
+    rt.telemetryOn || rt.dashboardStreamingOn -> HZ_FAST
     rt.nightActive -> HZ_SLOW
     else -> 0
   }
@@ -120,7 +120,7 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
 
   private fun rateReason() = when {
     rt.telemetryOn -> "telemetry on"
-    rt.dashboardStreaming -> "dashboard streaming"
+    rt.dashboardStreamingOn -> "dashboard streaming"
     else -> "night mode"
   }
 

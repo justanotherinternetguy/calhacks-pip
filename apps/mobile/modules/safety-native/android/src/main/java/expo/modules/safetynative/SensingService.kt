@@ -326,7 +326,7 @@ class SensingService : Service(), SensorEventListener {
             tickNow(now)
           }
         }.onFailure { Log.e(TAG, "day tick failed", it) }
-        delay(if (!rt.nightActive && (fullActive || rt.dashboardStreaming || rt.telemetryOn)) 1_000L else 60_000L)
+        delay(if (!rt.nightActive && (fullActive || rt.dashboardStreamingOn || rt.telemetryOn)) 1_000L else 60_000L)
       }
     }
   }
@@ -385,7 +385,7 @@ class SensingService : Service(), SensorEventListener {
 
   /** FULL when the engine asked for it, the dashboard or telemetry streams, during a baseline walk, or while learning gait on a daytime walk. */
   private fun effectiveFull(): Boolean =
-    rt.samplingFull || rt.dashboardStreaming || rt.telemetryOn || rt.baselineWalkStartMs != 0L || (activity == Activity.WALKING && rt.prefs.learningEnabled)
+    rt.samplingFull || rt.dashboardStreamingOn || rt.telemetryOn || rt.baselineWalkStartMs != 0L || (activity == Activity.WALKING && rt.prefs.learningEnabled)
 
   /**
    * (Re)registers the motion listeners for the current effective mode. Idempotent; safe from any thread
