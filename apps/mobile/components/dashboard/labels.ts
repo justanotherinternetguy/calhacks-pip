@@ -9,8 +9,8 @@ export const METRIC_LABEL: Record<string, { label: string; unit: string; digits:
   regularity: { label: 'Regularity', unit: '', digits: 2 },
   sway: { label: 'Sway', unit: '', digits: 3 },
   wobble: { label: 'Wobble', unit: '', digits: 3 },
-  jerk: { label: 'Jerk', unit: 'm/s³', digits: 2 },
-  rotation: { label: 'Rotation', unit: 'rad/s', digits: 2 },
+  jerk: { label: 'Jerk', unit: 'g/s', digits: 1 },
+  rotation: { label: 'Rotation', unit: '°/s', digits: 0 },
   peak_g: { label: 'Peak accel', unit: 'g', digits: 2 },
 };
 export const metricLabel = (name: string) => METRIC_LABEL[name] ?? { label: name.replace(/_/g, ' '), unit: '', digits: 2 };
