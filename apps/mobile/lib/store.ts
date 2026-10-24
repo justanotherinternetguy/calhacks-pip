@@ -4,6 +4,7 @@ import type { Status } from '@/modules/safety-native';
 import type { Group, GroupMember, Incident, IncidentEvent, Presence, Profile, Uuid } from './types';
 
 export type PendingCheck = { phrase: string; deadlineMs: number } | null;
+export type SnatchAlert = { summary: string; lat?: number; lng?: number; atMs: number } | null;
 
 type State = {
   session: Session | null;
@@ -11,6 +12,7 @@ type State = {
   onboarded: boolean;
   status: Status | null;
   pendingCheck: PendingCheck;
+  snatch: SnatchAlert;
   sosActive: boolean;
   groups: Group[];
   members: GroupMember[];
@@ -25,7 +27,7 @@ type State = {
 };
 
 const initial = {
-  session: null, profile: null, onboarded: false, status: null, pendingCheck: null, sosActive: false,
+  session: null, profile: null, onboarded: false, status: null, pendingCheck: null, snatch: null, sosActive: false,
   groups: [], members: [], presence: {}, profiles: {}, incidents: [], events: {},
 };
 

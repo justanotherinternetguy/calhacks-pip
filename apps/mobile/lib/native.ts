@@ -71,11 +71,17 @@ function wireEvents() {
       router.push({ pathname: '/check-in', params: { phrase: c.phrase, deadline: String(c.deadlineMs) } });
     }),
     SafetyNative.addListener('escalation', (e) => {
-      if (e.level === 'resolved' || e.level === 'idle') s({ pendingCheck: null });
+      // Anything past 'check' closes the check-in modal (the screen watches pendingCheck); resolved clears a snatch too.
+      if (e.level !== 'check') s({ pendingCheck: null });
+      if (e.level === 'resolved' || e.level === 'idle') s({ snatch: null });
       void refreshIncidents();
     }),
     SafetyNative.addListener('sos', (e) => s({ sosActive: e.active })),
-    SafetyNative.addListener('snatch', () => void refreshIncidents()),
+    SafetyNative.addListener('snatch', (e) => {
+      s({ snatch: { ...e, atMs: Date.now() }, pendingCheck: null });
+      router.push('/snatch');
+      void refreshIncidents();
+    }),
   ];
   SafetyNative.getStatus().then((status) => s({ status })).catch(() => {});
 }

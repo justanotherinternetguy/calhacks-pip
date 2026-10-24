@@ -13,20 +13,20 @@ export function Screen({ children, scroll = true, style }: { children: React.Rea
 }
 export const H1 = ({ children }: { children: React.ReactNode }) => <Text style={styles.h1}>{children}</Text>;
 export const H2 = ({ children }: { children: React.ReactNode }) => <Text style={styles.h2}>{children}</Text>;
-export const P = ({ children, muted, style }: { children: React.ReactNode; muted?: boolean; style?: any }) => (
-  <Text style={[styles.p, muted && { color: colors.muted }, style]}>{children}</Text>
+export const P = ({ children, muted, style, testID }: { children: React.ReactNode; muted?: boolean; style?: any; testID?: string }) => (
+  <Text testID={testID} style={[styles.p, muted && { color: colors.muted }, style]}>{children}</Text>
 );
 export const Card = ({ children, style, tint }: { children: React.ReactNode; style?: ViewProps['style']; tint?: string }) => (
   <View style={[styles.card, tint ? { borderColor: tint } : null, style]}>{children}</View>
 );
 export const Row = ({ children, style }: { children: React.ReactNode; style?: ViewProps['style'] }) => <View style={[styles.row, style]}>{children}</View>;
 
-export function Button({ title, onPress, kind = 'primary', disabled, loading, style }: {
-  title: string; onPress: () => void; kind?: 'primary' | 'danger' | 'ghost' | 'ok'; disabled?: boolean; loading?: boolean; style?: ViewProps['style'];
+export function Button({ title, onPress, kind = 'primary', disabled, loading, style, testID }: {
+  title: string; onPress: () => void; kind?: 'primary' | 'danger' | 'ghost' | 'ok'; disabled?: boolean; loading?: boolean; style?: ViewProps['style']; testID?: string;
 }) {
   const bg = { primary: colors.accent, danger: colors.danger, ghost: 'transparent', ok: colors.ok }[kind];
   return (
-    <Pressable onPress={onPress} disabled={disabled || loading}
+    <Pressable testID={testID} onPress={onPress} disabled={disabled || loading}
       style={({ pressed }) => [styles.btn, { backgroundColor: bg, opacity: disabled ? 0.4 : pressed ? 0.7 : 1 }, kind === 'ghost' && { borderWidth: 1, borderColor: colors.border }, style]}>
       {loading ? <ActivityIndicator color="white" /> : <Text style={[styles.btnText, kind === 'ghost' && { color: colors.text }]}>{title}</Text>}
     </Pressable>

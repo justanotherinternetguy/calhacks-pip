@@ -53,6 +53,9 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
         <Stack.Screen name="check-in" options={{ presentation: 'fullScreenModal', title: 'You okay?', headerShown: false }} />
+        <Stack.Screen name="snatch" options={{ presentation: 'fullScreenModal', title: 'Snatch alert', headerShown: false }} />
+        <Stack.Screen name="debug/inject" options={{ headerShown: false }} />
+        <Stack.Screen name="debug/friend-view" options={{ title: 'Friend view (demo)' }} />
         <Stack.Screen name="scan" options={{ presentation: 'modal', title: 'Scan friend QR' }} />
         <Stack.Screen name="incident/[id]" options={{ title: 'Incident' }} />
         <Stack.Screen name="unlock-approve/[requestId]" options={{ presentation: 'modal', title: 'Approve location unlock' }} />

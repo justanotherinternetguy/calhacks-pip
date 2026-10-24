@@ -27,7 +27,7 @@ export function SosButton({ onTrigger, active, onCancel }: { onTrigger: () => vo
   const scale = progress.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
   return (
     <View style={{ alignItems: 'center', gap: 12 }}>
-      <Pressable onPressIn={start} onPressOut={stop} onPress={active ? onCancel : undefined} accessibilityLabel={active ? 'Cancel SOS' : 'Hold for SOS'}>
+      <Pressable testID="sos-button" onPressIn={start} onPressOut={stop} onPress={active ? onCancel : undefined} accessibilityLabel={active ? 'SOS active, tap to cancel' : 'Hold for SOS'}>
         <Animated.View style={[styles.outer, { transform: [{ scale }], borderColor: active ? colors.danger : holding ? colors.warn : colors.border }]}>
           <Animated.View style={[styles.fill, { opacity: progress }]} />
           <Text style={styles.label}>{active ? 'SOS SENT' : 'SOS'}</Text>

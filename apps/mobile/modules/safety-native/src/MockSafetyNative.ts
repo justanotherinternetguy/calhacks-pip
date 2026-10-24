@@ -28,6 +28,7 @@ export class MockSafetyNative implements SafetyNativeModuleType {
   private baselineSeconds = 0;
   private sosActive = false;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private scenarioTimers: ReturnType<typeof setTimeout>[] = [];
   private status: Status = {
     nightMode: { active: false, reason: 'off' },
     engine: {
@@ -95,23 +96,31 @@ export class MockSafetyNative implements SafetyNativeModuleType {
   }
   async submitCheckIn(r: { phrase: string; typed: string }) {
     const ok = r.typed.trim().toLowerCase() === r.phrase.trim().toLowerCase();
-    this.push({ engine: { ...this.status.engine, escalation: ok ? 'idle' : 'check', pDanger: ok ? 0.05 : 0.7 } });
+    if (ok) this.clearScenario();
+    this.push({ engine: { ...this.status.engine, hmmState: ok ? 'normal' : this.status.engine.hmmState, escalation: ok ? 'idle' : 'check', pDanger: ok ? 0.05 : 0.7, evidence: ok ? 'mock: check-in dismissed, sensitivity lowered 30 min' : this.status.engine.evidence } });
+    if (ok) this.emit('escalation', { level: 'resolved', summary: 'Check-in dismissed' });
     return { accepted: ok, zScore: ok ? 0.3 : 2.4, reason: ok ? 'mock: phrase matched' : 'mock: phrase mismatch' };
   }
   async needHelp() {
+    this.clearScenario();
     this.push({ engine: { ...this.status.engine, escalation: 'unlocked', pDanger: 0.99, evidence: 'user asked for help' } });
     this.emit('escalation', { level: 'unlocked', summary: 'User tapped "I need help"' });
   }
   async triggerSos() {
+    this.clearScenario();
     this.sosActive = true;
     this.emit('sos', { active: true });
     this.push({ engine: { ...this.status.engine, escalation: 'unlocked', pDanger: 1, evidence: 'manual SOS' } });
     this.emit('escalation', { level: 'unlocked', summary: 'Manual SOS' });
   }
+  /** Biometric-gated stand-down for SOS, snatch and any running escalation. The mock always passes the biometric. */
   async cancelSos() {
+    this.clearScenario();
     this.sosActive = false;
     this.emit('sos', { active: false });
-    this.push({ engine: { ...this.status.engine, escalation: 'resolved', pDanger: 0.02, evidence: 'SOS cancelled' } });
+    this.push({ engine: { ...this.status.engine, hmmState: 'normal', escalation: 'resolved', pDanger: 0.02, evidence: 'mock: stood down by owner (biometric)' } });
+    this.emit('escalation', { level: 'resolved', summary: 'Stood down by owner' });
+    this.later(3_000, () => this.push({ engine: { ...this.status.engine, escalation: 'idle' } }));
     return true;
   }
   async startBaselineWalk() {
@@ -148,14 +157,94 @@ export class MockSafetyNative implements SafetyNativeModuleType {
   }
   async ringAlarm() {}
   async stopAlarm() {}
+  // ---- debug: scripted scenarios standing in for the native trace replay (e2e/*.yaml, docs/DEMO.md)
+
+  private later(ms: number, f: () => void) {
+    const t = setTimeout(() => { this.scenarioTimers = this.scenarioTimers.filter((x) => x !== t); f(); }, ms);
+    this.scenarioTimers.push(t);
+  }
+  private clearScenario() {
+    this.scenarioTimers.forEach(clearTimeout);
+    this.scenarioTimers = [];
+  }
+  private nightOn() {
+    if (this.status.nightMode.active) return;
+    this.mode = 'on';
+    this.push({ nightMode: { active: true, since: Date.now(), reason: 'away_from_home' }, engine: { ...this.status.engine, nightMode: true }, serviceRunning: true });
+  }
+  /** check → (deadline) heads-up → (+unlockAfterMs) unlocked. `stopAt` caps the chain. */
+  private runCheckChain(opts: { evidence: string; deadlineMs: number; stopAt: 'check' | 'heads_up' | 'unlocked'; unlockAfterMs?: number }) {
+    const phrases = ['blue river stone', 'quiet amber lane', 'soft copper wave', 'green paper moon'];
+    const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+    const deadline = Date.now() + opts.deadlineMs;
+    this.push({ engine: { ...this.status.engine, hmmState: 'incident', escalation: 'check', pDanger: 0.62, riskBand: 2, evidence: opts.evidence } });
+    this.emit('escalation', { level: 'check', summary: opts.evidence });
+    this.emit('checkRequested', { phrase, deadlineMs: deadline });
+    if (opts.stopAt === 'check') return;
+    this.later(opts.deadlineMs, () => {
+      const ev = `${opts.evidence}; no answer to check-in`;
+      this.push({ engine: { ...this.status.engine, hmmState: 'unresponsive', escalation: 'heads_up', pDanger: 0.78, riskBand: 3, evidence: ev } });
+      this.emit('escalation', { level: 'heads_up', summary: ev });
+      if (opts.stopAt === 'heads_up') return;
+      this.later(opts.unlockAfterMs ?? 8_000, () => {
+        const ev2 = `${ev}; still no movement`;
+        this.push({ engine: { ...this.status.engine, escalation: 'unlocked', pDanger: 0.93, evidence: ev2 } });
+        this.emit('escalation', { level: 'unlocked', summary: ev2 });
+      });
+    });
+  }
+
+  /**
+   * The native module replays a real {speed, motion[], context[], audio[]} trace through the Rust engine.
+   * The mock cannot, so it plays a scripted version keyed by `scenario` (or `trace`) name — the same names
+   * the e2e flows and the demo script use — on a 10x-style clock (90 s check-in deadline → 9 s).
+   */
   async injectTrace(json: string) {
-    // Demo helper: a trace with "scenario":"fall" simulates the escalation path via events.
-    let scenario = 'check';
+    let name = 'check';
     try {
-      scenario = JSON.parse(json).scenario ?? scenario;
+      const t = JSON.parse(json) as { scenario?: string; trace?: string; motion?: unknown[] };
+      name = t.scenario ?? t.trace ?? (t.motion?.length ? 'fall' : name);
     } catch {}
-    this.push({ engine: { ...this.status.engine, hmmState: 'incident', pDanger: 0.72, evidence: 'mock: hard fall, no movement 2 min' } });
-    this.emit('checkRequested', { phrase: 'blue river stone', deadlineMs: Date.now() + 90_000 });
-    if (scenario === 'snatch') this.emit('snatch', { summary: 'mock: phone snatched', lat: 42.35, lng: -71.1 });
+    const scenario = name.toLowerCase().replace(/[\s_]+/g, '-');
+    this.clearScenario();
+    this.nightOn();
+    // Give the status update a beat to land before events fire, like native would.
+    this.later(600, () => {
+      switch (scenario) {
+        case 'checkin-dismiss':
+        case 'check':
+        case 'checkin':
+        case 'check-in':
+          return this.runCheckChain({ evidence: 'mock: stumble, hard impact, then still 40 s', deadlineMs: 20_000, stopAt: 'unlocked', unlockAfterMs: 15_000 });
+        case 'heads-up':
+          return this.runCheckChain({ evidence: 'mock: hard fall, no movement 2 min', deadlineMs: 9_000, stopAt: 'heads_up' });
+        case 'unlock-map':
+        case 'unlock':
+        case 'unlocked':
+          return this.runCheckChain({ evidence: 'mock: hard fall, no movement 4 min', deadlineMs: 9_000, stopAt: 'unlocked', unlockAfterMs: 6_000 });
+        case 'fall':
+        case 'drunk':
+        case 'still':
+          return this.runCheckChain({ evidence: `mock: ${scenario} trace`, deadlineMs: 9_000, stopAt: 'unlocked', unlockAfterMs: 8_000 });
+        case 'snatch': {
+          const summary = 'mock: jerk in hand, running cadence, separated from group';
+          this.push({ engine: { ...this.status.engine, hmmState: 'incident', escalation: 'snatch', pDanger: 0.9, riskBand: 3, placement: 'hand', evidence: summary } });
+          this.emit('snatch', { summary, lat: 42.3505, lng: -71.1054 });
+          this.emit('escalation', { level: 'snatch', summary });
+          return;
+        }
+        case 'manual-sos':
+        case 'sos':
+          // Night out, nothing detected: the user holds the button themselves.
+          return this.push({ engine: { ...this.status.engine, hmmState: 'normal', escalation: 'idle', pDanger: 0.05, riskBand: 1, evidence: 'mock: walking home, nothing unusual' } });
+        case 'resolve':
+        case 'reset':
+        case 'idle':
+          return void this.cancelSos();
+        default:
+          console.warn(`[SafetyNative mock] unknown scenario "${name}", playing a check-in`);
+          return this.runCheckChain({ evidence: `mock: ${name}`, deadlineMs: 20_000, stopAt: 'unlocked', unlockAfterMs: 15_000 });
+      }
+    });
   }
 }
