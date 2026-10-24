@@ -332,7 +332,9 @@ impl Engine {
             self.obs.impact = ev.fall_likelihood;
             self.obs.impact_peak_g = ev.peak_g;
         }
-        if self.night_mode && ev.is_incident(&self.cfg.impact) && !self.grab.is_armed(ev.t_ms) {
+        // Not gated on the grab detector being armed: a drop/fall while "in hand" also arms grab (jerk + rotation),
+        // and if the grab never confirms (no running away) the fall would otherwise vanish. If both fire, both are logged.
+        if self.night_mode && ev.is_incident(&self.cfg.impact) {
             let summary = if ev.fall_likelihood >= 0.5 {
                 if ev.peak_g >= 4.0 { format!("Hard fall ({:.1} g)", ev.peak_g) } else { format!("Fall ({:.1} g)", ev.peak_g) }
             } else {
