@@ -1,3 +1,4 @@
+import '@/lib/polyfills';
 import React, { useEffect, useState } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -34,7 +35,7 @@ export default function RootLayout() {
     readOnboarded().then((o) => useStore.getState().set({ onboarded: o }));
     supabase.auth.getSession()
       .then(async ({ data }) => onAuthSession(data.session ?? ((await hasDemoFlag()) ? makeDemoSession() : null)))
-      .catch((e) => console.warn('session restore', e))
+      .catch((e) => console.warn('session restore', e?.stack ?? e))
       .finally(() => setReady(true));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => void onAuthSession(s));
     return () => { sub.subscription.unsubscribe(); off(); };
