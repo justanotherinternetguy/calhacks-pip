@@ -1,0 +1,71 @@
+# Minimal Supabase CLI config for local dev. `npx supabase start` reads this.
+project_id = "safe"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.migrations]
+enabled = true
+
+[realtime]
+enabled = true
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+enabled = true
+port = 54324
+
+[storage]
+enabled = false
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3000"
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+
+[auth.sms]
+enable_signup = true
+enable_confirmations = true
+
+[auth.sms.test_otp]
+# Dev-only fixed OTPs so the app can log in without an SMS provider.
+"+15555550100" = "123456"
+"+15555550101" = "123456"
+
+[edge_runtime]
+enabled = true
+policy = "per_worker"
+inspector_port = 8083
+
+# Edge functions. `verify_jwt = false` for the ones pg_cron / the watchdog call
+# with the service-role key; they verify the caller themselves.
+[functions.push]
+verify_jwt = true
+[functions.watchdog]
+verify_jwt = false
+[functions.proximity]
+verify_jwt = false
+[functions.unlock]
+verify_jwt = true
+[functions.purge]
+verify_jwt = false
+[functions.config]
+verify_jwt = false
