@@ -67,7 +67,7 @@ export default function Friends() {
             </Row>
             {ms.map((m) => (
               <Row key={m.user_id} style={{ justifyContent: 'space-between' }}>
-                <P>{profiles[m.user_id]?.display_name ?? m.user_id.slice(0, 8)}{m.user_id === userId ? ' (you)' : ''}</P>
+                <P>{profiles[m.user_id]?.display_name || m.user_id.slice(0, 8)}{m.user_id === userId ? ' (you)' : ''}</P>
                 <Pill text={m.status} color={m.status === 'active' ? colors.ok : colors.warn} />
               </Row>
             ))}

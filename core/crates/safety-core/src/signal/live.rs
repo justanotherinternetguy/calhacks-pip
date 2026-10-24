@@ -37,8 +37,10 @@ impl Bands {
             let fi = METRIC_FEATURE[mi];
             let (mean, sd) = b.band_stats(bcfg, placement, fi);
             let value = vals[fi];
-            let sd_distance = if f.full { (value - mean) / sd.max(1e-6) } else { 0.0 };
+            // Gait metrics only mean something while walking (standing still is not "-11 SD of cadence"), and
+            // gyro metrics need a gyro: a metric that is not evaluable reports distance 0 and in band.
             let evaluable = f.full && (f.is_walking || mi >= 5) && (f.has_gyro || (mi != 4 && mi != 6));
+            let sd_distance = if evaluable { (value - mean) / sd.max(1e-6) } else { 0.0 };
             let in_band = !evaluable || Self::within(mi, sd_distance, k);
             out.push(MetricBand { name: (*name).to_string(), value, mean, sd, sd_distance, in_band });
         }

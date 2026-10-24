@@ -22,15 +22,15 @@ type Listener = (e: never) => void;
 /** Which scripted scenario is colouring the fake live metrics right now (§6 dashboard). */
 type MetricScenario = 'idle' | 'drunk' | 'fall' | 'snatch' | 'still';
 
-/** Population-default baselines (walking, pocket). Units: cadence steps/min, peak_g g, jerk m/s³, rotation rad/s, rest unitless. */
+/** Population-default baselines (walking, pocket). Units: cadence steps/min, peak_g g, jerk g/s, rotation °/s, rest unitless. */
 const BASELINES: { name: string; mean: number; sd: number; noise: number }[] = [
   { name: 'cadence', mean: 108, sd: 6, noise: 0.6 },
   { name: 'stride_cv', mean: 0.06, sd: 0.015, noise: 0.5 },
   { name: 'regularity', mean: 0.82, sd: 0.05, noise: 0.5 },
   { name: 'sway', mean: 0.12, sd: 0.03, noise: 0.6 },
   { name: 'wobble', mean: 0.08, sd: 0.025, noise: 0.6 },
-  { name: 'jerk', mean: 1.6, sd: 0.4, noise: 0.5 },
-  { name: 'rotation', mean: 0.9, sd: 0.3, noise: 0.5 },
+  { name: 'jerk', mean: 8, sd: 14, noise: 0.5 },
+  { name: 'rotation', mean: 40, sd: 87.5, noise: 0.5 },
   { name: 'peak_g', mean: 1.25, sd: 0.12, noise: 0.4 },
 ];
 /** Per-scenario drift in SD units, applied on top of noise (gait_drift for drunk, grab signature for snatch, …). */

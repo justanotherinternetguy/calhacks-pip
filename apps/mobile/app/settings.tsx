@@ -18,51 +18,25 @@ export default function Settings() {
   const [end, setEnd] = useState('6');
 
   // §7 telemetry publisher: default on (native starts it once configured); poll the status while this screen is open.
-  const [telemetry, setTelemetry] = useState(true);
+  const telemetry = useNativeSwitch(() => SafetyNative.getTelemetryStatus().then((s) => s.on), SafetyNative.setTelemetry, 'Telemetry', 'This build cannot stream telemetry.');
   const [telemetryStatus, setTelemetryStatus] = useState<TelemetryStatus | null>(null);
-  const [telemetryError, setTelemetryError] = useState<string | null>(null);
+  const telemetryError = telemetry.error;
   useEffect(() => {
     let alive = true;
-    const load = () => SafetyNative.getTelemetryStatus()
-      .then((s) => { if (alive) { setTelemetryStatus(s); setTelemetry(s.on); setTelemetryError(null); } })
-      .catch((e: unknown) => { if (alive) setTelemetryError(e instanceof Error ? e.message : 'not supported by this build'); });
+    const load = () => SafetyNative.getTelemetryStatus().then((s) => { if (alive) setTelemetryStatus(s); }).catch(() => {});
     load();
     const t = setInterval(load, 5_000);
     return () => { alive = false; clearInterval(t); };
   }, []);
-  const toggleTelemetry = async (v: boolean) => {
-    setTelemetry(v);
-    try { await SafetyNative.setTelemetry(v); } catch (e: unknown) {
-      setTelemetry(!v);
-      Alert.alert('Telemetry', e instanceof Error ? e.message : 'This build cannot stream telemetry.');
-    }
-  };
   const telemetryHint = telemetryError
     ? `Unavailable: ${telemetryError}`
     : telemetryStatus
       ? `${telemetryStatus.on ? `${telemetryStatus.hz} Hz` : 'off'} · last sent ${telemetryStatus.lastSentMs ? new Date(telemetryStatus.lastSentMs).toLocaleTimeString() : '—'}${telemetryStatus.failures ? ` · ${telemetryStatus.failures} failed` : ''}`
       : 'Checking…';
 
-  // Demo sensitivity: live engine on the bundled model-demo.toml (lenient thresholds). Reads the switch once; older
-  // builds without the method just show the card as unavailable.
-  const [demo, setDemo] = useState(false);
-  const [demoError, setDemoError] = useState<string | null>(null);
+  // Demo sensitivity: live engine on the bundled model-demo.toml (lenient thresholds).
+  const demo = useNativeSwitch(SafetyNative.getDemoSensitivity, SafetyNative.setDemoSensitivity, 'Demo sensitivity', 'This build cannot switch the model config.');
   const [demoHelp, setDemoHelp] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    Promise.resolve()
-      .then(() => SafetyNative.getDemoSensitivity())
-      .then((on) => { if (alive) { setDemo(on); setDemoError(null); } })
-      .catch((e: unknown) => { if (alive) setDemoError(e instanceof Error ? e.message : 'not supported by this build'); });
-    return () => { alive = false; };
-  }, []);
-  const toggleDemo = async (v: boolean) => {
-    setDemo(v);
-    try { await SafetyNative.setDemoSensitivity(v); } catch (e: unknown) {
-      setDemo(!v);
-      Alert.alert('Demo sensitivity', e instanceof Error ? e.message : 'This build cannot switch the model config.');
-    }
-  };
 
   const saveWindow = () => SafetyNative.setEveningWindow(Number(start) || 20, Number(end) || 6).then(() => Alert.alert('Saved'));
   const inject = async () => {
@@ -108,15 +82,15 @@ export default function Settings() {
       </Card>
       <Card>
         <H2>Live telemetry</H2>
-        <Toggle label="Stream telemetry to monitor" hint="Motion metrics, state probabilities and engine events go to your group's web monitor in real time (4 Hz). Location is never included." value={telemetry} onChange={(v) => void toggleTelemetry(v)} />
+        <Toggle label="Stream telemetry to monitor" hint="Motion metrics, state probabilities and engine events go to your group's web monitor in real time (4 Hz). Location is never included." value={telemetry.value} onChange={(v) => void telemetry.toggle(v)} />
         <P muted style={{ fontSize: 13 }}>{telemetryHint}</P>
       </Card>
       <Card>
         <H2>Demo sensitivity</H2>
-        <Toggle label="Demo sensitivity" hint="Lenient thresholds so incidents can be triggered by hand in a room. Trades false alarms for reproducibility; turn off after the demo." value={demo} onChange={(v) => void toggleDemo(v)} />
-        {demoError ? <P muted style={{ fontSize: 13 }}>Unavailable: {demoError}</P> : (
+        <Toggle label="Demo sensitivity" hint="Lenient thresholds so incidents can be triggered by hand in a room. Trades false alarms for reproducibility; turn off after the demo." value={demo.value} onChange={(v) => void demo.toggle(v)} />
+        {demo.error ? <P muted style={{ fontSize: 13 }}>Unavailable: {demo.error}</P> : (
           <P muted style={{ fontSize: 13 }}>
-            Changes: impact at 1.8 g (normally 2.5) · grab = sharp yank + twist, then 2 s of jogging (normally 4 s) · gait drift after 10 s (normally 30) · check-in window 30 s (normally 90) · unlock 30 s after no response (normally 120).{demo ? ' Your server model stays saved and comes back when this is off.' : ''}
+            Lower thresholds and shorter timers, taken from the bundled demo config; the trigger guide below lists them. Your server model stays saved and comes back when this is off.
           </P>
         )}
         <Button title={demoHelp ? 'Hide: how to trigger' : 'How to trigger'} kind="ghost" onPress={() => setDemoHelp((h) => !h)} />
@@ -143,4 +117,30 @@ export default function Settings() {
       <Button title="Sign out" kind="danger" onPress={signOut} />
     </Screen>
   );
+}
+
+/**
+ * An optimistic on/off switch backed by a native getter/setter. Reads once on mount; older builds without the
+ * method (a synchronous throw) land in the same error path and the caller shows the card as unavailable.
+ */
+function useNativeSwitch(get: () => Promise<boolean>, set: (on: boolean) => Promise<void>, title: string, unsupported: string) {
+  const [value, setValue] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    Promise.resolve()
+      .then(get)
+      .then((on) => { if (alive) { setValue(on); setError(null); } })
+      .catch((e: unknown) => { if (alive) setError(e instanceof Error ? e.message : 'not supported by this build'); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const toggle = async (on: boolean) => {
+    setValue(on);
+    try { await set(on); } catch (e: unknown) {
+      setValue(!on);
+      Alert.alert(title, e instanceof Error ? e.message : unsupported);
+    }
+  };
+  return { value, error, toggle };
 }

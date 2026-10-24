@@ -54,7 +54,7 @@ export default function MonitorScreen() {
   const devices = useDeviceStatus(memberIds);
   const feed = useActivityFeed(memberIds);
   const active = useMemo(() => activeIncidents(incidents), [incidents]);
-  const name = useCallback((id: string | null | undefined) => (id ? profiles[id]?.display_name ?? `Friend ${id.slice(0, 6)}` : 'Nobody'), [profiles]);
+  const name = useCallback((id: string | null | undefined) => (id ? profiles[id]?.display_name || `Friend ${id.slice(0, 6)}` : 'Nobody'), [profiles]);
 
   // Sound: on by default, remembered per browser. Toggling is the user gesture that unlocks WebAudio.
   const [soundOn, setSoundOn] = useState(() => {

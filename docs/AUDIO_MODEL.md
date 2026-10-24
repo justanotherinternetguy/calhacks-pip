@@ -17,7 +17,7 @@ Android: `assets.srcDirs = ['src/main/assets']` in `android/build.gradle`, and
 `androidResources { noCompress 'tflite' }` keeps aapt from deflating the model. That setting is required:
 the Kotlin code memory-maps the asset through `openFd()`, which only works for uncompressed assets.
 `.csv` is on aapt's default no-compress list, and it is read through a plain stream anyway.
-The `copyModelConfig` Gradle task only copies `model-v1.toml`; it never touches the YAMNet files.
+The `copyModelConfig` Gradle task only copies `core/config/model-*.toml`; it never touches the YAMNet files.
 
 iOS: `SafetyNative.podspec` declares `s.resources = 'Resources/*.{tflite,csv,caf,wav,toml}'` whenever the
 `Resources/` directory is non-empty, so both files land in the app bundle on the next `pod install`.

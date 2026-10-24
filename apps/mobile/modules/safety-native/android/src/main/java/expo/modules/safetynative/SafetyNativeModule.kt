@@ -168,7 +168,7 @@ class SafetyNativeModule : Module() {
 
     // ---- demo sensitivity (Settings): live engine on assets/model-demo.toml, normal model kept on disk ----
     AsyncFunction("setDemoSensitivity") { on: Boolean -> rt.engine.setDemoSensitivity(on) }
-    AsyncFunction("getDemoSensitivity") { rt.engine.isDemoSensitivity() }
+    AsyncFunction("getDemoSensitivity") { rt.prefs.demoSensitivity }
 
     // ---- check-in / SOS ------------------------------------------------------
 

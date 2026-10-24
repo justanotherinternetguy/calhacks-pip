@@ -22,7 +22,6 @@ MODULE_DIR="$REPO_DIR/apps/mobile/modules/safety-native"
 ANDROID_DIR="$MODULE_DIR/android/src/main"
 IOS_DIR="$MODULE_DIR/ios"
 MIRROR_DIR="$CORE_DIR/target/mobile"
-MODEL_TOML="$CORE_DIR/config/model-v1.toml"
 CRATE="safety-ffi"
 LIB="libsafety_ffi"
 NAMESPACE="safety"
@@ -75,10 +74,10 @@ ensure_tool() {
 copy_model() {
   local dest_dir="$1"
   mkdir -p "$dest_dir"
-  if [[ -f "$MODEL_TOML" ]]; then
-    cp "$MODEL_TOML" "$dest_dir/model-v1.toml"
+  if compgen -G "$CORE_DIR/config/model-*.toml" > /dev/null; then
+    cp "$CORE_DIR"/config/model-*.toml "$dest_dir/"
   else
-    warn "config/model-v1.toml not found; skipping model copy to $dest_dir"
+    warn "config/model-*.toml not found; skipping model copy to $dest_dir"
   fi
 }
 

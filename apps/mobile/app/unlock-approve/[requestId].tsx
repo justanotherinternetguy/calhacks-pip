@@ -35,8 +35,8 @@ export default function UnlockApprove() {
     } catch (e: any) { Alert.alert('Approval failed', e.message); } finally { setBusy(false); }
   };
 
-  const who = req ? profiles[req.requester_id]?.display_name ?? 'A friend' : '';
-  const subject = incident ? profiles[incident.user_id]?.display_name ?? 'your friend' : '';
+  const who = req ? profiles[req.requester_id]?.display_name || 'A friend' : '';
+  const subject = incident ? profiles[incident.user_id]?.display_name || 'your friend' : '';
   return (
     <Screen style={{ justifyContent: 'center' }}>
       <H1>Unlock {subject}'s location?</H1>

@@ -22,7 +22,7 @@ export default function History() {
       {incidents.map((i) => (
         <Card key={i.id}>
           <Row style={{ justifyContent: 'space-between' }}>
-            <P style={{ fontWeight: '700' }}>{i.user_id === userId ? 'You' : profiles[i.user_id]?.display_name ?? 'Friend'}</P>
+            <P style={{ fontWeight: '700' }}>{i.user_id === userId ? 'You' : profiles[i.user_id]?.display_name || 'Friend'}</P>
             <Pill text={i.resolved_at ? 'resolved' : i.level} color={levelColor(i.resolved_at ? 'resolved' : i.level)} />
           </Row>
           <P muted>{format(new Date(i.opened_at), 'EEE d MMM, HH:mm')} · {i.summary ?? ''}</P>
@@ -34,7 +34,7 @@ export default function History() {
       {audit.map((a) => (
         <Card key={a.id}>
           <P>{a.kind}</P>
-          <P muted>{format(new Date(a.created_at), 'd MMM HH:mm')} · by {a.actor_id ? profiles[a.actor_id]?.display_name ?? a.actor_id.slice(0, 8) : 'system'}</P>
+          <P muted>{format(new Date(a.created_at), 'd MMM HH:mm')} · by {a.actor_id ? profiles[a.actor_id]?.display_name || a.actor_id.slice(0, 8) : 'system'}</P>
         </Card>
       ))}
     </Screen>

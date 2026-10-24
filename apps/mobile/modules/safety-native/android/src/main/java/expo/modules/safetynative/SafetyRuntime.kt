@@ -261,12 +261,11 @@ class SafetyRuntime private constructor(val app: Context) {
   /** Called from the sensing service's tick loops (via [runTick]) and the trace injector. */
   fun dispatch(events: List<EngineEvent>) {
     for (ev in events) {
-      synchronized(eventRing) { eventRing.addLast(eventName(ev)); while (eventRing.size > EVENT_RING_MAX) eventRing.removeFirst() }
-      when (ev) {
-        is EngineEvent.SamplingRateChanged, is EngineEvent.LocationIntervalChanged -> {}
-        is EngineEvent.SignalIncident -> Log.i(TAG, "incident: ${incidentKindName(ev.record.kind)} ${"%.1f".format(ev.record.sdDistance)} SD — ${ev.record.summary}")
-        else -> Log.i(TAG, "engine event: ${eventName(ev)}")
-      }
+      val name = eventName(ev)
+      synchronized(eventRing) { eventRing.addLast(name); while (eventRing.size > EVENT_RING_MAX) eventRing.removeFirst() }
+      // Sampling/interval changes are logged where they are applied; everything else is a rare transition worth a line.
+      if (ev is EngineEvent.SignalIncident) Log.i(TAG, "incident: ${incidentKindName(ev.record.kind)} ${"%.1f".format(ev.record.sdDistance)} SD — ${ev.record.summary}")
+      else if (ev !is EngineEvent.SamplingRateChanged && ev !is EngineEvent.LocationIntervalChanged) Log.i(TAG, "engine event: $name")
       try { handle(ev) } catch (e: Throwable) { Log.e(TAG, "event $ev failed", e) }
     }
     if (events.isNotEmpty()) emitStatus()
