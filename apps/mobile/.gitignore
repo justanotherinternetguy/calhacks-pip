@@ -13,3 +13,6 @@ web-build/
 .env
 .env.*
 !.env.example
+# Firebase / Apple push credentials (per-developer, see docs/PUSH_SETUP.md)
+google-services.json
+GoogleService-Info.plist

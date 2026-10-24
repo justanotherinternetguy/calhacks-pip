@@ -8,6 +8,7 @@ import { SafetyNative } from '@/modules/safety-native';
 import { supabase } from './supabase';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from './env';
 import { setDemoFlag } from './demo';
+import { registerPushToken, unregisterPushToken } from './push';
 import { fn, listMyGroups, getDevicesForUsers, getProfiles, getPresence, listIncidents, subscribe, upsertDevice, rpc } from './db';
 import { useStore } from './store';
 import type { Incident, IncidentEvent, Presence } from './types';
@@ -39,7 +40,7 @@ async function modelConfigToml(): Promise<string> {
 export async function onAuthSession(session: Session | null) {
   const store = useStore.getState();
   store.set({ session });
-  if (!session) { configuredFor = null; teardown(); store.reset(); return; }
+  if (!session) { configuredFor = null; unregisterPushToken(); teardown(); store.reset(); return; }
 
   if (configuredFor === session.user.id) {
     await SafetyNative.setAccessToken(session.access_token);
@@ -58,6 +59,8 @@ export async function onAuthSession(session: Session | null) {
       x25519_pub: id.x25519Pub, ed25519_pub: id.ed25519Pub,
     });
   } catch (e) { console.warn('device upsert failed', e); }
+  // Push token (FCM/APNs) onto the same devices row so friends' 'ring' / heads-up pushes reach this phone. Fail-soft.
+  void registerPushToken(session.user.id, devId);
   wireEvents();
   try { await refreshAll(); } catch (e) { console.warn('refreshAll failed (offline/demo?)', e); }
   try { wireRealtime(session.user.id); } catch (e) { console.warn('realtime failed', e); }

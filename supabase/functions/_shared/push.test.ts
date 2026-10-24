@@ -12,6 +12,7 @@ import {
   makeGoogleJwt,
   pemToDer,
   sendToDevices,
+  stringifyData,
 } from "./push.ts";
 
 const input = {
@@ -70,6 +71,28 @@ Deno.test("buildFcmMessage: high priority on alarm channel, data all strings", (
   assertEquals(m.message.android.notification.notification_priority, "PRIORITY_MAX");
   for (const v of Object.values(m.message.data)) assertEquals(typeof v, "string");
   assertEquals(m.message.data.critical, "true");
+});
+
+Deno.test("data carries incidentId, kind and route on both transports (app deep-links on them)", () => {
+  const d = stringifyData(input);
+  assertEquals(d.incidentId, "inc-1");
+  assertEquals(d.kind, "heads_up");
+  assertEquals(d.route, "/incident/inc-1", "defaults to the incident screen");
+
+  const fcm = buildFcmMessage("tok", input) as { message: { data: Record<string, string> } };
+  assertEquals(fcm.message.data.incidentId, "inc-1");
+  assertEquals(fcm.message.data.kind, "heads_up");
+  assertEquals(fcm.message.data.route, "/incident/inc-1");
+
+  const apns = buildApnsPayload(input) as Record<string, unknown>;
+  assertEquals(apns.route, "/incident/inc-1");
+
+  // Explicit route (friend 'ring' sends the subject to /home) overrides the default; null/undefined are dropped.
+  const ring = stringifyData({ ...input, kind: "ring", data: { route: "/home", skip: undefined, gone: null } });
+  assertEquals(ring.route, "/home");
+  assertEquals(ring.kind, "ring");
+  assertEquals("skip" in ring, false);
+  assertEquals("gone" in ring, false);
 });
 
 Deno.test("makeApnsJwt: ES256 header/claims and verifiable signature", async () => {

@@ -149,9 +149,24 @@ export async function makeGoogleJwt(opts: {
 }
 
 // ---------------------------------------------------------------- payloads
-function stringifyData(input: PushInput): Record<string, string> {
-  const out: Record<string, string> = { incidentId: input.incidentId, kind: input.kind };
+/** Where the app navigates when the user taps the notification (expo-router path). */
+export function defaultRoute(input: Pick<PushInput, "incidentId" | "kind">): string {
+  return `/incident/${input.incidentId}`;
+}
+
+/**
+ * Flat string map shared by APNs and FCM. Always carries `incidentId`, `kind`
+ * and `route` so the app can react (ring the phone, deep-link) without
+ * trusting the human-readable title/body. Caller-supplied `data` wins.
+ */
+export function stringifyData(input: PushInput): Record<string, string> {
+  const out: Record<string, string> = {
+    incidentId: input.incidentId,
+    kind: input.kind,
+    route: defaultRoute(input),
+  };
   for (const [k, v] of Object.entries(input.data ?? {})) {
+    if (v === undefined || v === null) continue;
     out[k] = typeof v === "string" ? v : JSON.stringify(v);
   }
   return out;
