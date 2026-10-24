@@ -43,6 +43,27 @@ export default function Settings() {
       ? `${telemetryStatus.on ? `${telemetryStatus.hz} Hz` : 'off'} · last sent ${telemetryStatus.lastSentMs ? new Date(telemetryStatus.lastSentMs).toLocaleTimeString() : '—'}${telemetryStatus.failures ? ` · ${telemetryStatus.failures} failed` : ''}`
       : 'Checking…';
 
+  // Demo sensitivity: live engine on the bundled model-demo.toml (lenient thresholds). Reads the switch once; older
+  // builds without the method just show the card as unavailable.
+  const [demo, setDemo] = useState(false);
+  const [demoError, setDemoError] = useState<string | null>(null);
+  const [demoHelp, setDemoHelp] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    Promise.resolve()
+      .then(() => SafetyNative.getDemoSensitivity())
+      .then((on) => { if (alive) { setDemo(on); setDemoError(null); } })
+      .catch((e: unknown) => { if (alive) setDemoError(e instanceof Error ? e.message : 'not supported by this build'); });
+    return () => { alive = false; };
+  }, []);
+  const toggleDemo = async (v: boolean) => {
+    setDemo(v);
+    try { await SafetyNative.setDemoSensitivity(v); } catch (e: unknown) {
+      setDemo(!v);
+      Alert.alert('Demo sensitivity', e instanceof Error ? e.message : 'This build cannot switch the model config.');
+    }
+  };
+
   const saveWindow = () => SafetyNative.setEveningWindow(Number(start) || 20, Number(end) || 6).then(() => Alert.alert('Saved'));
   const inject = async () => {
     const r = await DocumentPicker.getDocumentAsync({ type: 'application/json' });
@@ -89,6 +110,24 @@ export default function Settings() {
         <H2>Live telemetry</H2>
         <Toggle label="Stream telemetry to monitor" hint="Motion metrics, state probabilities and engine events go to your group's web monitor in real time (4 Hz). Location is never included." value={telemetry} onChange={(v) => void toggleTelemetry(v)} />
         <P muted style={{ fontSize: 13 }}>{telemetryHint}</P>
+      </Card>
+      <Card>
+        <H2>Demo sensitivity</H2>
+        <Toggle label="Demo sensitivity" hint="Lenient thresholds so incidents can be triggered by hand in a room. Trades false alarms for reproducibility; turn off after the demo." value={demo} onChange={(v) => void toggleDemo(v)} />
+        {demoError ? <P muted style={{ fontSize: 13 }}>Unavailable: {demoError}</P> : (
+          <P muted style={{ fontSize: 13 }}>
+            Changes: impact at 1.8 g (normally 2.5) · grab = sharp yank + twist, then 2 s of jogging (normally 4 s) · gait drift after 10 s (normally 30) · check-in window 30 s (normally 90) · unlock 30 s after no response (normally 120).{demo ? ' Your server model stays saved and comes back when this is off.' : ''}
+          </P>
+        )}
+        <Button title={demoHelp ? 'Hide: how to trigger' : 'How to trigger'} kind="ghost" onPress={() => setDemoHelp((h) => !h)} />
+        {demoHelp && (
+          <>
+            <P style={{ fontSize: 14 }}>Fall: phone in a pocket, drop onto a couch or bed and lie still for about 30 s.</P>
+            <P style={{ fontSize: 14 }}>Grab: screen on, phone in hand; yank it away sharply with a twist, then jog for 2 to 3 s.</P>
+            <P style={{ fontSize: 14 }}>Gait drift: walk for 10 s or more very slowly or staggering.</P>
+            <P style={{ fontSize: 14 }}>Check-in: wait for "You okay?" and do not answer for 30 s. Friends get a heads-up, then the location unlocks.</P>
+          </>
+        )}
       </Card>
       <Card>
         <H2>Debug</H2>

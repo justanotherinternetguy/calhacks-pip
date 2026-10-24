@@ -45,8 +45,19 @@ class EngineHolder(private val context: Context, private val prefs: Prefs) {
   @Synchronized
   fun get(): SafetyEngine = engine ?: createFromPersisted().also { engine = it }
 
-  /** Persisted config first; if it no longer parses (older schema), drop it and use the bundled model-v1.toml. */
+  /**
+   * Demo sensitivity (if on) wins over everything, so the override survives restarts. Otherwise the persisted config
+   * first; if it no longer parses (older schema), drop it and use the bundled model-v1.toml.
+   */
   private fun createFromPersisted(): SafetyEngine {
+    if (prefs.demoSensitivity) {
+      try {
+        return create(demoConfigToml())
+      } catch (e: EngineException) {
+        Log.w(TAG, "model-demo.toml rejected (${e.message}); demo sensitivity off, using the normal config")
+        prefs.demoSensitivity = false
+      }
+    }
     if (modelFile.exists()) {
       try {
         return create(modelFile.readText())
@@ -61,24 +72,63 @@ class EngineHolder(private val context: Context, private val prefs: Prefs) {
   fun snapshotOrNull(): Snapshot? = try { engine?.snapshot() } catch (e: Throwable) { null }
 
   /**
-   * Replace the model config (from `configure`). Re-creates the engine, carrying the baseline over.
-   * The new engine is built *before* the old one is closed: `SafetyEngine(...)` throws
-   * `EngineException.Config` on bad TOML, and a closed uniffi object throws on every later call,
-   * so a failed swap must leave the live engine (and the persisted config) untouched.
+   * Replace the model config (from `configure`, every launch) and persist it as the normal model. While demo
+   * sensitivity is on, the server TOML is only stored: the live engine stays on the demo override, and the
+   * stored file is what `setDemoSensitivity(false)` restores.
    */
   @Synchronized
   fun setConfigToml(toml: String) {
     if (toml.isBlank()) return
+    if (prefs.demoSensitivity) {
+      modelFile.writeText(toml)
+      Log.i(TAG, "demo sensitivity on: server config stored, live engine keeps the demo override")
+      return
+    }
+    applyConfig(toml, persist = true)
+  }
+
+  /**
+   * "Demo sensitivity" switch (Settings): on → the live engine runs assets/model-demo.toml (a partial file the Rust
+   * side deep-merges over the bundled defaults) without touching the persisted normal model; off → back to the
+   * persisted server config, or the bundled model-v1.toml if none. The pref is written only once the swap succeeded.
+   */
+  @Synchronized
+  fun setDemoSensitivity(on: Boolean) {
+    applyConfig(if (on) demoConfigToml() else normalConfigToml(), persist = false)
+    prefs.demoSensitivity = on
+    Log.i(
+      TAG,
+      if (on) "demo sensitivity on: impact 1.8 g, grab jerk 20 g/s + 2 s confirm, gait drift 10 s, check-in 30 s, unlock 30 s after no response"
+      else "demo sensitivity off: normal thresholds (${if (modelFile.exists()) "persisted server config" else "bundled model-v1.toml"})",
+    )
+  }
+
+  fun isDemoSensitivity(): Boolean = prefs.demoSensitivity
+
+  /**
+   * Re-creates the engine on `toml`, carrying the baseline over. The new engine is built *before* the old one is
+   * closed: `SafetyEngine(...)` throws `EngineException.Config` on bad TOML, and a closed uniffi object throws on
+   * every later call, so a failed swap must leave the live engine (and the persisted config) untouched.
+   * `persist` writes the TOML to files/model.toml as the normal model; the demo override never persists.
+   */
+  private fun applyConfig(toml: String, persist: Boolean) {
     val old = engine
     old?.let { saveBaseline(it) }
     val fresh = create(toml)          // throws EngineException → old engine stays live
-    modelFile.writeText(toml)
+    if (persist) modelFile.writeText(toml)
     engine = fresh
     old?.close()
   }
 
+  /** The normal (non-demo) config: persisted server TOML if any, else the bundled model-v1.toml. */
+  private fun normalConfigToml(): String =
+    if (modelFile.exists()) modelFile.readText() else bundledConfigToml()
+
   private fun bundledConfigToml(): String =
     context.assets.open("model-v1.toml").bufferedReader().use { it.readText() }
+
+  private fun demoConfigToml(): String =
+    context.assets.open("model-demo.toml").bufferedReader().use { it.readText() }
 
   private fun create(toml: String): SafetyEngine {
     val baseline = loadBaseline()

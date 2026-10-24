@@ -70,6 +70,8 @@ export class MockSafetyNative implements SafetyNativeModuleType {
   private lastMetrics: LiveMetrics | null = null;
   // §7 telemetry: the mock never publishes (no sensing here); it only remembers the preference (default on, like native).
   private telemetryOn = true;
+  /** Demo sensitivity: the mock has no engine to re-configure; it only remembers the switch (default off, like native). */
+  private demoSensitivity = false;
   private status: Status = {
     nightMode: { active: false, reason: 'off' },
     engine: {
@@ -220,6 +222,12 @@ export class MockSafetyNative implements SafetyNativeModuleType {
   }
   async getTelemetryStatus(): Promise<TelemetryStatus> {
     return { on: this.telemetryOn, hz: this.telemetryOn ? (this.dashTimer ? 4 : this.status.nightMode.active ? 1 : 4) : 0, lastSentMs: 0, failures: 0 };
+  }
+  async setDemoSensitivity(on: boolean) {
+    this.demoSensitivity = on;
+  }
+  async getDemoSensitivity() {
+    return this.demoSensitivity;
   }
   private liveIncidents() {
     const cutoff = Date.now() - INCIDENT_TTL_MS;

@@ -140,6 +140,9 @@ export class WebSafetyNative implements SafetyNativeModuleType {
   // §7 telemetry: a browser never publishes; the web monitor subscribes via lib/telemetry.ts. Preference only.
   setTelemetry(on: boolean) { return this.mock.setTelemetry(on); }
   getTelemetryStatus() { return this.mock.getTelemetryStatus(); }
+  // Demo sensitivity: no engine on web; the mock remembers the switch so Settings round-trips.
+  setDemoSensitivity(on: boolean) { return this.mock.setDemoSensitivity(on); }
+  getDemoSensitivity() { return this.mock.getDemoSensitivity(); }
 
   // ---- real crypto -------------------------------------------------------------------------------
   async getIdentity(): Promise<Identity> {

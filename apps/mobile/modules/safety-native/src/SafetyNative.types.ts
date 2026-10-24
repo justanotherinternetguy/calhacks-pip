@@ -195,6 +195,12 @@ export interface SafetyNativeModuleType {
   // §7 telemetry publisher (Android). 4 Hz while on (default on once configured) or while the dashboard streams; 1 Hz in night mode otherwise.
   setTelemetry(on: boolean): Promise<void>;
   getTelemetryStatus(): Promise<TelemetryStatus>;
+  /**
+   * Demo sensitivity (Android): swap the live engine onto the bundled model-demo.toml (lenient thresholds so a judge
+   * can trigger incidents by hand). The normal server model stays persisted and is restored when switched off.
+   */
+  setDemoSensitivity(on: boolean): Promise<void>;
+  getDemoSensitivity(): Promise<boolean>;
   addListener<K extends SafetyNativeEventName>(
     name: K,
     cb: (event: SafetyNativeEvents[K]) => void,

@@ -93,6 +93,13 @@ class Prefs(context: Context) {
   var telemetryOn: Boolean
     get() = getBool("telemetry", true)
     set(v) = putBool("telemetry", v)
+  /**
+   * "Demo sensitivity" (Settings): the live engine runs assets/model-demo.toml (lenient thresholds so a judge can
+   * trigger incidents by hand) instead of the server/bundled model. Default off. Survives restarts (EngineHolder).
+   */
+  var demoSensitivity: Boolean
+    get() = getBool("demo_sensitivity", false)
+    set(v) = putBool("demo_sensitivity", v)
   /** Last observed touch / interactive unlock (wall-clock ms; 0 = never). Written at most once a minute by TouchTracker. */
   var lastTouchMs: Long
     get() = getLong("last_touch", 0L)
