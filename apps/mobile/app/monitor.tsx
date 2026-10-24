@@ -7,12 +7,12 @@ import { Pill } from '@/components/ui';
 import { activeIncidents, useStore, useUserId } from '@/lib/store';
 import { subscribe } from '@/lib/db';
 import { NO_STREAM_HINT_MS, sendTelemetryCommand, type TickDelta } from '@/lib/telemetry';
-import type { Incident, IncidentEvent, Presence } from '@/lib/types';
+import type { Incident, IncidentEvent } from '@/lib/types';
 import { colors, levelColor } from '@/lib/theme';
-import { StatusRail } from '@/components/monitor/StatusRail';
-import { IncidentPanel } from '@/components/monitor/IncidentPanel';
-import { QuietPanel } from '@/components/monitor/QuietPanel';
-import { useActivityFeed, useDeviceStatus, useNow } from '@/components/monitor/useMonitorData';
+import { useNow } from '@/components/monitor/useMonitorData';
+import { AnalysisPanel } from '@/components/monitor/AnalysisPanel';
+import { ReminderToasts, toastVisible, type Toast } from '@/components/monitor/ReminderToasts';
+import { escalationRank, useRiskAnalysis, type Reminder } from '@/components/monitor/useRiskAnalysis';
 import { beep, primeAudio } from '@/components/monitor/beep';
 import { TelemetryHeader, type SubjectOption } from '@/components/telemetry/TelemetryHeader';
 import { WaveformPanel } from '@/components/telemetry/WaveformPanel';
@@ -34,8 +34,9 @@ const BEEP_RECORD_AGE_MS = 30_000;
  * 10 Hz frames on a private Realtime channel (CONTRACTS §7); this page subscribes as a group-mate and draws it:
  *   left   live |a| / |ω| traces + mic listening window (canvas, rAF)
  *   middle metric band tiles, evidence line, the engine's incident log, the engine event ticker
- *   right  the escrow-side incident panel (map after unlock, Ring / I'm going / Found / Request location) + group rail
- * Location never travels over telemetry: the map still comes from released_keys + location_blobs.
+ *   right  the AI read of the subject's incident log via OpenRouter (risk, how the incidents add up, reminders),
+ *          plus pop-up reminders for the friends watching
+ * Location never travels over telemetry, so it never reaches the AI either.
  */
 export default function MonitorScreen() {
   const router = useRouter();
@@ -43,16 +44,14 @@ export default function MonitorScreen() {
   const groups = useStore((s) => s.groups);
   const members = useStore((s) => s.members);
   const profiles = useStore((s) => s.profiles);
-  const presence = useStore((s) => s.presence);
   const incidents = useStore((s) => s.incidents);
+  const storeEvents = useStore((s) => s.events);
   const { width } = useWindowDimensions();
   const wide = width >= WIDE;
   const mid = !wide && width >= MID;
   const now = useNow(500);
 
   const memberIds = useMemo(() => [...new Set(members.filter((m) => m.status === 'active').map((m) => m.user_id))], [members]);
-  const devices = useDeviceStatus(memberIds);
-  const feed = useActivityFeed(memberIds);
   const active = useMemo(() => activeIncidents(incidents), [incidents]);
   const name = useCallback((id: string | null | undefined) => (id ? profiles[id]?.display_name || `Friend ${id.slice(0, 6)}` : 'Nobody'), [profiles]);
 
@@ -88,12 +87,38 @@ export default function MonitorScreen() {
   const subjectName = name(subjectId);
   const phoneNow = tick && buffers.lastTickAt ? tick.t + (now - buffers.lastTickAt) : now;
 
-  // Incident selection: newest unresolved incident, preferring the subject's. A manual pick sticks only until
-  // a newer incident opens, so a fresh alert always takes the screen.
-  const [manualInc, setManualInc] = useState<{ id: string; atMs: number } | null>(null);
+  // Newest unresolved escalation, preferring the subject's: colours the left edge.
   const newest = active.find((i) => i.user_id === subjectId) ?? active[0] ?? null;
-  const manualIncOk = manualInc && active.some((i) => i.id === manualInc.id) && (!newest || manualInc.atMs > new Date(newest.opened_at).getTime());
-  const selected = (manualIncOk ? active.find((i) => i.id === manualInc.id) : undefined) ?? newest;
+
+  // AI read of the subject's incident log. `digest` lists only what changes the picture, so the model is not
+  // re-asked on every 10 Hz frame.
+  const records = buffers.incidentList();
+  const subjectServer = useMemo(() => active.filter((i) => i.user_id === subjectId), [active, subjectId]);
+  const friendEvents = useMemo(
+    () => subjectServer.flatMap((i) => storeEvents[i.id] ?? []).sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(-12),
+    [subjectServer, storeEvents],
+  );
+  const escalation = tick?.escalation ?? null;
+  const digest = [
+    subjectId, escalation ?? '-', tick?.checkPhrase ? 'check' : '',
+    records.map((r) => `${r.id}:${r.clearedMs > 0 ? 1 : 0}${r.acknowledged ? 1 : 0}${r.watched ? 1 : 0}:${r.sequenceId}`).join(','),
+    subjectServer.map((i) => `${i.id}:${i.level}`).join(','),
+    friendEvents.map((e) => e.id).join(','),
+  ].join('|');
+  const quiet = !records.length && !subjectServer.length && escalationRank(escalation) === 0 && !tick?.checkPhrase;
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const ai = useRiskAnalysis({
+    subjectId, digest, quiet, quietConfirmed: quiet && !!tick && tick.incidentCount === 0, escalation,
+    buildInput: () => ({
+      subjectName, phoneNow, tick, records, events: buffers.events, serverIncidents: subjectServer,
+      friendEvents: friendEvents.map((e) => ({ ...e, actorName: name(e.actor_id) })),
+    }),
+    onNewReminders: (fresh: Reminder[]) => {
+      setToasts((prev) => [...fresh.map((r) => ({ ...r, subjectName })), ...prev.filter((t) => toastVisible(t, Date.now()))].slice(0, 10));
+      if (Platform.OS === 'web' && soundRef.current && fresh.some((r) => r.urgency === 'urgent')) beep();
+    },
+  });
+  const dismissToast = useCallback((id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
 
   // Beep (web only) when a Supabase incident opens after this page loaded — never for one found on refresh.
   const [mountedAt] = useState(() => Date.now());
@@ -116,15 +141,11 @@ export default function MonitorScreen() {
     const chans = [
       subscribe('incidents', undefined, (row: Incident) => st.upsertIncident(row)),
       subscribe('incident_events', undefined, (row: IncidentEvent, ev) => { if (ev === 'INSERT') st.addEvent(row); }),
-      subscribe('presence', undefined, (row: Presence) =>
-        useStore.setState((s) => ({ presence: { ...s.presence, [row.group_id]: [row, ...(s.presence[row.group_id] ?? []).filter((p) => p.user_id !== row.user_id)] } }))),
     ];
     return () => chans.forEach((c) => c.unsubscribe());
   }, [me]);
 
   const groupName = groups.length ? groups.map((g) => g.name).join(' · ') : 'No group';
-  const activeGroup = selected ? groups.find((g) => g.id === selected.group_id) : undefined;
-  const mapHeight = wide || mid ? 320 : 280;
 
   // Hints: subscribed but silent for 10 s, or the stream stopped.
   const silentFor = conn?.state === 'subscribed' && conn.subscribedAt ? now - conn.subscribedAt : conn?.state === 'stale' && conn.lastTickAt ? now - conn.lastTickAt : 0;
@@ -176,27 +197,8 @@ export default function MonitorScreen() {
       <EventTicker events={buffers.events} />
     </View>
   );
-  const right = (
-    <View style={{ gap: 14 }}>
-      {active.length > 1 && (
-        <View style={styles.chips}>
-          <Text style={styles.chipsLabel}>{active.length} open incidents</Text>
-          {active.map((i) => (
-            <Text key={i.id} onPress={() => setManualInc({ id: i.id, atMs: Date.now() })} style={[styles.chip, i.id === selected?.id && styles.chipOn]}>
-              {name(i.user_id)} · {i.level.replace('_', ' ')}
-            </Text>
-          ))}
-        </View>
-      )}
-      {selected ? (
-        <IncidentPanel key={selected.id} incident={selected} group={activeGroup} profiles={profiles} me={me} mapHeight={mapHeight} now={now} />
-      ) : (
-        <QuietPanel devices={devices} profiles={profiles} me={me} feed={feed} now={now} />
-      )}
-      <View style={styles.divider} />
-      <StatusRail groups={groups} members={members} profiles={profiles} presence={presence} devices={devices} me={me} now={now} active={selected} />
-    </View>
-  );
+  const clearAi = () => { ai.clear(); setToasts([]); };
+  const right = <AnalysisPanel state={ai} subjectName={subjectName} now={now} onRefresh={ai.refresh} onClear={clearAi} />;
 
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
@@ -224,7 +226,8 @@ export default function MonitorScreen() {
           {right}
         </ScrollView>
       )}
-      {selected && <View style={[styles.edge, { backgroundColor: levelColor(selected.level) }]} />}
+      <ReminderToasts toasts={toasts} now={now} width={wide ? RIGHT_W - 28 : mid ? 312 : Math.min(width - 28, 420)} onDismiss={dismissToast} />
+      {newest && <View style={[styles.edge, { backgroundColor: levelColor(newest.level) }]} />}
     </SafeAreaView>
   );
 }
@@ -249,9 +252,5 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: colors.border },
   banner: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: 12, borderWidth: 1, backgroundColor: colors.card },
   bannerText: { color: colors.text, fontSize: 13, lineHeight: 18, flex: 1 },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
-  chipsLabel: { color: colors.muted, fontSize: 13, marginRight: 4 },
-  chip: { color: colors.text, fontSize: 13, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
-  chipOn: { borderColor: colors.danger, color: colors.danger },
   edge: { position: 'absolute', top: 0, bottom: 0, left: 0, width: 4 },
 });

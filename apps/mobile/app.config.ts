@@ -12,6 +12,13 @@ function localFile(name: string): string | undefined {
 }
 const GOOGLE_SERVICES_JSON = localFile('google-services.json');       // Android FCM
 
+// The monitor's AI panel reads EXPO_PUBLIC_OPENROUTER_* (only EXPO_PUBLIC_* is inlined into the web bundle).
+// Accept the plain names in .env too. This runs before Metro starts, so its workers inherit the alias.
+// Only copy values that are set: assigning undefined to process.env stores the string "undefined".
+const env = process.env as Record<string, string | undefined>;
+if (!env.EXPO_PUBLIC_OPENROUTER_API_KEY && env.OPENROUTER_API_KEY) env.EXPO_PUBLIC_OPENROUTER_API_KEY = env.OPENROUTER_API_KEY;
+if (!env.EXPO_PUBLIC_OPENROUTER_MODEL && env.OPENROUTER_MODEL) env.EXPO_PUBLIC_OPENROUTER_MODEL = env.OPENROUTER_MODEL;
+
 const LOCATION_WHY =
   'Safe watches for signs that you cannot ask for help while you are out at night. Location is encrypted on your phone and is only released to your friends if you may be in danger.';
 
@@ -72,5 +79,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     './modules/safety-native/app.plugin.js',
   ],
   experiments: { typedRoutes: false },
-  extra: { eas: { projectId: process.env.EAS_PROJECT_ID } },
+  extra: {
+    eas: { projectId: process.env.EAS_PROJECT_ID },
+  },
 });

@@ -167,8 +167,17 @@ counts as consent and unlocks immediately. A wrong phrase leaves the check open 
   trip, and the waveform is drawn on the phone's sensor clock so network jitter never distorts it): scrolling 50 Hz accelerometer and
   gyroscope waveforms with the impact line, metric band tiles with out-of-band flashes and sparklines,
   a five-minute mic-listening strip, the live incident log (tier, cleared time, answered) and sequence markers,
-  the engine event ticker, a check-in countdown, device status (heartbeat age, battery, night mode,
-  presence), and the friend actions. Location is never part of telemetry; it stays on the escrow path.
+  the engine event ticker and a check-in countdown. Location is never part of telemetry; it stays on the escrow path.
+- The monitor's right column is an **AI read of the incident log**: the friend's browser sends the engine's
+  incident reports only (kind, tier, time, gap since the previous one, cleared / answered, episode; no measurements,
+  sensor state, location or audio) to a small free OpenRouter model (default NVIDIA
+  Nemotron 3.5 Lightning, 3B active parameters, low reasoning effort), which returns a risk
+  level, how the incidents chain together (for example impact → scream → down and still), the innocent
+  explanation, what would change the read, and short pop-up reminders for the friends (`components/monitor/
+  riskAnalysis.ts`). It is advisory: detection and escalation stay in the Rust engine. The model is only asked when
+  the picture changes (new / cleared / answered record, escalation step, check-in, friend action), debounced, at
+  most every 45 s unless the escalation rises, and the last read is cached per person. Key: `OPENROUTER_API_KEY`
+  in `apps/mobile/.env` (it ends up in the web bundle, so use a free-tier key).
 
 ---
 
