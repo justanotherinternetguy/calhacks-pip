@@ -161,3 +161,42 @@ Edge functions (Deno, `supabase/functions/<name>/index.ts`): `push`, `watchdog`,
 - Shamir parameters: n = active members excluding self; k = clamp(max(2, groups.threshold_k), 2, n); n < 2 → k = 0, no shares, fallback unlock disabled. An epoch row is still created (group_id may be null) so location blobs have an epoch.
 - Heartbeat = `PATCH /rest/v1/devices?id=eq.{deviceId}` with `{last_heartbeat: now, night_mode, battery_pct, risk_band, status_level}` (the `heartbeat` RPC is an equivalent alternative).
 - `incidents` row is first created at `heads_up` (first friend-visible level); `check` is device-local only.
+
+## 6. Addendum: live signals, incident log, grab detection (spec v1.1)
+
+### FFI changes (engine.rs; `safety_core` mirrors them)
+- `MotionSample` gains `pub rx: f32, pub ry: f32, pub rz: f32` — gyroscope rotation rate in rad/s, device frame; all 0 when the gyro is off (low-rate mode).
+- `Context` gains `pub last_touch_ms: u64` (0 = never/unknown; wall-clock ms of the last touch or interactive unlock), `pub distance_home_m: f32` (-1 = unknown), `pub sampling_full: bool` (what native is currently delivering: true = 50 Hz + gyro, false = ~10 Hz accel only).
+- `UserAction` gains `PhoneUnlocked` (owner unlocked the device; clears a grab within its 2-minute window).
+- `EngineEvent` gains:
+  - `SamplingRateChanged { hz: u32, gyro: bool }` — native must reconfigure sensors (10 Hz/no gyro by default; 50 Hz + gyro when away from home 21:00–06:00 or after any incident).
+  - `SignalIncident { record: IncidentRecord }` — a metric left its band (or a grab/impact/stillness/separation/typing rule fired). Native appends to its own notification/dashboard stream; the engine keeps the log itself.
+  - `CallOptionAvailable { summary: String }` — 10 min with no response: friends get the one-tap campus safety / 911 option (native posts `incident_events.kind='call_option'`).
+  - `HeadsUp` is now emitted immediately on a grab (no location); `UnlockLocation` follows after 2 min unless `PhoneUnlocked`/`BiometricDismiss`.
+- New records/enums:
+```rust
+#[derive(uniffi::Enum)] pub enum IncidentKind { GaitDrift, Impact, Grab, Stillness, Separated, TypingOff }
+#[derive(uniffi::Record)] pub struct MetricBand { pub name: String, pub value: f32, pub mean: f32, pub sd: f32, pub sd_distance: f32, pub in_band: bool }
+#[derive(uniffi::Record)] pub struct LiveMetrics { pub t_ms: u64, pub placement: Placement, pub sampling_full: bool, pub activity: Activity, pub bands: Vec<MetricBand> /* cadence, stride_cv, regularity, sway, wobble, jerk, rotation, peak_g */, pub p_normal: f32, pub p_impaired: f32, pub p_incident: f32, pub p_unresponsive: f32, pub baseline_trusted: bool, pub baseline_walk_days: f32, pub evidence: String }
+#[derive(uniffi::Record)] pub struct IncidentRecord { pub id: u32, pub t_ms: u64, pub kind: IncidentKind, pub summary: String, pub sd_distance: f32, pub placement: Placement, pub raw_json: String, pub p_normal: f32, pub p_impaired: f32, pub p_incident: f32, pub p_unresponsive: f32, pub sequence_id: u32 /* 0 = none */, pub watched: bool }
+```
+- New `SafetyEngine` methods: `metrics() -> LiveMetrics`, `incident_log() -> Vec<IncidentRecord>` (newest last; entries expire after 8 h). The incident log is included in the opaque `export_baseline()` blob so it survives restarts (expired entries dropped on load).
+- Thresholds (config/model-v1.toml): `t_check = 0.7`; unlock when no response for 120 s and P ≥ 0.9; `CallOptionAvailable` after 600 s with no response; bands = baseline mean ± 2.5 SD, out-of-band must persist 30 s of walking; impact = peak > 2.5 g with orientation change; stillness = still 3+ min AND no touch 3+ min after an impact; separated = > 150 m from all friends for 10+ min and `distance_home_m` not decreasing.
+- Baselines: per placement; trusted after 7 days (≥ 7 distinct local days with walking); rolling 14-day window; nights that produced an incident are excluded; population defaults with wider bands (3.5 SD) until trusted.
+
+### Native facade additions (§2)
+```ts
+getDashboard(): Promise<{ metrics: LiveMetrics; incidents: IncidentRecord[] }>;   // same field names, camelCase
+setDashboardStreaming(on: boolean): Promise<void>;   // while on, emit 'dashboard' every 1 s
+// Events
+'dashboard': { metrics: LiveMetrics; incidents: IncidentRecord[] }
+'signalIncident': IncidentRecord
+'callOption': { summary: string }
+```
+Native tracks `last_touch_ms` from: any touch in the app (root view touch listener), screen interactive + USER_PRESENT / protectedDataDidBecomeAvailable, and lock-screen unlock. On `UserAction::PhoneUnlocked` native calls `push_action(PhoneUnlocked)` whenever the device is unlocked by the owner.
+
+### Groups
+Default n = 4 friends, k = 2; fallback unlock requires ≥ 3 active members (enforced in `open_unlock_request` and in the UI).
+
+### Display
+`/dashboard` (personal, off by default, opened from Settings) shows live metrics vs bands, the four state probabilities, and the incident log. Friends get only the one-line triggering-sequence summary on unlock; never another user's dashboard.
