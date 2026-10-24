@@ -37,7 +37,13 @@ export default function RootLayout() {
       .then(async ({ data }) => onAuthSession(data.session ?? ((await hasDemoFlag()) ? makeDemoSession() : null)))
       .catch((e) => console.warn('session restore', e?.stack ?? e))
       .finally(() => setReady(true));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => void onAuthSession(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((e, s) => {
+      // INITIAL_SESSION / TOKEN_REFRESHED can arrive with a null session while storage is still loading;
+      // only an explicit SIGNED_OUT (or a real session) should change auth state, otherwise we'd tear
+      // down and reconfigure native twice per launch.
+      if (!s && e !== 'SIGNED_OUT') return;
+      void onAuthSession(s);
+    });
     return () => { sub.subscription.unsubscribe(); off(); };
   }, []);
 
