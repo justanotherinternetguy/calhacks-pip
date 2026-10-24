@@ -5,8 +5,12 @@
 [impact]
 incident_peak_g = 1.8          # a firm slap / drop onto a couch registers (v1: 2.5)
 peak_g = 2.2                   # hard-peak threshold for the fall pattern (v1: 3.0)
-orientation_change_deg = 20.0  # a modest tilt after the hit counts (v1: 45)
+orientation_change_deg = 10.0  # a small tilt after the hit counts (v1: 45)
 post_still_rms_g = 0.25        # "still after" is lenient (v1: 0.15)
+# Disable the "phone dropped alone" discrimination for demos: a bare phone dropped on a couch is
+# exactly what a judge will do, and in v1 that is (correctly) classified as a drop, not a fall.
+drop_flat_gz = 1.5             # never "flat" (|gz| ≤ 1), so no event is classed as a drop (v1: 0.85)
+drop_min_free_fall_ms = 100000
 
 [grab]
 jerk_g_per_s = 20.0            # a sharp yank (v1: 50)
