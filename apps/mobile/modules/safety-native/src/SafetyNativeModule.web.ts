@@ -134,6 +134,9 @@ export class WebSafetyNative implements SafetyNativeModuleType {
   stopBaselineWalk() { return this.mock.stopBaselineWalk(); }
   recordTypingPractice(r: TypingRecord) { return this.mock.recordTypingPractice(r); }
   injectTrace(json: string) { return this.mock.injectTrace(json); }
+  // §6 personal dashboard: no sensing on web, so the live metrics/incident log are the mock's.
+  getDashboard() { return this.mock.getDashboard(); }
+  setDashboardStreaming(on: boolean) { return this.mock.setDashboardStreaming(on); }
 
   // ---- real crypto -------------------------------------------------------------------------------
   async getIdentity(): Promise<Identity> {

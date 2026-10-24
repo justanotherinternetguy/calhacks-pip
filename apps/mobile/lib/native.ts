@@ -10,10 +10,11 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL } from './env';
 import { setDemoFlag } from './demo';
 import { registerPushToken, unregisterPushToken } from './push';
 import { fn, listMyGroups, getDevicesForUsers, getProfiles, getPresence, listIncidents, subscribe, upsertDevice, rpc } from './db';
-import { useStore } from './store';
+import { readDashboardEnabled, useStore } from './store';
 import type { Incident, IncidentEvent, Presence } from './types';
 
 let configuredFor: string | null = null;
+let dashboardPrefLoaded = false;
 let subs: { remove(): void }[] = [];
 let channels: { unsubscribe(): unknown }[] = [];
 
@@ -43,6 +44,7 @@ async function modelConfigToml(): Promise<string> {
 export async function onAuthSession(session: Session | null) {
   const store = useStore.getState();
   store.set({ session });
+  if (!dashboardPrefLoaded) { dashboardPrefLoaded = true; readDashboardEnabled().then((on) => useStore.getState().set({ dashboardEnabled: on })).catch(() => {}); }
   if (!session) { configuredFor = null; unregisterPushToken(); teardown(); store.reset(); return; }
 
   if (configuredFor === session.user.id) {
@@ -81,7 +83,7 @@ function wireEvents() {
     SafetyNative.addListener('escalation', (e) => {
       // Anything past 'check' closes the check-in modal (the screen watches pendingCheck); resolved clears a snatch too.
       if (e.level !== 'check') s({ pendingCheck: null });
-      if (e.level === 'resolved' || e.level === 'idle') s({ snatch: null });
+      if (e.level === 'resolved' || e.level === 'idle') s({ snatch: null, callOption: null });
       void refreshIncidents();
     }),
     SafetyNative.addListener('sos', (e) => s({ sosActive: e.active })),
@@ -90,6 +92,9 @@ function wireEvents() {
       router.push('/snatch');
       void refreshIncidents();
     }),
+    // §6 live signals: ring of the last 50 engine records + the call-option flag, for the home tab / dashboard.
+    SafetyNative.addListener('signalIncident', (r) => useStore.getState().pushSignal(r)),
+    SafetyNative.addListener('callOption', (e) => s({ callOption: { summary: e.summary, atMs: Date.now() } })),
   ];
   SafetyNative.getStatus().then((status) => s({ status })).catch(() => {});
 }

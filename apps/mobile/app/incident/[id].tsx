@@ -6,7 +6,7 @@ import { format, formatDistanceToNow } from 'date-fns';
 import { Button, Card, H1, H2, P, Pill, Row, Screen } from '@/components/ui';
 import { Map } from '@/components/Map';
 import { SafetyNative, type DecryptedLocation } from '@/modules/safety-native';
-import { useStore, useUserId } from '@/lib/store';
+import { MIN_MEMBERS_FOR_FALLBACK, useStore, useUserId } from '@/lib/store';
 import {
   fn, getActiveEpoch, getIncident, listIncidentEvents, listLocationBlobs, listReleasedKeysForMe,
   listUnlockApprovals, listUnlockRequests, rpc, subscribe,
@@ -25,6 +25,7 @@ export default function IncidentScreen() {
   const me = useUserId();
   const profiles = useStore((s) => s.profiles);
   const groups = useStore((s) => s.groups);
+  const members = useStore((s) => s.members);
   const stored = useStore((s) => s.incidents.find((i) => i.id === id));
   const events = useStore((s) => s.events[id] ?? []);
   const [incident, setIncident] = useState<Incident | undefined>(stored);
@@ -40,6 +41,10 @@ export default function IncidentScreen() {
   const group = groups.find((g) => g.id === incident?.group_id);
   const isSubject = subject === me;
   const resolved = !!incident?.resolved_at || incident?.level === 'resolved';
+  // §6 Groups: fallback unlock needs ≥ 3 active members (the server enforces it too in open_unlock_request).
+  const activeMembers = members.filter((m) => m.group_id === incident?.group_id && m.status === 'active').length;
+  const fallbackAllowed = activeMembers >= MIN_MEMBERS_FOR_FALLBACK;
+  const offlineLevel = incident?.level === 'offline' || incident?.level === 'battery_dying';
 
   // Decrypt whatever blobs we can with the keys we've been given (normal unlock path).
   const loadTrail = useCallback(async (ks: ReleasedKey[]) => {
@@ -132,7 +137,12 @@ export default function IncidentScreen() {
         <H1>{isSubject ? 'Your incident' : subjectName}</H1>
         <Pill text={resolved ? 'resolved' : incident.level} color={levelColor(resolved ? 'resolved' : incident.level)} />
       </Row>
-      <P muted>{incident.summary} · opened {formatDistanceToNow(new Date(incident.opened_at), { addSuffix: true })}</P>
+      {/* The one-line triggering sequence is all a friend ever sees of the subject's signals (CONTRACTS §6). */}
+      <Card tint={levelColor(resolved ? 'resolved' : incident.level)} style={{ paddingVertical: 12 }}>
+        <P muted style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.6 }}>What triggered this</P>
+        <P style={{ fontSize: 17, fontWeight: '600', lineHeight: 23 }}>{incident.summary ?? 'No details from the phone yet.'}</P>
+        <P muted style={{ fontSize: 13 }}>opened {formatDistanceToNow(new Date(incident.opened_at), { addSuffix: true })}</P>
+      </Card>
       {incident.level === 'snatch' && <Card tint={colors.danger}><P style={{ fontWeight: '700' }}>Possible phone snatch. Do not chase. {subjectName} may be without a phone.</P></Card>}
 
       {trail.length ? (
@@ -143,8 +153,13 @@ export default function IncidentScreen() {
       ) : (
         <Card>
           <P style={{ fontWeight: '700' }}>Location locked</P>
-          <P muted>{incident.level === 'heads_up' ? 'Unlocks automatically if things look serious.' : incident.level === 'offline' || incident.level === 'battery_dying' ? `Their phone is offline. ${group?.threshold_k ?? 2} friends can unlock the last known location together.` : 'Waiting for keys…'}</P>
-          {(incident.level === 'offline' || incident.level === 'battery_dying') && !req && !isSubject && <Button title="Request location" kind="danger" onPress={requestUnlock} loading={busy === 'unlock'} />}
+          <P muted>{incident.level === 'heads_up' ? 'Unlocks automatically if things look serious.' : offlineLevel ? `Their phone is offline. ${group?.threshold_k ?? 2} friends can unlock the last known location together.` : 'Waiting for keys…'}</P>
+          {offlineLevel && !req && !isSubject && (
+            <>
+              <Button title="Request location" kind="danger" onPress={requestUnlock} loading={busy === 'unlock'} disabled={!fallbackAllowed} />
+              {!fallbackAllowed && <P muted style={{ fontSize: 13 }}>Fallback unlock needs at least {MIN_MEMBERS_FOR_FALLBACK} members — this group has {activeMembers} active.</P>}
+            </>
+          )}
           {req && (
             <>
               <P>Unlock approvals: {approvals.length} / {k}</P>

@@ -1,14 +1,17 @@
 import React, { useState } from 'react';
 import { Alert, Platform } from 'react-native';
+import { useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Button, Card, H2, Input, P, Row, Screen, Toggle } from '@/components/ui';
 import { SafetyNative } from '@/modules/safety-native';
 import { signOut } from '@/lib/native';
-import { useStore } from '@/lib/store';
+import { useStore, writeDashboardEnabled } from '@/lib/store';
 
 export default function Settings() {
+  const router = useRouter();
   const status = useStore((s) => s.status);
+  const dashboardEnabled = useStore((s) => s.dashboardEnabled);
   const [mic, setMic] = useState(status?.permissions.microphone === 'granted');
   const [learning, setLearning] = useState(true);
   const [start, setStart] = useState('20');
@@ -52,10 +55,20 @@ export default function Settings() {
         </Row>
       </Card>
       <Card>
+        <H2>Personal dashboard</H2>
+        <Toggle label="Personal dashboard" hint="Live metrics vs your baseline, state probabilities and the engine's incident log. Only you can see it; friends get a one-line summary at most." value={dashboardEnabled} onChange={(v) => void writeDashboardEnabled(v)} />
+        {dashboardEnabled && <Button title="Open dashboard" onPress={() => router.push('/dashboard')} />}
+      </Card>
+      <Card>
         <H2>Debug</H2>
         <P muted>Service {status?.serviceRunning ? 'running' : 'stopped'} · last heartbeat {status?.lastHeartbeatMs ? new Date(status.lastHeartbeatMs).toLocaleTimeString() : '—'}{SafetyNative.isMock ? ' · JS mock' : ''}</P>
         <Button title="Inject trace file" kind="ghost" onPress={inject} />
         <Button title="Simulate check-in (mock)" kind="ghost" onPress={() => SafetyNative.injectTrace('{"scenario":"check"}')} />
+        <Row style={{ flexWrap: 'wrap' }}>
+          {(['fall', 'drunk', 'snatch', 'still', 'reset'] as const).map((sc) => (
+            <Button key={sc} title={sc} kind="ghost" style={{ flex: 1, minWidth: 70, paddingHorizontal: 6 }} onPress={() => SafetyNative.injectTrace(JSON.stringify({ scenario: sc }))} />
+          ))}
+        </Row>
       </Card>
       <Button title="Sign out" kind="danger" onPress={signOut} />
     </Screen>

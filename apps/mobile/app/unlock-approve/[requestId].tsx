@@ -42,7 +42,9 @@ export default function UnlockApprove() {
       <H1>Unlock {subject}'s location?</H1>
       <Card>
         <P><P style={{ fontWeight: '700' }}>{who}</P> is asking to see where {subject} is.</P>
-        <P muted>Why: {incident?.summary ?? '…'} ({incident?.level}). {subject}'s phone is offline, so the location can only be rebuilt when enough friends agree.</P>
+        <P muted style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.6 }}>What triggered this{incident?.level ? ` · ${incident.level.replace('_', ' ')}` : ''}</P>
+        <P style={{ fontWeight: '600' }}>{incident?.summary ?? '…'}</P>
+        <P muted>{subject}'s phone is offline, so the location can only be rebuilt when enough friends agree. This is the only detail of their signals you will see.</P>
         <P muted>Your phone will hand over its piece of the key, sealed to {who} only. This is logged and shown to {subject} and the group.</P>
       </Card>
       <Button title="Approve" kind="danger" onPress={approve} loading={busy} disabled={!req || !incident} />

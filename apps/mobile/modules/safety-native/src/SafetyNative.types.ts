@@ -76,12 +76,59 @@ export type RecoverInput = {
   sealedShares: { sealedB64: string; approverEd25519Pub: string }[];
 };
 
+// ---- §6 addendum (spec v1.1): live signals, incident log, grab detection. camelCase mirrors of the Rust records.
+export type Placement = EngineSnapshot['placement'];
+export type Activity = 'unknown' | 'stationary' | 'walking' | 'running' | 'vehicle';
+export type IncidentKind = 'gait_drift' | 'impact' | 'grab' | 'stillness' | 'separated' | 'typing_off';
+/** One live metric vs its personal baseline band (mean ± 2.5 SD; 3.5 SD until the baseline is trusted). */
+export type MetricBand = {
+  name: string; // cadence | stride_cv | regularity | sway | wobble | jerk | rotation | peak_g
+  value: number;
+  mean: number;
+  sd: number;
+  sdDistance: number; // signed (value - mean) / sd
+  inBand: boolean;
+};
+export type LiveMetrics = {
+  tMs: number;
+  placement: Placement;
+  samplingFull: boolean; // true = 50 Hz + gyro, false = ~10 Hz accel only
+  activity: Activity;
+  bands: MetricBand[];
+  pNormal: number;
+  pImpaired: number;
+  pIncident: number;
+  pUnresponsive: number;
+  baselineTrusted: boolean;
+  baselineWalkDays: number; // distinct local days with walking (trusted at 7)
+  evidence: string;
+};
+export type IncidentRecord = {
+  id: number;
+  tMs: number;
+  kind: IncidentKind;
+  summary: string;
+  sdDistance: number;
+  placement: Placement;
+  rawJson: string;
+  pNormal: number;
+  pImpaired: number;
+  pIncident: number;
+  pUnresponsive: number;
+  sequenceId: number; // 0 = none
+  watched: boolean; // part of a sequence the engine is still watching (not yet escalated)
+};
+export type Dashboard = { metrics: LiveMetrics; incidents: IncidentRecord[] };
+
 export type SafetyNativeEvents = {
   statusChanged: Status;
   checkRequested: { phrase: string; deadlineMs: number };
   escalation: { level: EscalationLevel; summary: string };
   snatch: { summary: string; lat?: number; lng?: number };
   sos: { active: boolean };
+  dashboard: Dashboard; // every 1 s while setDashboardStreaming(true)
+  signalIncident: IncidentRecord;
+  callOption: { summary: string }; // 10 min with no response: friends get the one-tap call option
 };
 export type SafetyNativeEventName = keyof SafetyNativeEvents;
 export type Subscription = { remove(): void };
@@ -111,6 +158,9 @@ export interface SafetyNativeModuleType {
   ringAlarm(seconds: number): Promise<void>;
   stopAlarm(): Promise<void>;
   injectTrace(json: string): Promise<void>; // debug builds only
+  // §6 personal dashboard
+  getDashboard(): Promise<Dashboard>;
+  setDashboardStreaming(on: boolean): Promise<void>; // while on, emit 'dashboard' every 1 s
   addListener<K extends SafetyNativeEventName>(
     name: K,
     cb: (event: SafetyNativeEvents[K]) => void,
