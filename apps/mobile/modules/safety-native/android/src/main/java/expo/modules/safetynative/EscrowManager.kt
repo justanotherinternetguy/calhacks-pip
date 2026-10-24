@@ -19,6 +19,8 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZoneOffset
 import kotlin.math.max
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class GroupMember(val userId: String, val deviceId: String, val x25519Pub: ByteArray, val ed25519Pub: ByteArray)
 data class GroupInfo(val groupId: String, val thresholdK: Int, val members: List<GroupMember>)
@@ -101,8 +103,11 @@ class EscrowManager(private val rt: SafetyRuntime) {
       val m = members.getJSONObject(i)
       if (m.getString("userId") != self) filtered.put(m)
     }
-    prefs.putString("group", JSONObject().put("groupId", groupId).put("thresholdK", thresholdK).put("members", filtered).toString())
-    rotateDayKey()
+    val next = JSONObject().put("groupId", groupId).put("thresholdK", thresholdK).put("members", filtered).toString()
+    val changed = prefs.getString("group") != next
+    prefs.putString("group", next)
+    // Only a changed member set needs new shares; otherwise just make sure today's epoch exists.
+    rotateDayKey(force = changed)
   }
 
   // ---- day / hour keys -----------------------------------------------------
@@ -125,10 +130,7 @@ class EscrowManager(private val rt: SafetyRuntime) {
   private fun dayKey(): ByteArray? = prefs.getString("day_key")?.let { unb64(it) }
 
   /** Called from the service tick: rotates K_day at local midnight. K_h needs no rotation step — it is derived on demand from the absolute hour_index. */
-  suspend fun rotateIfNewDay() {
-    val e = currentEpoch()
-    if (e == null || e.day != today()) rotateDayKey()
-  }
+  suspend fun rotateIfNewDay() = rotateDayKey(force = false)
 
   fun hourKey(hourIndex: Int): ByteArray {
     val dk = dayKey() ?: throw IllegalStateException("no day key")
@@ -179,7 +181,17 @@ class EscrowManager(private val rt: SafetyRuntime) {
     Log.i(TAG, "rotated day key: epoch=$epochId k=$k n=$n")
   }
 
-  suspend fun rotateDayKey() { rt.io { runCatching { rotateDayKeySync() }.onFailure { Log.e(TAG, "rotateDayKey failed", it) } } }
+  private val rotateLock = Mutex()
+
+  /** Rotates K_day. With force = false it is a no-op when an epoch for today already exists. Serialized so
+   *  concurrent triggers at startup (configure, night session start, setGroup) create one epoch, not several. */
+  suspend fun rotateDayKey(force: Boolean = true) {
+    rotateLock.withLock {
+      val e = currentEpoch()
+      if (!force && e != null && e.day == today()) return
+      rt.io { runCatching { rotateDayKeySync() }.onFailure { Log.e(TAG, "rotateDayKey failed", it) } }
+    }
+  }
 
   /** Shared (non-secret) per-group per-UTC-day key for proximity tokens (CONTRACTS §5). Server brute-force is an accepted v1 risk. */
   fun groupEpochKey(): ByteArray? {
