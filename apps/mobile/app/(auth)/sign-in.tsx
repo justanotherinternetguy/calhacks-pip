@@ -78,7 +78,7 @@ export default function SignIn() {
       <Row style={{ justifyContent: 'center' }}><P muted>or</P></Row>
       {Platform.OS === 'ios' && <Button title=" Sign in with Apple" kind="ghost" onPress={() => oauth('apple')} />}
       <Button title="Sign in with Google" kind="ghost" onPress={() => oauth('google')} />
-      {DEMO_MODE && <Button title="Demo (anonymous)" kind="ghost" onPress={demo} />}
+      <Button title={DEMO_MODE ? 'Demo (offline)' : 'Demo (anonymous)'} kind="ghost" onPress={demo} />
     </Screen>
   );
 }
