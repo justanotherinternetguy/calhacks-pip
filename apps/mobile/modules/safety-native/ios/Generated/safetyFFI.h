@@ -271,6 +271,16 @@ void*_Nonnull uniffi_safety_ffi_fn_constructor_safetyengine_new(RustBuffer confi
 RustBuffer uniffi_safety_ffi_fn_method_safetyengine_export_baseline(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_FN_METHOD_SAFETYENGINE_INCIDENT_LOG
+#define UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_FN_METHOD_SAFETYENGINE_INCIDENT_LOG
+RustBuffer uniffi_safety_ffi_fn_method_safetyengine_incident_log(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_FN_METHOD_SAFETYENGINE_METRICS
+#define UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_FN_METHOD_SAFETYENGINE_METRICS
+RustBuffer uniffi_safety_ffi_fn_method_safetyengine_metrics(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_FN_METHOD_SAFETYENGINE_PUSH_ACTION
 #define UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_FN_METHOD_SAFETYENGINE_PUSH_ACTION
 void uniffi_safety_ffi_fn_method_safetyengine_push_action(void*_Nonnull ptr, RustBuffer a, uint64_t now_ms, RustCallStatus *_Nonnull out_status
@@ -733,6 +743,18 @@ uint16_t uniffi_safety_ffi_checksum_func_split_day_key(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_CHECKSUM_METHOD_SAFETYENGINE_EXPORT_BASELINE
 #define UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_CHECKSUM_METHOD_SAFETYENGINE_EXPORT_BASELINE
 uint16_t uniffi_safety_ffi_checksum_method_safetyengine_export_baseline(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_CHECKSUM_METHOD_SAFETYENGINE_INCIDENT_LOG
+#define UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_CHECKSUM_METHOD_SAFETYENGINE_INCIDENT_LOG
+uint16_t uniffi_safety_ffi_checksum_method_safetyengine_incident_log(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_CHECKSUM_METHOD_SAFETYENGINE_METRICS
+#define UNIFFI_FFIDEF_UNIFFI_SAFETY_FFI_CHECKSUM_METHOD_SAFETYENGINE_METRICS
+uint16_t uniffi_safety_ffi_checksum_method_safetyengine_metrics(void
     
 );
 #endif

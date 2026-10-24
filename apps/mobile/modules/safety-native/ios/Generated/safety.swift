@@ -566,9 +566,19 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 public protocol SafetyEngineProtocol: AnyObject, Sendable {
     
     /**
-     * Opaque baseline bytes; store encrypted on device.
+     * Opaque baseline + incident-log bytes; store encrypted on device.
      */
     func exportBaseline()  -> Data
+    
+    /**
+     * Incident log, newest last; entries expire after 8 h.
+     */
+    func incidentLog()  -> [IncidentRecord]
+    
+    /**
+     * Live metrics vs. bands, the four state probabilities, baseline trust (dashboard).
+     */
+    func metrics()  -> LiveMetrics
     
     func pushAction(a: UserAction, nowMs: UInt64) 
     
@@ -655,11 +665,31 @@ public convenience init(configToml: String, baselineBlob: Data?, nowMs: UInt64)t
 
     
     /**
-     * Opaque baseline bytes; store encrypted on device.
+     * Opaque baseline + incident-log bytes; store encrypted on device.
      */
 open func exportBaseline() -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
     uniffi_safety_ffi_fn_method_safetyengine_export_baseline(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Incident log, newest last; entries expire after 8 h.
+     */
+open func incidentLog() -> [IncidentRecord]  {
+    return try!  FfiConverterSequenceTypeIncidentRecord.lift(try! rustCall() {
+    uniffi_safety_ffi_fn_method_safetyengine_incident_log(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Live metrics vs. bands, the four state probabilities, baseline trust (dashboard).
+     */
+open func metrics() -> LiveMetrics  {
+    return try!  FfiConverterTypeLiveMetrics_lift(try! rustCall() {
+    uniffi_safety_ffi_fn_method_safetyengine_metrics(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -886,10 +916,13 @@ public struct Context {
     public var activity: Activity
     public var batteryPct: UInt8
     public var speedMps: Float
+    public var lastTouchMs: UInt64
+    public var distanceHomeM: Float
+    public var samplingFull: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(tMs: UInt64, awayFromHome: Bool, separated: Bool, hourLocal: UInt8, screenOn: Bool, activity: Activity, batteryPct: UInt8, speedMps: Float) {
+    public init(tMs: UInt64, awayFromHome: Bool, separated: Bool, hourLocal: UInt8, screenOn: Bool, activity: Activity, batteryPct: UInt8, speedMps: Float, lastTouchMs: UInt64, distanceHomeM: Float, samplingFull: Bool) {
         self.tMs = tMs
         self.awayFromHome = awayFromHome
         self.separated = separated
@@ -898,6 +931,9 @@ public struct Context {
         self.activity = activity
         self.batteryPct = batteryPct
         self.speedMps = speedMps
+        self.lastTouchMs = lastTouchMs
+        self.distanceHomeM = distanceHomeM
+        self.samplingFull = samplingFull
     }
 }
 
@@ -932,6 +968,15 @@ extension Context: Equatable, Hashable {
         if lhs.speedMps != rhs.speedMps {
             return false
         }
+        if lhs.lastTouchMs != rhs.lastTouchMs {
+            return false
+        }
+        if lhs.distanceHomeM != rhs.distanceHomeM {
+            return false
+        }
+        if lhs.samplingFull != rhs.samplingFull {
+            return false
+        }
         return true
     }
 
@@ -944,6 +989,9 @@ extension Context: Equatable, Hashable {
         hasher.combine(activity)
         hasher.combine(batteryPct)
         hasher.combine(speedMps)
+        hasher.combine(lastTouchMs)
+        hasher.combine(distanceHomeM)
+        hasher.combine(samplingFull)
     }
 }
 
@@ -963,7 +1011,10 @@ public struct FfiConverterTypeContext: FfiConverterRustBuffer {
                 screenOn: FfiConverterBool.read(from: &buf), 
                 activity: FfiConverterTypeActivity.read(from: &buf), 
                 batteryPct: FfiConverterUInt8.read(from: &buf), 
-                speedMps: FfiConverterFloat.read(from: &buf)
+                speedMps: FfiConverterFloat.read(from: &buf), 
+                lastTouchMs: FfiConverterUInt64.read(from: &buf), 
+                distanceHomeM: FfiConverterFloat.read(from: &buf), 
+                samplingFull: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -976,6 +1027,9 @@ public struct FfiConverterTypeContext: FfiConverterRustBuffer {
         FfiConverterTypeActivity.write(value.activity, into: &buf)
         FfiConverterUInt8.write(value.batteryPct, into: &buf)
         FfiConverterFloat.write(value.speedMps, into: &buf)
+        FfiConverterUInt64.write(value.lastTouchMs, into: &buf)
+        FfiConverterFloat.write(value.distanceHomeM, into: &buf)
+        FfiConverterBool.write(value.samplingFull, into: &buf)
     }
 }
 
@@ -1081,6 +1135,326 @@ public func FfiConverterTypeIdentity_lower(_ value: Identity) -> RustBuffer {
 }
 
 
+public struct IncidentRecord {
+    public var id: UInt32
+    public var tMs: UInt64
+    public var kind: IncidentKind
+    public var summary: String
+    public var sdDistance: Float
+    public var placement: Placement
+    public var rawJson: String
+    public var pNormal: Float
+    public var pImpaired: Float
+    public var pIncident: Float
+    public var pUnresponsive: Float
+    /**
+     * 0 = none
+     */
+    public var sequenceId: UInt32
+    public var watched: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: UInt32, tMs: UInt64, kind: IncidentKind, summary: String, sdDistance: Float, placement: Placement, rawJson: String, pNormal: Float, pImpaired: Float, pIncident: Float, pUnresponsive: Float, 
+        /**
+         * 0 = none
+         */sequenceId: UInt32, watched: Bool) {
+        self.id = id
+        self.tMs = tMs
+        self.kind = kind
+        self.summary = summary
+        self.sdDistance = sdDistance
+        self.placement = placement
+        self.rawJson = rawJson
+        self.pNormal = pNormal
+        self.pImpaired = pImpaired
+        self.pIncident = pIncident
+        self.pUnresponsive = pUnresponsive
+        self.sequenceId = sequenceId
+        self.watched = watched
+    }
+}
+
+#if compiler(>=6)
+extension IncidentRecord: Sendable {}
+#endif
+
+
+extension IncidentRecord: Equatable, Hashable {
+    public static func ==(lhs: IncidentRecord, rhs: IncidentRecord) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.tMs != rhs.tMs {
+            return false
+        }
+        if lhs.kind != rhs.kind {
+            return false
+        }
+        if lhs.summary != rhs.summary {
+            return false
+        }
+        if lhs.sdDistance != rhs.sdDistance {
+            return false
+        }
+        if lhs.placement != rhs.placement {
+            return false
+        }
+        if lhs.rawJson != rhs.rawJson {
+            return false
+        }
+        if lhs.pNormal != rhs.pNormal {
+            return false
+        }
+        if lhs.pImpaired != rhs.pImpaired {
+            return false
+        }
+        if lhs.pIncident != rhs.pIncident {
+            return false
+        }
+        if lhs.pUnresponsive != rhs.pUnresponsive {
+            return false
+        }
+        if lhs.sequenceId != rhs.sequenceId {
+            return false
+        }
+        if lhs.watched != rhs.watched {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(tMs)
+        hasher.combine(kind)
+        hasher.combine(summary)
+        hasher.combine(sdDistance)
+        hasher.combine(placement)
+        hasher.combine(rawJson)
+        hasher.combine(pNormal)
+        hasher.combine(pImpaired)
+        hasher.combine(pIncident)
+        hasher.combine(pUnresponsive)
+        hasher.combine(sequenceId)
+        hasher.combine(watched)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIncidentRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IncidentRecord {
+        return
+            try IncidentRecord(
+                id: FfiConverterUInt32.read(from: &buf), 
+                tMs: FfiConverterUInt64.read(from: &buf), 
+                kind: FfiConverterTypeIncidentKind.read(from: &buf), 
+                summary: FfiConverterString.read(from: &buf), 
+                sdDistance: FfiConverterFloat.read(from: &buf), 
+                placement: FfiConverterTypePlacement.read(from: &buf), 
+                rawJson: FfiConverterString.read(from: &buf), 
+                pNormal: FfiConverterFloat.read(from: &buf), 
+                pImpaired: FfiConverterFloat.read(from: &buf), 
+                pIncident: FfiConverterFloat.read(from: &buf), 
+                pUnresponsive: FfiConverterFloat.read(from: &buf), 
+                sequenceId: FfiConverterUInt32.read(from: &buf), 
+                watched: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: IncidentRecord, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.id, into: &buf)
+        FfiConverterUInt64.write(value.tMs, into: &buf)
+        FfiConverterTypeIncidentKind.write(value.kind, into: &buf)
+        FfiConverterString.write(value.summary, into: &buf)
+        FfiConverterFloat.write(value.sdDistance, into: &buf)
+        FfiConverterTypePlacement.write(value.placement, into: &buf)
+        FfiConverterString.write(value.rawJson, into: &buf)
+        FfiConverterFloat.write(value.pNormal, into: &buf)
+        FfiConverterFloat.write(value.pImpaired, into: &buf)
+        FfiConverterFloat.write(value.pIncident, into: &buf)
+        FfiConverterFloat.write(value.pUnresponsive, into: &buf)
+        FfiConverterUInt32.write(value.sequenceId, into: &buf)
+        FfiConverterBool.write(value.watched, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIncidentRecord_lift(_ buf: RustBuffer) throws -> IncidentRecord {
+    return try FfiConverterTypeIncidentRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIncidentRecord_lower(_ value: IncidentRecord) -> RustBuffer {
+    return FfiConverterTypeIncidentRecord.lower(value)
+}
+
+
+public struct LiveMetrics {
+    public var tMs: UInt64
+    public var placement: Placement
+    public var samplingFull: Bool
+    public var activity: Activity
+    /**
+     * cadence, stride_cv, regularity, sway, wobble, jerk, rotation, peak_g
+     */
+    public var bands: [MetricBand]
+    public var pNormal: Float
+    public var pImpaired: Float
+    public var pIncident: Float
+    public var pUnresponsive: Float
+    public var baselineTrusted: Bool
+    public var baselineWalkDays: Float
+    public var evidence: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(tMs: UInt64, placement: Placement, samplingFull: Bool, activity: Activity, 
+        /**
+         * cadence, stride_cv, regularity, sway, wobble, jerk, rotation, peak_g
+         */bands: [MetricBand], pNormal: Float, pImpaired: Float, pIncident: Float, pUnresponsive: Float, baselineTrusted: Bool, baselineWalkDays: Float, evidence: String) {
+        self.tMs = tMs
+        self.placement = placement
+        self.samplingFull = samplingFull
+        self.activity = activity
+        self.bands = bands
+        self.pNormal = pNormal
+        self.pImpaired = pImpaired
+        self.pIncident = pIncident
+        self.pUnresponsive = pUnresponsive
+        self.baselineTrusted = baselineTrusted
+        self.baselineWalkDays = baselineWalkDays
+        self.evidence = evidence
+    }
+}
+
+#if compiler(>=6)
+extension LiveMetrics: Sendable {}
+#endif
+
+
+extension LiveMetrics: Equatable, Hashable {
+    public static func ==(lhs: LiveMetrics, rhs: LiveMetrics) -> Bool {
+        if lhs.tMs != rhs.tMs {
+            return false
+        }
+        if lhs.placement != rhs.placement {
+            return false
+        }
+        if lhs.samplingFull != rhs.samplingFull {
+            return false
+        }
+        if lhs.activity != rhs.activity {
+            return false
+        }
+        if lhs.bands != rhs.bands {
+            return false
+        }
+        if lhs.pNormal != rhs.pNormal {
+            return false
+        }
+        if lhs.pImpaired != rhs.pImpaired {
+            return false
+        }
+        if lhs.pIncident != rhs.pIncident {
+            return false
+        }
+        if lhs.pUnresponsive != rhs.pUnresponsive {
+            return false
+        }
+        if lhs.baselineTrusted != rhs.baselineTrusted {
+            return false
+        }
+        if lhs.baselineWalkDays != rhs.baselineWalkDays {
+            return false
+        }
+        if lhs.evidence != rhs.evidence {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(tMs)
+        hasher.combine(placement)
+        hasher.combine(samplingFull)
+        hasher.combine(activity)
+        hasher.combine(bands)
+        hasher.combine(pNormal)
+        hasher.combine(pImpaired)
+        hasher.combine(pIncident)
+        hasher.combine(pUnresponsive)
+        hasher.combine(baselineTrusted)
+        hasher.combine(baselineWalkDays)
+        hasher.combine(evidence)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLiveMetrics: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LiveMetrics {
+        return
+            try LiveMetrics(
+                tMs: FfiConverterUInt64.read(from: &buf), 
+                placement: FfiConverterTypePlacement.read(from: &buf), 
+                samplingFull: FfiConverterBool.read(from: &buf), 
+                activity: FfiConverterTypeActivity.read(from: &buf), 
+                bands: FfiConverterSequenceTypeMetricBand.read(from: &buf), 
+                pNormal: FfiConverterFloat.read(from: &buf), 
+                pImpaired: FfiConverterFloat.read(from: &buf), 
+                pIncident: FfiConverterFloat.read(from: &buf), 
+                pUnresponsive: FfiConverterFloat.read(from: &buf), 
+                baselineTrusted: FfiConverterBool.read(from: &buf), 
+                baselineWalkDays: FfiConverterFloat.read(from: &buf), 
+                evidence: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: LiveMetrics, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.tMs, into: &buf)
+        FfiConverterTypePlacement.write(value.placement, into: &buf)
+        FfiConverterBool.write(value.samplingFull, into: &buf)
+        FfiConverterTypeActivity.write(value.activity, into: &buf)
+        FfiConverterSequenceTypeMetricBand.write(value.bands, into: &buf)
+        FfiConverterFloat.write(value.pNormal, into: &buf)
+        FfiConverterFloat.write(value.pImpaired, into: &buf)
+        FfiConverterFloat.write(value.pIncident, into: &buf)
+        FfiConverterFloat.write(value.pUnresponsive, into: &buf)
+        FfiConverterBool.write(value.baselineTrusted, into: &buf)
+        FfiConverterFloat.write(value.baselineWalkDays, into: &buf)
+        FfiConverterString.write(value.evidence, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLiveMetrics_lift(_ buf: RustBuffer) throws -> LiveMetrics {
+    return try FfiConverterTypeLiveMetrics.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLiveMetrics_lower(_ value: LiveMetrics) -> RustBuffer {
+    return FfiConverterTypeLiveMetrics.lower(value)
+}
+
+
 public struct Location {
     public var lat: Double
     public var lng: Double
@@ -1167,6 +1541,108 @@ public func FfiConverterTypeLocation_lower(_ value: Location) -> RustBuffer {
 }
 
 
+public struct MetricBand {
+    public var name: String
+    public var value: Float
+    public var mean: Float
+    public var sd: Float
+    public var sdDistance: Float
+    public var inBand: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, value: Float, mean: Float, sd: Float, sdDistance: Float, inBand: Bool) {
+        self.name = name
+        self.value = value
+        self.mean = mean
+        self.sd = sd
+        self.sdDistance = sdDistance
+        self.inBand = inBand
+    }
+}
+
+#if compiler(>=6)
+extension MetricBand: Sendable {}
+#endif
+
+
+extension MetricBand: Equatable, Hashable {
+    public static func ==(lhs: MetricBand, rhs: MetricBand) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        if lhs.mean != rhs.mean {
+            return false
+        }
+        if lhs.sd != rhs.sd {
+            return false
+        }
+        if lhs.sdDistance != rhs.sdDistance {
+            return false
+        }
+        if lhs.inBand != rhs.inBand {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(value)
+        hasher.combine(mean)
+        hasher.combine(sd)
+        hasher.combine(sdDistance)
+        hasher.combine(inBand)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMetricBand: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MetricBand {
+        return
+            try MetricBand(
+                name: FfiConverterString.read(from: &buf), 
+                value: FfiConverterFloat.read(from: &buf), 
+                mean: FfiConverterFloat.read(from: &buf), 
+                sd: FfiConverterFloat.read(from: &buf), 
+                sdDistance: FfiConverterFloat.read(from: &buf), 
+                inBand: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MetricBand, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterFloat.write(value.value, into: &buf)
+        FfiConverterFloat.write(value.mean, into: &buf)
+        FfiConverterFloat.write(value.sd, into: &buf)
+        FfiConverterFloat.write(value.sdDistance, into: &buf)
+        FfiConverterBool.write(value.inBand, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMetricBand_lift(_ buf: RustBuffer) throws -> MetricBand {
+    return try FfiConverterTypeMetricBand.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMetricBand_lower(_ value: MetricBand) -> RustBuffer {
+    return FfiConverterTypeMetricBand.lower(value)
+}
+
+
 public struct MotionSample {
     public var tMs: UInt64
     public var ax: Float
@@ -1175,10 +1651,13 @@ public struct MotionSample {
     public var gx: Float
     public var gy: Float
     public var gz: Float
+    public var rx: Float
+    public var ry: Float
+    public var rz: Float
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(tMs: UInt64, ax: Float, ay: Float, az: Float, gx: Float, gy: Float, gz: Float) {
+    public init(tMs: UInt64, ax: Float, ay: Float, az: Float, gx: Float, gy: Float, gz: Float, rx: Float, ry: Float, rz: Float) {
         self.tMs = tMs
         self.ax = ax
         self.ay = ay
@@ -1186,6 +1665,9 @@ public struct MotionSample {
         self.gx = gx
         self.gy = gy
         self.gz = gz
+        self.rx = rx
+        self.ry = ry
+        self.rz = rz
     }
 }
 
@@ -1217,6 +1699,15 @@ extension MotionSample: Equatable, Hashable {
         if lhs.gz != rhs.gz {
             return false
         }
+        if lhs.rx != rhs.rx {
+            return false
+        }
+        if lhs.ry != rhs.ry {
+            return false
+        }
+        if lhs.rz != rhs.rz {
+            return false
+        }
         return true
     }
 
@@ -1228,6 +1719,9 @@ extension MotionSample: Equatable, Hashable {
         hasher.combine(gx)
         hasher.combine(gy)
         hasher.combine(gz)
+        hasher.combine(rx)
+        hasher.combine(ry)
+        hasher.combine(rz)
     }
 }
 
@@ -1246,7 +1740,10 @@ public struct FfiConverterTypeMotionSample: FfiConverterRustBuffer {
                 az: FfiConverterFloat.read(from: &buf), 
                 gx: FfiConverterFloat.read(from: &buf), 
                 gy: FfiConverterFloat.read(from: &buf), 
-                gz: FfiConverterFloat.read(from: &buf)
+                gz: FfiConverterFloat.read(from: &buf), 
+                rx: FfiConverterFloat.read(from: &buf), 
+                ry: FfiConverterFloat.read(from: &buf), 
+                rz: FfiConverterFloat.read(from: &buf)
         )
     }
 
@@ -1258,6 +1755,9 @@ public struct FfiConverterTypeMotionSample: FfiConverterRustBuffer {
         FfiConverterFloat.write(value.gx, into: &buf)
         FfiConverterFloat.write(value.gy, into: &buf)
         FfiConverterFloat.write(value.gz, into: &buf)
+        FfiConverterFloat.write(value.rx, into: &buf)
+        FfiConverterFloat.write(value.ry, into: &buf)
+        FfiConverterFloat.write(value.rz, into: &buf)
     }
 }
 
@@ -1908,6 +2408,12 @@ public enum EngineEvent {
     case batteryDying
     case locationIntervalChanged(seconds: UInt32
     )
+    case samplingRateChanged(hz: UInt32, gyro: Bool
+    )
+    case signalIncident(record: IncidentRecord
+    )
+    case callOptionAvailable(summary: String
+    )
 }
 
 
@@ -1945,6 +2451,15 @@ public struct FfiConverterTypeEngineEvent: FfiConverterRustBuffer {
         case 7: return .batteryDying
         
         case 8: return .locationIntervalChanged(seconds: try FfiConverterUInt32.read(from: &buf)
+        )
+        
+        case 9: return .samplingRateChanged(hz: try FfiConverterUInt32.read(from: &buf), gyro: try FfiConverterBool.read(from: &buf)
+        )
+        
+        case 10: return .signalIncident(record: try FfiConverterTypeIncidentRecord.read(from: &buf)
+        )
+        
+        case 11: return .callOptionAvailable(summary: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -1992,6 +2507,22 @@ public struct FfiConverterTypeEngineEvent: FfiConverterRustBuffer {
         case let .locationIntervalChanged(seconds):
             writeInt(&buf, Int32(8))
             FfiConverterUInt32.write(seconds, into: &buf)
+            
+        
+        case let .samplingRateChanged(hz,gyro):
+            writeInt(&buf, Int32(9))
+            FfiConverterUInt32.write(hz, into: &buf)
+            FfiConverterBool.write(gyro, into: &buf)
+            
+        
+        case let .signalIncident(record):
+            writeInt(&buf, Int32(10))
+            FfiConverterTypeIncidentRecord.write(record, into: &buf)
+            
+        
+        case let .callOptionAvailable(summary):
+            writeInt(&buf, Int32(11))
+            FfiConverterString.write(summary, into: &buf)
             
         }
     }
@@ -2205,6 +2736,104 @@ extension HmmState: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum IncidentKind {
+    
+    case gaitDrift
+    case impact
+    case grab
+    case stillness
+    case separated
+    case typingOff
+}
+
+
+#if compiler(>=6)
+extension IncidentKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIncidentKind: FfiConverterRustBuffer {
+    typealias SwiftType = IncidentKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IncidentKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .gaitDrift
+        
+        case 2: return .impact
+        
+        case 3: return .grab
+        
+        case 4: return .stillness
+        
+        case 5: return .separated
+        
+        case 6: return .typingOff
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: IncidentKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .gaitDrift:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .impact:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .grab:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .stillness:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .separated:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .typingOff:
+            writeInt(&buf, Int32(6))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIncidentKind_lift(_ buf: RustBuffer) throws -> IncidentKind {
+    return try FfiConverterTypeIncidentKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIncidentKind_lower(_ value: IncidentKind) -> RustBuffer {
+    return FfiConverterTypeIncidentKind.lower(value)
+}
+
+
+extension IncidentKind: Equatable, Hashable {}
+
+
+
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum Placement {
     
     case unknown
@@ -2298,6 +2927,7 @@ public enum UserAction {
     case biometricDismiss
     case friendMarkedSafe
     case checkTimeout
+    case phoneUnlocked
 }
 
 
@@ -2328,6 +2958,8 @@ public struct FfiConverterTypeUserAction: FfiConverterRustBuffer {
         case 6: return .friendMarkedSafe
         
         case 7: return .checkTimeout
+        
+        case 8: return .phoneUnlocked
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -2363,6 +2995,10 @@ public struct FfiConverterTypeUserAction: FfiConverterRustBuffer {
         
         case .checkTimeout:
             writeInt(&buf, Int32(7))
+        
+        
+        case .phoneUnlocked:
+            writeInt(&buf, Int32(8))
         
         }
     }
@@ -2460,6 +3096,56 @@ fileprivate struct FfiConverterSequenceData: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterData.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeIncidentRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [IncidentRecord]
+
+    public static func write(_ value: [IncidentRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeIncidentRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [IncidentRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [IncidentRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeIncidentRecord.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeMetricBand: FfiConverterRustBuffer {
+    typealias SwiftType = [MetricBand]
+
+    public static func write(_ value: [MetricBand], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMetricBand.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [MetricBand] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [MetricBand]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMetricBand.read(from: &buf))
         }
         return seq
     }
@@ -2695,7 +3381,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_safety_ffi_checksum_func_split_day_key() != 58669) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_safety_ffi_checksum_method_safetyengine_export_baseline() != 38990) {
+    if (uniffi_safety_ffi_checksum_method_safetyengine_export_baseline() != 33129) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_safety_ffi_checksum_method_safetyengine_incident_log() != 26412) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_safety_ffi_checksum_method_safetyengine_metrics() != 64373) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_safety_ffi_checksum_method_safetyengine_push_action() != 26431) {
