@@ -7,6 +7,21 @@ import { inviteMember } from '@/lib/db';
 import { refreshAll } from '@/lib/native';
 import { useUserId } from '@/lib/store';
 
+type QrPayload = { v: 1; userId: string; fp: string; x: string; e: string };
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The friends-tab QR (`{ v: 1, userId, fp, x, e }`). Throws a readable error for anything else, before any network call. */
+function parseQr(raw: string): QrPayload {
+  let q: Partial<QrPayload>;
+  try { q = JSON.parse(raw) as Partial<QrPayload>; } catch { throw new Error('Not a Safe code'); }
+  if (!q || q.v !== 1) throw new Error('Not a Safe code');
+  if (typeof q.userId !== 'string' || !UUID_RE.test(q.userId)) {
+    throw new Error('This code has no valid account id. On the other device, sign in, reopen Friends → Show QR, and scan again.');
+  }
+  if (typeof q.fp !== 'string' || typeof q.x !== 'string' || typeof q.e !== 'string') throw new Error('This Safe code is incomplete');
+  return q as QrPayload;
+}
+
 export default function Scan() {
   const router = useRouter();
   const userId = useUserId();
@@ -14,26 +29,32 @@ export default function Scan() {
   const [perm, requestPerm] = useCameraPermissions();
   const [busy, setBusy] = useState(false);
 
-  const onScan = async (raw: string) => {
+  const onScan = (raw: string) => {
     if (busy || !userId || !groupId) return;
     setBusy(true);
-    try {
-      const q = JSON.parse(raw) as { v: number; userId: string; fp: string; x: string; e: string };
-      if (q.v !== 1 || !q.userId) throw new Error('Not a Safe code');
-      Alert.alert('Add friend?', `Fingerprint ${q.fp}\nCheck it matches their screen.`, [
-        { text: 'Cancel', style: 'cancel', onPress: () => setBusy(false) },
-        {
-          text: 'Add',
-          onPress: async () => {
-            // Their device row (with x25519/ed25519 pubs) is written by their own phone on sign-in; the scanned
-            // fingerprint is what the user verifies against it, so the server can't swap keys.
-            await inviteMember(groupId, q.userId, userId);
-            await refreshAll();
-            router.back();
-          },
+    const fail = (title: string, e: unknown) => {
+      Alert.alert(title, e instanceof Error ? e.message : String(e), [{ text: 'OK', onPress: () => setBusy(false) }], { onDismiss: () => setBusy(false) });
+    };
+    let q: QrPayload;
+    try { q = parseQr(raw); } catch (e) { fail('Scan failed', e); return; }
+    if (q.userId === userId) { fail('Scan failed', new Error('That is your own code. Scan your friend\'s screen.')); return; }
+    Alert.alert('Add friend?', `Fingerprint ${q.fp}\nCheck it matches their screen.`, [
+      { text: 'Cancel', style: 'cancel', onPress: () => setBusy(false) },
+      {
+        text: 'Add',
+        onPress: () => {
+          // Their device row (with x25519/ed25519 pubs) is written by their own device on sign-in; the scanned
+          // fingerprint is what the user verifies against it, so the server can't swap keys.
+          void (async () => {
+            try {
+              await inviteMember(groupId, q.userId, userId);
+              await refreshAll();
+              router.back();
+            } catch (e) { fail('Could not add friend', e); }
+          })();
         },
-      ]);
-    } catch (e: any) { Alert.alert('Scan failed', e.message); setBusy(false); }
+      },
+    ], { onDismiss: () => setBusy(false) });
   };
 
   if (!perm?.granted) {

@@ -15,11 +15,19 @@ export default function Friends() {
   const groups = useStore((s) => s.groups);
   const members = useStore((s) => s.members);
   const profiles = useStore((s) => s.profiles);
-  const [identity, setIdentity] = useState<Identity | null>(null);
+  const [fetchedIdentity, setIdentity] = useState<Identity | null>(null);
+  // Never show a QR whose id is not the signed-in user (a friend scanning it would invite a stranger or fail).
+  const identity = fetchedIdentity && fetchedIdentity.userId === userId ? fetchedIdentity : null;
   const [showQr, setShowQr] = useState(false);
   const [name, setName] = useState('');
 
-  useEffect(() => { SafetyNative.getIdentity().then(setIdentity).catch(() => {}); }, []);
+  // Re-read on account change (the first read can land before sign-in finished configuring).
+  useEffect(() => {
+    if (!userId) return;
+    let alive = true;
+    SafetyNative.getIdentity().then((id) => { if (alive) setIdentity(id); }).catch(() => {});
+    return () => { alive = false; };
+  }, [userId]);
 
   const create = async () => {
     if (!userId || !name.trim()) return;

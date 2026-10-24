@@ -57,7 +57,20 @@ export class WebSafetyNative implements SafetyNativeModuleType {
   /** Sensing is still the JS mock on web; only the escrow crypto is real. Keeps onboarding permissive. */
   readonly isMock = true;
   private readonly mock: SafetyNativeModuleType = new MockSafetyNative();
-  private userId = 'web-user';
+  /** Set by configure(); until then [uid] falls back to the signed-in Supabase user. Never a placeholder. */
+  private userId: string | null = null;
+
+  /**
+   * The signed-in user's id. Screens can call getIdentity() before onAuthSession has run configure(); the session
+   * is already in supabase-js by then, so read it from there instead of handing out a placeholder id.
+   */
+  private async uid(): Promise<string> {
+    if (this.userId) return this.userId;
+    const { data } = await supabase.auth.getSession();
+    const id = data.session?.user.id;
+    if (!id) throw new Error('Not signed in');
+    return id;
+  }
   private identity: Promise<WasmIdentity> | null = null;
   private groups = new Map<string, GroupConfig>();
   /** `${subject}|${epoch}|${hourIndex}` → K_h */
@@ -149,12 +162,12 @@ export class WebSafetyNative implements SafetyNativeModuleType {
 
   // ---- real crypto -------------------------------------------------------------------------------
   async getIdentity(): Promise<Identity> {
-    const [w, id] = await Promise.all([this.w(), this.loadIdentity()]);
+    const [w, id, userId] = await Promise.all([this.w(), this.loadIdentity(), this.uid()]);
     return {
-      userId: this.userId,
+      userId,
       x25519Pub: toB64(id.x25519Public),
       ed25519Pub: toB64(id.ed25519Public),
-      fingerprint: w.fingerprint(this.userId, id.x25519Public, id.ed25519Public),
+      fingerprint: w.fingerprint(userId, id.x25519Public, id.ed25519Public),
     };
   }
 
@@ -196,19 +209,19 @@ export class WebSafetyNative implements SafetyNativeModuleType {
    * aad "approval|{subjectUserId}|{epochId}". The caller inserts the `unlock_approvals` row.
    */
   async approveUnlock(r: ApproveUnlockInput): Promise<{ sealedShareB64: string }> {
-    const [w, id] = await Promise.all([this.w(), this.loadIdentity()]);
+    const [w, id, me] = await Promise.all([this.w(), this.loadIdentity(), this.uid()]);
     const { data, error } = await supabase
       .from('key_shares')
       .select('share_index, sealed, sender_ed25519_pub')
       .eq('epoch_id', r.epochId)
-      .eq('recipient_user_id', this.userId)
+      .eq('recipient_user_id', me)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
     if (error) throw new Error(`key_shares: ${error.message}`);
     if (!data) throw new Error('No escrowed share for this epoch was sealed to this device');
     const row = data as { share_index: number; sealed: string; sender_ed25519_pub: string };
-    const share = w.open_sealed(id.x25519Secret, fromB64(row.sender_ed25519_pub), fromB64(row.sealed), utf8(`share|${r.epochId}|${this.userId}`));
+    const share = w.open_sealed(id.x25519Secret, fromB64(row.sender_ed25519_pub), fromB64(row.sealed), utf8(`share|${r.epochId}|${me}`));
     const payload = new Uint8Array(1 + share.length);
     payload[0] = row.share_index & 0xff;
     payload.set(share, 1);
