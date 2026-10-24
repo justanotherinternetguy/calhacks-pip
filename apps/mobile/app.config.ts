@@ -11,7 +11,6 @@ function localFile(name: string): string | undefined {
   return fs.existsSync(path.join(__dirname, name)) ? `./${name}` : undefined;
 }
 const GOOGLE_SERVICES_JSON = localFile('google-services.json');       // Android FCM
-const GOOGLE_SERVICE_INFO_PLIST = localFile('GoogleService-Info.plist'); // iOS (only if Firebase is used on iOS; APNs itself needs none)
 
 const LOCATION_WHY =
   'Safe watches for signs that you cannot ask for help while you are out at night. Location is encrypted on your phone and is only released to your friends if you may be in danger.';
