@@ -101,7 +101,10 @@ final class SensingCoordinator {
     private var tickTimer: DispatchSourceTimer?
     private var tickInterval: TimeInterval = 0
     private var tickCount = 0
-    private var dashboardTimer: DispatchSourceTimer?
+    /// Wall-clock ms of the last `tick()` (0 before the first); `dashboard()` ticks first when this is > 1 s old.
+    private var lastTickMs: UInt64 = 0
+    /// `setDashboardStreaming(true)`: forces FULL sampling + the 1 s tick and emits `dashboard` after every tick.
+    private var dashboardStreaming = false
     /// Last `SamplingRateChanged` request from the engine; LOW until it asks for more (CONTRACTS §6).
     private var requestedMode: MotionSampler.Mode = .low
     /// Native-side ring of the last 64 `SignalIncident` records (dedupes re-emits; the engine owns the real log).
@@ -158,8 +161,9 @@ final class SensingCoordinator {
 
     // MARK: motion sampling (runs whenever an engine exists, not only in night sessions)
 
-    /// FULL during a baseline walk, otherwise whatever the engine last asked for.
-    private var effectiveMode: MotionSampler.Mode { baselineWalkStart != nil ? .full : requestedMode }
+    /// FULL during a baseline walk or while the dashboard is streaming (CONTRACTS §6: the personal dashboard shows
+    /// the full-rate metrics), otherwise whatever the engine last asked for.
+    private var effectiveMode: MotionSampler.Mode { (baselineWalkStart != nil || dashboardStreaming) ? .full : requestedMode }
 
     /// Starts (or re-modes) the sampler and makes sure the ticker runs. Outside the continuous-location session
     /// iOS suspends the process shortly after backgrounding, so idle sampling only covers foreground use and
@@ -293,11 +297,11 @@ final class SensingCoordinator {
 
     func retryAudio() { q.async { if self.sessionActive { self.startAudio() } } }
 
-    private var wantsFastTick: Bool { sessionActive || baselineWalkStart != nil }
+    private var wantsFastTick: Bool { sessionActive || baselineWalkStart != nil || dashboardStreaming }
 
-    /// 1 s during a night session / baseline walk; 5 s idle, so the engine still sees `Context` (and can ask for
-    /// FULL sampling or learn from daytime walks) while only the low-rate sampler runs. Reschedules in place
-    /// when the cadence changes; stops when there is nothing to feed.
+    /// 1 s during a night session / baseline walk / dashboard streaming; 5 s idle, so the engine still sees
+    /// `Context` (and can ask for FULL sampling or learn from daytime walks) while only the low-rate sampler runs.
+    /// Reschedules in place when the cadence changes; stops when there is nothing to feed.
     private func scheduleTicker() {
         let interval: TimeInterval = wantsFastTick ? 1 : 5
         guard engine != nil, wantsFastTick || motion.running else { stopTicker(); return }
@@ -313,14 +317,18 @@ final class SensingCoordinator {
 
     private func stopTicker() { tickTimer?.cancel(); tickTimer = nil; tickInterval = 0 }
 
-    // MARK: tick (1 s in session, 5 s idle)
+    // MARK: tick (1 s in session / baseline walk / dashboard streaming, 5 s idle)
 
     func tickNow(onQueue: Bool = false) { onQueue ? tick() : q.async { self.tick() } }
 
+    /// Pushes a fresh `Context` (so `samplingFull` / `lastTouchMs` / `distanceHomeM` are current on every tick,
+    /// including each 1 s dashboard frame), ticks the engine, dispatches its events, then — while streaming —
+    /// emits `dashboard` from the state that tick just produced (no separate timer racing the tick).
     private func tick() {
         guard let engine else { return }
         let now = nowMs()
         tickCount += 1
+        lastTickMs = SafeClock.nowMs()
         if virtualNowMs == nil { engine.pushContext(ctx: currentContext(now)) }   // trace replay supplies its own
         for ev in engine.tick(nowMs: now) { handle(ev) }
         if let pc = pendingCheck, now >= pc.deadlineMs {
@@ -328,6 +336,7 @@ final class SensingCoordinator {
             engine.pushAction(a: .checkTimeout, nowMs: now)
         }
         if SafeClock.nowMs() &- lastBaselineSaveMs >= 300_000 { saveBaseline() }   // every 5 min, idle or not
+        if dashboardStreaming { emitDashboard() }
         guard sessionActive else { return }
         let snap = engine.snapshot()
         if snap.riskBand > 0 || snap.hmmState != .normal { audio.boost(seconds: 120) }
@@ -562,27 +571,35 @@ final class SensingCoordinator {
 
     // MARK: dashboard (CONTRACTS §6)
 
-    func dashboard() -> [String: Any] { q.sync { dashboardLocked() } }
+    /// `getDashboard()`: ticks the engine first when the last tick is more than 1 s old (idle 5 s cadence, or no
+    /// ticker at all), so a one-shot read never returns stale metrics.
+    func dashboard() -> [String: Any] {
+        q.sync {
+            if SafeClock.nowMs() &- lastTickMs > 1_000 { tick() }
+            return dashboardLocked()
+        }
+    }
 
-    /// While on, emits `dashboard` every 1 s (metrics + the engine's incident log). Idempotent.
+    /// While on, FULL sampling is forced (`effectiveMode`), the engine ticks every 1 s (`scheduleTicker`) and
+    /// `dashboard` (metrics + the engine's incident log) is emitted right after each tick. Idempotent; `false`
+    /// (or module teardown) returns the sampler to the engine-requested mode and the ticker to its normal cadence.
     func setDashboardStreaming(_ on: Bool) {
         q.async {
+            guard on != self.dashboardStreaming else { return }
+            self.dashboardStreaming = on
+            if self.motion.running { self.motion.setMode(self.effectiveMode) } else { self.startMotion() }
+            self.scheduleTicker()
+            let sampling = self.motion.running ? self.motion.mode.label : "off"
+            let cadence = self.tickInterval > 0 ? "\(Int(self.tickInterval)) s" : "off"
+            NSLog("[safe] dashboard streaming \(on ? "on" : "off"): sampling \(sampling), engine requested \(self.requestedMode.label), tick \(cadence)")
             if on {
-                guard self.dashboardTimer == nil else { return }
-                let t = DispatchSource.makeTimerSource(queue: self.q)
-                t.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(100))
-                t.setEventHandler { [weak self] in
-                    guard let self, let emit = self.emit else { return }
-                    emit("dashboard", self.dashboardLocked())
-                }
-                t.resume()
-                self.dashboardTimer = t
-            } else {
-                self.dashboardTimer?.cancel()
-                self.dashboardTimer = nil
+                // First frame now rather than after the first 1 s interval; with no engine yet, the neutral payload.
+                if self.engine != nil { self.tick() } else { self.emitDashboard() }
             }
         }
     }
+
+    private func emitDashboard() { emit?("dashboard", dashboardLocked()) }
 
     private func dashboardLocked() -> [String: Any] {
         guard let engine else { return ["metrics": metricsDict(nil), "incidents": [[String: Any]]()] }

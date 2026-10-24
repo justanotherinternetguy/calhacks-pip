@@ -19,6 +19,8 @@ final class MotionSampler {
         case full   // 50 Hz device motion + gyro
         var hz: Double { self == .full ? MotionSampler.fullHz : MotionSampler.lowHz }
         var isFull: Bool { self == .full }
+        /// For logs: `FULL` / `LOW`.
+        var label: String { self == .full ? "FULL" : "LOW" }
     }
 
     static let fullHz = 50.0

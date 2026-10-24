@@ -8,7 +8,7 @@ SOS, touch / unlock tracking and the live dashboard feed.
 | File | What |
 |---|---|
 | `SafetyNativeModule.swift` | Expo `Module` facade (every method/event from CONTRACTS §2) + `SafetyNativeAppDelegate` subscriber |
-| `SensingCoordinator.swift` | Singleton owning the `SafetyEngine`; 1 s tick (5 s idle); `EngineEvent` → notifications / rows / push / JS events; dashboard feed |
+| `SensingCoordinator.swift` | Singleton owning the `SafetyEngine`; 1 s tick (5 s idle); `EngineEvent` → notifications / rows / push / JS events; dashboard feed (emitted from the tick) |
 | `NightModeController.swift` | Home geofences + significant-change relaunch, evening window, modes, continuous location in night mode |
 | `Sensors.swift` | `MotionSampler` (LOW 10 Hz accel / FULL 50 Hz + gyro → 1 s batches), `ActivityTracker`, `DeviceState` (screen/unlock/battery) |
 | `TouchTracker.swift` | `Context.lastTouchMs` from in-app touches + unlock notifications; owner unlock → `UserAction.phoneUnlocked` |
@@ -135,7 +135,8 @@ intent (App Intents inside static libraries need Xcode 15.3+), move `AppIntents.
   raw − gravity, `rx..rz = 0`, 10-sample batches. `EngineEvent.samplingRateChanged(hz:gyro:)` switches to
   **FULL** when `gyro` or `hz ≥ 25` — `CMDeviceMotion` at 50 Hz (fused gravity / user acceleration) plus
   `rotationRate` as `rx..rz` (rad/s, device frame), 50-sample batches — and back to LOW otherwise. Baseline
-  walks force FULL for their duration. `Context.samplingFull` reports what is actually being delivered (a
+  walks and dashboard streaming force FULL for their duration (`effectiveMode`), reverting to the
+  engine-requested mode afterwards. `Context.samplingFull` reports what is actually being delivered (a
   gyro-less device stays LOW). Low-rate sampling runs **whenever an engine exists**, not only in night
   sessions, with a 5 s idle tick so the engine keeps receiving `Context` (and can ask for FULL / learn from
   daytime walks). Caveat: without the continuous-location session iOS suspends the process a few seconds after
@@ -157,12 +158,18 @@ intent (App Intents inside static libraries need Xcode 15.3+), move `AppIntents.
   (0 after a relaunch until the first touch / unlock); while suspended nothing is recorded. No `sendEvent`
   swizzle is used (RN owns `UIWindow`), which is why keyboard touches are reported from the typing view.
 - **Dashboard (CONTRACTS §6):** `getDashboard()` → `{ metrics: LiveMetrics, incidents: IncidentRecord[] }`
-  straight from `engine.metrics()` / `engine.incidentLog()`; `setDashboardStreaming(true)` runs a 1 s timer on
-  the coordinator queue emitting `dashboard` with the same payload (idempotent; `false` or module teardown
-  stops it). Field names are the Rust names in camelCase; enums are lowercase snake strings (`kind`:
+  straight from `engine.metrics()` / `engine.incidentLog()`; if the last engine tick is older than 1 s (idle 5 s
+  cadence) it runs a tick first so the read is current. `setDashboardStreaming(true)` (same as Android) forces
+  **FULL** sampling regardless of the engine-requested mode, switches the ticker to 1 s, and emits `dashboard`
+  with the same payload right after **each engine tick** — there is no separate timer, so a frame never races the
+  tick that produced it, and every frame follows a fresh `Context` push (`samplingFull`, `lastTouchMs`,
+  `distanceHomeM` are current). The first frame is emitted immediately on start. Idempotent; `false` or module
+  teardown restores the engine-requested sampling mode and the normal tick cadence. Start / stop are logged
+  (`[safe] dashboard streaming on|off: sampling FULL|LOW|off, engine requested FULL|LOW, tick 1 s|5 s|off`).
+  Field names are the Rust names in camelCase; enums are lowercase snake strings (`kind`:
   `gait_drift | impact | grab | stillness | separated | typing_off`; `placement`, `activity` likewise);
   non-finite floats are sent as 0. With no engine yet, `metrics` is a neutral record (`pNormal = 1`,
-  empty `bands`) and `incidents` is `[]`.
+  empty `bands`) and `incidents` is `[]` (streaming then emits that once; frames resume with the engine).
 - **v1.1 events:** `signalIncident` (the `IncidentRecord` dict; deduped by `id` through a 64-entry native ring
   buffer; also boosts the audio classifier for 2 min in session), `callOption` (`{ summary }`; additionally
   inserts `incident_events.kind='call_option'` on the open incident and calls `functions/v1/push` with
