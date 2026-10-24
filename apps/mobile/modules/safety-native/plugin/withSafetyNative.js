@@ -1,6 +1,6 @@
 // Expo config plugin for the SafetyNative module.
 // - Android: foreground service, boot receiver, QS tile service, widget receiver, prebuilt jniLibs
-// - iOS: background modes + usage strings, prebuilt safety xcframework
+// - iOS: not supported (module removed); the iOS helpers below are unused
 const fs = require('fs');
 const path = require('path');
 const { withAndroidManifest, withInfoPlist, withDangerousMod, withXcodeProject, withGradleProperties, AndroidConfig } = require('expo/config-plugins');
@@ -93,7 +93,5 @@ module.exports = function withSafetyNative(config) {
   config = withAndroidComponents(config);
   config = withMinSdk26(config);
   config = withAndroidJniLibs(config);
-  config = withIosPlist(config);
-  config = withIosFramework(config);
   return config;
 };

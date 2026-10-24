@@ -14,7 +14,7 @@ proximity tokens and coarse status.
 ## Architecture
 
 ```
-┌──────────────── Phone (iOS / Android) ────────────────┐
+┌──────────────── Phone (Android) ──────────────────────┐
 │ Expo app (TS, expo-router)  ← UI only, may be asleep  │
 │   └─ Expo modules facade (events + commands)          │
 │ Native sensing service (Swift / Kotlin)  ← always up  │
@@ -45,7 +45,7 @@ in [docs/CONTRACTS.md](docs/CONTRACTS.md); the full design is [PLAN.md](PLAN.md)
 ```
 safe/
   apps/mobile/                     Expo app (expo-router, TS) — UI only
-    modules/safety-native/         Expo module: ios/*.swift, android/**/*.kt, src/ TS facade
+    modules/safety-native/         Expo module: android/**/*.kt, src/ TS facade (iOS removed)
   core/                            Cargo workspace
     crates/safety-core/            signal, baseline, hmm, escalation, typing (pure Rust, no I/O)
     crates/safety-crypto/          identity, Shamir GF(256), HPKE seal/open, location AEAD, proximity
@@ -64,7 +64,7 @@ safe/
 ## Quickstart
 
 Prereqs: Rust 1.99 (rustup), pnpm 12, Node 26, Deno 2, Supabase CLI; optional Android SDK + NDK
-r27 (`cargo install cargo-ndk`) and Xcode (iOS, macOS only).
+r27 (`cargo install cargo-ndk`).
 
 ```bash
 pnpm install
@@ -72,8 +72,8 @@ cargo test --manifest-path core/Cargo.toml                    # Rust: golden sto
 (cd supabase && deno test --allow-all functions)              # edge functions
 pnpm --filter mobile typecheck                                # app
 cargo run --manifest-path core/Cargo.toml -p sim -- batch core/traces   # regression gate (false alarms / detection delay)
-core/build-mobile.sh                                          # android .so + kotlin; +ios xcframework + swift on macOS
-pnpm --filter mobile android                                  # or ios — debug dev-build with inject-trace enabled
+core/build-mobile.sh                                          # android .so + kotlin bindings
+pnpm --filter mobile android                                  # debug dev-build with inject-trace enabled
 ```
 
 Backend locally: `cd supabase && supabase start && supabase db reset && supabase functions serve`.

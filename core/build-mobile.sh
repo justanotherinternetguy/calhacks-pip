@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build the Rust core (safety-ffi) for Android + iOS and generate uniffi bindings.
+# Build the Rust core (safety-ffi) for Android and generate uniffi Kotlin bindings. (iOS support was removed; the
+# --ios-only / macOS paths below are kept only for reference and are not maintained.)
 #
 #   core/build-mobile.sh                # android (+ ios on macOS)
 #   core/build-mobile.sh --android-only

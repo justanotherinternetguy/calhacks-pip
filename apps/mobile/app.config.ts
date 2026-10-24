@@ -25,24 +25,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   orientation: 'portrait',
   userInterfaceStyle: 'dark',
   backgroundColor: '#0b0d12',
-  ios: {
-    bundleIdentifier: 'app.safe.mobile',
-    supportsTablet: false,
-    ...(GOOGLE_SERVICE_INFO_PLIST ? { googleServicesFile: GOOGLE_SERVICE_INFO_PLIST } : {}),
-    infoPlist: {
-      UIBackgroundModes: ['location', 'audio', 'processing', 'fetch'],
-      NSLocationAlwaysAndWhenInUseUsageDescription: LOCATION_WHY,
-      NSLocationWhenInUseUsageDescription: LOCATION_WHY,
-      NSMotionUsageDescription:
-        'Motion data is used on your phone to notice unsteady walking, hard falls and long stillness. It never leaves the device.',
-      NSMicrophoneUsageDescription:
-        'During night mode the mic is sampled a few seconds at a time to detect screams or breaking glass. Audio is analysed in memory and never stored or uploaded.',
-      NSFaceIDUsageDescription: 'Face ID confirms that it is really you dismissing an alert.',
-      NSCameraUsageDescription: 'The camera scans a friend\'s QR code to add them to your group.',
-      BGTaskSchedulerPermittedIdentifiers: ['app.safe.mobile.baseline'],
-      ITSAppUsesNonExemptEncryption: false,
-    },
-  },
   android: {
     package: 'app.safe.mobile',
     adaptiveIcon: { backgroundColor: '#0b0d12' },
