@@ -1,18 +1,18 @@
-// Drives the AI read on the monitor. Free OpenRouter models allow few requests a day, so the model is only asked
+// Drives the AI read on the monitor. Free OpenRouter models allow few requests a day (and Claude costs per call), so the model is only asked
 // when the incident picture changes (new / cleared / answered record, escalation step, check-in, friend action),
 // debounced, at most once per MIN_GAP_MS unless the escalation went up, and never while the log is empty.
 // The last answer is cached per subject so a page refresh does not spend a request.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { EscalationLevel } from '@/modules/safety-native';
+import { isCheckPending, type EscalationLevel } from '@/modules/safety-native';
 import { chat, llmConfigured, LlmError } from '@/lib/llm';
-import { buildMessages, parseAnalysis, type Analysis, type AnalysisInput, type Urgency } from './riskAnalysis';
+import { ANALYSIS_SCHEMA, buildMessages, parseAnalysis, riskFloor, type Analysis, type AnalysisInput, type Urgency } from './riskAnalysis';
 
 const DEBOUNCE_MS = 4_000;
 const URGENT_DEBOUNCE_MS = 1_500;
 const MIN_GAP_MS = 45_000;
 const ERROR_RETRY_MS = 30_000;
 const RATE_LIMIT_RETRY_MS = 90_000;
-const CACHE_PREFIX = 'safe.monitor.ai.v2.'; // v2: reports-only prompt
+const CACHE_PREFIX = 'safe.monitor.ai.v3.'; // v3: structured timeline, score / drivers
 
 export type Reminder = { id: string; text: string; urgency: Urgency; atMs: number };
 export type AnalysisStatus = 'off' | 'quiet' | 'cleared' | 'waiting' | 'running' | 'ready' | 'error';
@@ -113,16 +113,16 @@ export function useRiskAnalysis(opts: {
     const prev = innerRef.current.subject === subject ? innerRef.current : empty(subject);
     const input: AnalysisInput = {
       ...buildRef.current(),
-      previous: prev.analysis ? { risk: prev.analysis.risk, headline: prev.analysis.headline, atMs: prev.atMs } : null,
+      previous: prev.analysis ? { risk: prev.analysis.risk, score: prev.analysis.score, headline: prev.analysis.headline, atMs: prev.atMs } : null,
       shownReminders: prev.reminders.slice(0, 6).map((r) => r.text),
     };
     const rankAtStart = escalationRank(input.tick?.escalation);
     lastCallAt.current = Date.now();
     setInner((s) => ({ ...s, phase: 'running', error: null, retryAt: null }));
     try {
-      const { text, model } = await chat(buildMessages(input), { json: true });
+      const { text, model } = await chat(buildMessages(input), { json: true, schema: ANALYSIS_SCHEMA });
       if (subjectRef.current !== subject || gen.current !== g) return;
-      const analysis = parseAnalysis(text);
+      const analysis = parseAnalysis(text, riskFloor(input.tick?.escalation, isCheckPending(input.tick)));
       const atMs = Date.now();
       const seen = new Set(prev.reminders.map((r) => norm(r.text)));
       const fresh: Reminder[] = analysis.reminders
@@ -139,7 +139,7 @@ export function useRiskAnalysis(opts: {
       const fatal = err.status === 401 || err.status === 402 || err.status === 403;
       blocked.current = fatal;
       const retryAt = fatal ? null : Date.now() + (err.status === 429 ? err.retryAfterMs ?? RATE_LIMIT_RETRY_MS : ERROR_RETRY_MS);
-      const msg = err.status === 429 ? `Free model rate-limited (${err.message}).` : fatal ? `${err.message} (check the OpenRouter key / credits)` : err.message;
+      const msg = err.status === 429 ? `Rate-limited (${err.message}).` : fatal ? `${err.message} (check the API key / credits)` : err.message;
       setInner((s) => ({ ...s, phase: 'error', error: msg, retryAt }));
     } finally {
       inFlight.current = false;

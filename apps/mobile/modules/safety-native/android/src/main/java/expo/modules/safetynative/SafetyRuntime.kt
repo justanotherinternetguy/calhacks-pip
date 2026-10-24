@@ -35,6 +35,8 @@ class SafetyRuntime private constructor(val app: Context) {
     private const val TAG = "SafetyRuntime"
     private const val SIGNAL_RING_MAX = 64
     private const val EVENT_RING_MAX = 64
+    /** How long a fingerprint / PIN proves the owner for the phrase that follows it. */
+    private const val OWNER_PROOF_MS = 90_000L
     @Volatile private var instance: SafetyRuntime? = null
     fun get(context: Context): SafetyRuntime =
       instance ?: synchronized(this) { instance ?: SafetyRuntime(context.applicationContext).also { instance = it } }
@@ -90,8 +92,24 @@ class SafetyRuntime private constructor(val app: Context) {
   @Volatile private var telemetryConfigured = prefs.serverConfig?.accessToken?.isNotBlank() == true
   /** True while the telemetry stream is explicitly on: publisher at 4 Hz and FULL sampling forced, like dashboard streaming. */
   val telemetryOn: Boolean get() = telemetryEnabled && telemetryConfigured
-  /** `(phrase, deadlineMs)` of the open check-in, for the telemetry tick; set on CheckRequested, cleared on Resolved. */
-  @Volatile var pendingCheck: Pair<String, Long>? = null
+  /** The open check-in (phrase, deadline, what it is about); set on CheckRequested, cleared on Resolved. */
+  @Volatile var pendingCheck: PendingCheck? = null
+  /** What friends were last told (HeadsUp / UnlockLocation / SnatchDetected summary), for the escalated notification. */
+  @Volatile var escalationSummary: String = ""
+
+  /**
+   * Owner proof for a check-in answer: [CheckInActivity] sets this after a successful fingerprint / device PIN
+   * (BiometricPrompt). [submitCheckIn] refuses a typed answer unless it is in the future, so a thief holding the
+   * phone cannot dismiss a check-in by typing the phrase. Devices with no secure lock screen skip it (logged as
+   * unverified to friends).
+   */
+  @Volatile private var ownerVerifiedUntil = 0L
+  fun markOwnerVerified() { ownerVerifiedUntil = now() + OWNER_PROOF_MS; Log.i(TAG, "owner verified (fingerprint / PIN)") }
+  fun ownerVerified(): Boolean = now() < ownerVerifiedUntil
+  fun clearOwnerVerified() { ownerVerifiedUntil = 0L }
+  fun deviceSecure(): Boolean =
+    (app.getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager).isDeviceSecure
+  fun escalationLevel(): EscalationLevel = engine.snapshotOrNull()?.escalation ?: EscalationLevel.IDLE
 
   /** Native-side copy of the last SignalIncident records (newest last, capped); the engine keeps the authoritative log. */
   private val signalRing = ArrayDeque<IncidentRecord>()
@@ -302,6 +320,7 @@ class SafetyRuntime private constructor(val app: Context) {
     val events = engine.get().tick(now.toULong())
     lastTickMs = now
     dispatch(events)
+    engine.applyPendingReload()
     if (emitDashboard && dashboardStreamingOn && sink != null) {
       runCatching { emit("dashboard", dashboardMap()) }.onFailure { Log.w(TAG, "dashboard emit failed", it) }
     }
@@ -328,15 +347,18 @@ class SafetyRuntime private constructor(val app: Context) {
   private fun handle(ev: EngineEvent) {
     when (ev) {
       is EngineEvent.CheckRequested -> {
-        pendingCheck = ev.phrase to ev.deadlineMs.toLong()
-        alerts.showCheckIn(ev.phrase, ev.deadlineMs.toLong())
+        pendingCheck = PendingCheck(ev.phrase, ev.deadlineMs.toLong(), ev.summary)
+        clearOwnerVerified()
+        alerts.showCheckIn(ev.summary, ev.deadlineMs.toLong())
         AlarmReceiver.scheduleCheckTimeout(app, ev.deadlineMs.toLong())
-        emit("checkRequested", mapOf("phrase" to ev.phrase, "deadlineMs" to ev.deadlineMs.toLong()))
+        emit("checkRequested", mapOf("phrase" to ev.phrase, "deadlineMs" to ev.deadlineMs.toLong(), "summary" to ev.summary))
       }
       is EngineEvent.HeadsUp -> {
         // Also emitted immediately on a grab (v1.1). Deliberately NO key release and NO location here:
         // the engine follows up with UnlockLocation after 2 min unless PhoneUnlocked/BiometricDismiss.
         alerts.cancelCheckIn()
+        escalationSummary = ev.summary
+        if (escalationLevel() != EscalationLevel.SNATCH) alerts.showEscalated("heads_up", ev.summary)
         scope.launch {
           val id = openIncident("heads_up", ev.summary)
           alerts.pushToGroup(id, "heads_up", "Heads up", "${displayName()} might not be okay: ${ev.summary}", critical = false)
@@ -345,6 +367,8 @@ class SafetyRuntime private constructor(val app: Context) {
       }
       is EngineEvent.UnlockLocation -> {
         alerts.cancelCheckIn()
+        escalationSummary = ev.summary
+        alerts.showEscalated("unlocked", ev.summary)
         scope.launch {
           val id = openIncident("unlocked", ev.summary)
           escrow.releaseHourKeys(id)
@@ -355,6 +379,8 @@ class SafetyRuntime private constructor(val app: Context) {
       }
       is EngineEvent.SnatchDetected -> {
         val loc = lastLocation
+        escalationSummary = ev.summary
+        alerts.showEscalated("snatch", ev.summary)
         scope.launch {
           val id = openIncident("snatch", ev.summary)
           escrow.releaseHourKeys(id)
@@ -369,7 +395,10 @@ class SafetyRuntime private constructor(val app: Context) {
       }
       EngineEvent.Resolved -> {
         pendingCheck = null
+        escalationSummary = ""
+        clearOwnerVerified()
         alerts.cancelCheckIn()
+        alerts.cancelEscalated()
         AlarmReceiver.cancelCheckTimeout(app)
         scope.launch { resolveIncident() }
         sosActive = false
@@ -457,6 +486,74 @@ class SafetyRuntime private constructor(val app: Context) {
     }
   }
 
+  // ---- friend actions reaching the phone -------------------------------------
+
+  /**
+   * A friend resolved the incident ("Found / safe" on the dashboard or incident screen). Arrives on the
+   * `telemetry-cmd` channel (instant) or from the heartbeat poll (backstop). The incident row is the authority: only
+   * a row that is really resolved on the server tells the engine, so a stray command cannot dismiss anything.
+   */
+  suspend fun onFriendMarkedSafe(incidentId: String, byName: String?) {
+    if (incidentId != currentIncidentId) return
+    val row = fetchIncident(incidentId) ?: return
+    if (row.optString("resolved_at").isNullOrBlank() || row.optString("resolved_at") == "null") return
+    Log.i(TAG, "incident $incidentId resolved by a friend")
+    currentIncidentId = null   // already resolved on the server: Resolved must not PATCH it again
+    pushAction(UserAction.FRIEND_MARKED_SAFE)
+    alerts.cancelEscalated()
+    alerts.showInfo("${byName ?: "A friend"} marked you safe", "The alert is over. Night mode keeps watching.")
+  }
+
+  /**
+   * A friend asked for the location during an escalated incident: release the current hour keys to the group at once,
+   * upload a fix now, and tell the owner who asked. Only for this phone's open incident at heads_up / unlocked /
+   * snatch / sos (checked against the server row), never otherwise.
+   */
+  private val handledLocationRequests = java.util.Collections.synchronizedSet(HashSet<String>())
+  suspend fun onLocationRequested(incidentId: String, requestId: String?, byName: String?) {
+    if (incidentId != currentIncidentId) { Log.i(TAG, "location request for $incidentId ignored (not the open incident)"); return }
+    if (requestId != null && !handledLocationRequests.add(requestId)) return
+    val row = fetchIncident(incidentId) ?: return
+    val level = row.optString("level")
+    val resolved = !row.optString("resolved_at").let { it.isBlank() || it == "null" }
+    if (resolved || level !in setOf("heads_up", "unlocked", "snatch", "sos")) {
+      Log.i(TAG, "location request ignored: incident level $level resolved=$resolved"); return
+    }
+    Log.i(TAG, "location requested by ${byName ?: "a friend"}: releasing hour keys")
+    escrow.releaseHourKeys(incidentId)
+    locationUploader.setIntervalSeconds(60)
+    locationUploader.uploadNow()
+    alerts.pushToGroup(incidentId, "release", "${displayName()}'s location is shared", "Requested by ${byName ?: "a friend"}", critical = false)
+    alerts.showInfo("Your location was shared with your group", "Asked for by ${byName ?: "a friend"} during an alert. Tap I'm OK on the alert if you're fine.")
+  }
+
+  /**
+   * Heartbeat backstop for friend actions (the telemetry-cmd socket may be down): the open incident's row and its
+   * `location_requested` events since the last poll.
+   */
+  @Volatile private var lastRequestPollIso: String? = null
+  suspend fun pollFriendActions() {
+    val id = currentIncidentId ?: return
+    val row = fetchIncident(id) ?: return
+    if (!row.optString("resolved_at").let { it.isBlank() || it == "null" }) { onFriendMarkedSafe(id, null); return }
+    val since = lastRequestPollIso
+    lastRequestPollIso = SupabaseRest.isoNow()
+    val q = "select=id,created_at&incident_id=eq.$id&kind=eq.location_requested&order=created_at.desc&limit=1" +
+      (since?.let { "&created_at=gt.${java.net.URLEncoder.encode(it, "UTF-8")}" } ?: "")
+    val reqs = runCatching { io { supabase.select("incident_events", q) } }.getOrNull() ?: return
+    if (reqs.length() > 0) onLocationRequested(id, reqs.getJSONObject(0).optString("id"), null)
+  }
+
+  private suspend fun fetchIncident(id: String): JSONObject? =
+    runCatching { io { supabase.select("incidents", "select=id,level,resolved_at&id=eq.$id") } }
+      .getOrNull()?.takeIf { it.length() > 0 }?.getJSONObject(0)
+
+  /** Logs how the owner answered a check-in on the open incident (if friends were already involved). */
+  fun logCheckAnswered(verified: Boolean) {
+    val id = currentIncidentId ?: return
+    scope.launch { alerts.insertEvent(id, "check_answered", JSONObject().put("verified", verified)) }
+  }
+
   // ---- service control ----------------------------------------------------
 
   fun startService(allowMic: Boolean) {
@@ -470,3 +567,6 @@ class SafetyRuntime private constructor(val app: Context) {
 
   suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
 }
+
+/** The open "You okay?" check-in. */
+data class PendingCheck(val phrase: String, val deadlineMs: Long, val summary: String)

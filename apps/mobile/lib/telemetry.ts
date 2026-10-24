@@ -46,14 +46,30 @@ export const telemetryTopic = (userId: string) => `telemetry:${userId}`;
 const pendingRemovals = new Map<string, Promise<unknown>>();
 const COMMAND_JOIN_MS = 8_000;
 
+/** Commands a member's phone understands (TelemetryPublisher.onCommand). Friend actions are checked by the phone
+ * against the incident row on the server before it acts. */
+export type TelemetryCommand =
+  | { cmd: 'reset_incidents' }
+  | { cmd: 'friend_marked_safe'; incidentId: string; by: string }
+  | { cmd: 'release_location'; incidentId: string; requestId?: string; by: string };
+
 /**
  * Send a command to a member's phone on `telemetry-cmd:{userId}` (migration 0012: the subject or any group-mate may
  * publish, only the phone reads). Joins the channel just for this send (acked), then leaves. Resolves to 'ok' when
  * the server accepted it, otherwise the reason.
  */
-export async function sendTelemetryCommand(userId: string, cmd: 'reset_incidents'): Promise<string> {
+export async function sendTelemetryCommand(userId: string, command: TelemetryCommand | TelemetryCommand['cmd']): Promise<string> {
+  const payload = typeof command === 'string' ? { cmd: command } : command;
   try { await supabase.realtime.setAuth(); } catch {}
   const ch = supabase.channel(`telemetry-cmd:${userId}`, { config: { private: true, broadcast: { ack: true } } });
+  // Group-mates may publish on this channel but not subscribe to it (0012), so a websocket join fails for them.
+  // The HTTP broadcast endpoint needs only the publish (insert) policy.
+  try {
+    const r = await ch.httpSend('command', { ...payload, t: Date.now() });
+    if (r.success) { void supabase.removeChannel(ch).catch(() => {}); return 'ok'; }
+  } catch (e) {
+    console.warn('telemetry command over HTTP failed; trying the socket', e);
+  }
   try {
     const joined = await new Promise<string>((resolve) => {
       const timer = setTimeout(() => resolve('join timed out'), COMMAND_JOIN_MS);
@@ -63,7 +79,7 @@ export async function sendTelemetryCommand(userId: string, cmd: 'reset_incidents
       });
     });
     if (joined !== 'ok') return joined;
-    return await ch.send({ type: 'broadcast', event: 'command', payload: { cmd, t: Date.now() } });
+    return await ch.send({ type: 'broadcast', event: 'command', payload: { ...payload, t: Date.now() } });
   } finally {
     void supabase.removeChannel(ch).catch(() => {});
   }

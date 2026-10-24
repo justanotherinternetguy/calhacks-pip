@@ -7,14 +7,16 @@
 #   Context  logged only (fall recovered, single stumble, in a vehicle, battery critical)
 #   Watch    full sensing (50 Hz + gyro, faster location), counts toward a check-in
 #   Danger   asks "You okay?" by itself (down after a fall, check-in missed, snoring while down; grab has its own path)
-# A check-in is asked when a Danger incident is active, or Watch incidents from >= check_min_families independent
-# families (fall / gait / phone / location / check-in / audio) are active at the same time. Answering it acknowledges
-# the active incidents; only a new one can ask again.
+# A check-in is asked when a Danger incident is active, a serious Watch incident listed in incidents.check_alone has
+# been open for check_alone_after_s, or Watch incidents from >= check_min_families independent families (fall / gait /
+# phone / location / check-in / audio) are active at the same time. Answering it acknowledges the active incidents;
+# only a new one can ask again.
 
 [thresholds]
-# false = incident logging only: incidents open, clear, log and drive sensing, but nothing escalates on its own
-# (no automatic check-in, heads-up, location unlock or grab alert). Manual SOS / "I need help" still unlock.
-auto_escalate = false
+# true = incidents escalate on their own: check-in, heads-up, location unlock, grab alert.
+# false = incident logging only: incidents open, clear, log and drive sensing, but nothing escalates on its own.
+# Manual SOS / "I need help" unlock either way.
+auto_escalate = true
 check_deadline_s = 120         # "You okay?" unanswered this long ⇒ CheckInMissed + heads-up to friends (no location)
 unlock_no_response_s = 240     # since the check (2 min after the heads-up), trigger still holding ⇒ location unlock
 call_option_s = 600            # since the check ⇒ friends get the one-tap campus safety / 911 option
@@ -162,6 +164,12 @@ snore_min = 0.4
 snore_frames = 3
 snore_window_s = 60
 listen_hold_min = 10
+# ---- check-in ----
+# Serious enough to ask "You okay?" on their own (Danger kinds always do). Milder Watch kinds need
+# thresholds.check_min_families families at once. The delay lets a high-g impact be classified first (~2.4 s:
+# a drop or a peak without a tilt clears it), so a dropped phone does not ask.
+check_alone = ["possible_fall", "hard_impact", "scream_shout"]
+check_alone_after_s = 5
 
 [sampling]
 # Engine-decided sensor mode, emitted as SamplingRateChanged on change and once at the first tick.

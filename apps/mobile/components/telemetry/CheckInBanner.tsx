@@ -7,10 +7,11 @@ import { fmtCountdown } from './labels';
 const CHECK_WINDOW_MS = 120_000; // model-v1.toml check_deadline_s
 
 /**
- * Shown while the tick carries `checkPhrase`: the phone is asking its owner to type the phrase before the
- * deadline. `phoneNow` is the phone's clock estimated from the newest tick, so the countdown ignores browser skew.
+ * Shown while a check-in is pending on the phone: it is asking its owner "You okay?" (fingerprint / PIN, then a
+ * phrase only the owner sees). `phoneNow` is the phone's clock estimated from the newest tick, so the countdown
+ * ignores browser skew.
  */
-export function CheckInBanner({ phrase, deadlineMs, phoneNow, subjectName }: { phrase: string; deadlineMs: number | undefined; phoneNow: number; subjectName: string }) {
+export function CheckInBanner({ summary, deadlineMs, phoneNow, subjectName }: { summary: string | undefined; deadlineMs: number | undefined; phoneNow: number; subjectName: string }) {
   const remaining = deadlineMs != null ? deadlineMs - phoneNow : null;
   const urgent = remaining != null && remaining < 30_000;
   const tint = urgent ? colors.danger : colors.warn;
@@ -19,7 +20,7 @@ export function CheckInBanner({ phrase, deadlineMs, phoneNow, subjectName }: { p
     <View style={[styles.box, { borderColor: tint }]}>
       <View style={styles.row}>
         <Pill text="check-in pending" color={tint} />
-        <Text style={styles.title}>{subjectName} has to type "{phrase}"</Text>
+        <Text style={styles.title}>{subjectName} is being asked "You okay?"{summary ? ` · ${summary}` : ''}</Text>
         <View style={{ flex: 1 }} />
         <Text style={[styles.count, { color: tint }]}>{remaining == null ? '—' : remaining <= 0 ? 'overdue' : fmtCountdown(remaining)}</Text>
       </View>

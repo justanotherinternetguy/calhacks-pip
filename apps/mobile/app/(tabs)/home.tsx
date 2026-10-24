@@ -121,8 +121,8 @@ function EscalationCard({ level, evidence, onOpenSnatch }: { level: EscalationLe
       return (
         <Card tint={colors.warn}>
           <P style={{ fontWeight: '700' }}>Checking in with you</P>
-          <P muted>Nobody has been told yet. Type the 3 words to dismiss.</P>
-          <Button title="Open check-in" kind="ghost" onPress={() => router.push('/check-in')} />
+          <P muted>Nobody has been told yet. Confirm it's you (fingerprint or PIN), then type the 3 words.</P>
+          <Button title="I'm OK" kind="ok" onPress={() => router.push('/check-in')} />
         </Card>
       );
     case 'heads_up':
@@ -131,6 +131,7 @@ function EscalationCard({ level, evidence, onOpenSnatch }: { level: EscalationLe
           <P style={{ fontWeight: '700' }}>Friends have been given a heads-up</P>
           <P>No location shared yet</P>
           <P muted>{evidence ?? 'You did not answer the check-in.'} Unlocks only if things look serious.</P>
+          <Button title="I'm OK" kind="ok" onPress={() => router.push('/check-in')} />
         </Card>
       );
     case 'unlocked':
@@ -138,6 +139,7 @@ function EscalationCard({ level, evidence, onOpenSnatch }: { level: EscalationLe
         <Card tint={colors.danger}>
           <P style={{ fontWeight: '700' }}>Location shared with your friends</P>
           <P muted>{evidence ?? 'Your location was unlocked.'} Your friends can see where you are and decide what to do.</P>
+          <Button title="I'm OK" kind="ok" onPress={() => router.push('/check-in')} />
         </Card>
       );
     case 'snatch':

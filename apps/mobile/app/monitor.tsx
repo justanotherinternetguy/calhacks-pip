@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Platform, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import type { TelemetryTick } from '@/modules/safety-native';
+import { isCheckPending, type TelemetryTick } from '@/modules/safety-native';
 import { Pill } from '@/components/ui';
 import { activeIncidents, useStore, useUserId } from '@/lib/store';
 import { subscribe } from '@/lib/db';
@@ -12,7 +12,9 @@ import { colors, levelColor } from '@/lib/theme';
 import { useNow } from '@/components/monitor/useMonitorData';
 import { AnalysisPanel } from '@/components/monitor/AnalysisPanel';
 import { ReminderToasts, toastVisible, type Toast } from '@/components/monitor/ReminderToasts';
+import { EscalationDock } from '@/components/monitor/EscalationDock';
 import { escalationRank, useRiskAnalysis, type Reminder } from '@/components/monitor/useRiskAnalysis';
+import { timeBucket } from '@/components/monitor/incidentTimeline';
 import { beep, primeAudio } from '@/components/monitor/beep';
 import { TelemetryHeader, type SubjectOption } from '@/components/telemetry/TelemetryHeader';
 import { WaveformPanel } from '@/components/telemetry/WaveformPanel';
@@ -91,7 +93,7 @@ export default function MonitorScreen() {
   const newest = active.find((i) => i.user_id === subjectId) ?? active[0] ?? null;
 
   // AI read of the subject's incident log. `digest` lists only what changes the picture, so the model is not
-  // re-asked on every 10 Hz frame.
+  // re-asked on every 10 Hz frame; timeBucket adds how long things have been open (or calm) in coarse steps.
   const records = buffers.incidentList();
   const subjectServer = useMemo(() => active.filter((i) => i.user_id === subjectId), [active, subjectId]);
   const friendEvents = useMemo(
@@ -100,12 +102,13 @@ export default function MonitorScreen() {
   );
   const escalation = tick?.escalation ?? null;
   const digest = [
-    subjectId, escalation ?? '-', tick?.checkPhrase ? 'check' : '',
+    subjectId, escalation ?? '-', isCheckPending(tick) ? 'check' : '',
     records.map((r) => `${r.id}:${r.clearedMs > 0 ? 1 : 0}${r.acknowledged ? 1 : 0}${r.watched ? 1 : 0}:${r.sequenceId}`).join(','),
     subjectServer.map((i) => `${i.id}:${i.level}`).join(','),
     friendEvents.map((e) => e.id).join(','),
+    timeBucket(records, phoneNow),
   ].join('|');
-  const quiet = !records.length && !subjectServer.length && escalationRank(escalation) === 0 && !tick?.checkPhrase;
+  const quiet = !records.length && !subjectServer.length && escalationRank(escalation) === 0 && !isCheckPending(tick);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const ai = useRiskAnalysis({
     subjectId, digest, quiet, quietConfirmed: quiet && !!tick && tick.incidentCount === 0, escalation,
@@ -164,7 +167,7 @@ export default function MonitorScreen() {
       {publisher && subjectId !== publisher && !manual && (
         <Banner color={colors.accent} label="publishing" text={`${name(publisher)}'s phone is streaming; the console will switch to it.`} />
       )}
-      {tick?.checkPhrase && <CheckInBanner phrase={tick.checkPhrase} deadlineMs={tick.checkDeadlineMs} phoneNow={phoneNow} subjectName={subjectName} />}
+      {isCheckPending(tick) && <CheckInBanner summary={tick?.checkSummary} deadlineMs={tick?.checkDeadlineMs} phoneNow={phoneNow} subjectName={subjectName} />}
     </>
   );
 
@@ -227,6 +230,11 @@ export default function MonitorScreen() {
         </ScrollView>
       )}
       <ReminderToasts toasts={toasts} now={now} width={wide ? RIGHT_W - 28 : mid ? 312 : Math.min(width - 28, 420)} onDismiss={dismissToast} />
+      <EscalationDock
+        subjectId={subjectId} subjectName={subjectName} incidents={subjectServer} escalation={escalation} liveRecords={records}
+        me={me} profiles={profiles} groups={groups} members={members} now={now}
+        onAlert={() => { if (Platform.OS === 'web' && soundRef.current) beep(); }}
+      />
       {newest && <View style={[styles.edge, { backgroundColor: levelColor(newest.level) }]} />}
     </SafeAreaView>
   );

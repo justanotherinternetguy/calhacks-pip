@@ -138,7 +138,7 @@ impl Escalation {
                     self.last_check_ms = Some(now_ms);
                     self.episode_start = Some(now_ms);
                     fx.episode_started = true;
-                    ev.push(EngineEvent::CheckRequested { phrase: self.phrase.clone(), deadline_ms: deadline });
+                    ev.push(EngineEvent::CheckRequested { phrase: self.phrase.clone(), deadline_ms: deadline, summary: summary.to_string() });
                 }
             }
             EscalationLevel::Check => {
@@ -195,6 +195,23 @@ impl Escalation {
     }
 
     /// Location upload interval: `location_upload_alert_s` once friends were alerted, `location_upload_s` otherwise.
+    /// `unlock_on_danger`: straight to Unlocked (friends get the location now) from Idle / Check / HeadsUp.
+    /// Returns the events and whether this started the episode.
+    pub fn unlock_now(&mut self, now_ms: u64, summary: &str) -> (Vec<EngineEvent>, bool) {
+        if !matches!(self.level, EscalationLevel::Idle | EscalationLevel::Check | EscalationLevel::HeadsUp) {
+            return (Vec::new(), false);
+        }
+        let started = self.episode_start.is_none();
+        self.set_level(EscalationLevel::Unlocked);
+        if started {
+            self.episode_start = Some(now_ms);
+        }
+        self.summary = summary.to_string();
+        let mut ev = vec![EngineEvent::UnlockLocation { summary: summary.to_string() }];
+        ev.extend(self.sync_interval());
+        (ev, started)
+    }
+
     fn sync_interval(&mut self) -> Vec<EngineEvent> {
         let iv = if self.alerted() { self.cfg.location_upload_alert_s } else { self.cfg.location_upload_s };
         if iv == self.loc_interval {

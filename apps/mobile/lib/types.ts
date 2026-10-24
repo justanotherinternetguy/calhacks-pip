@@ -5,7 +5,8 @@ export type MemberStatus = 'invited' | 'active';
 export type IncidentLevel = 'check' | 'heads_up' | 'unlocked' | 'snatch' | 'offline' | 'battery_dying' | 'sos' | 'resolved';
 export type IncidentEventKind =
   | 'nudge' | 'heads_up' | 'release' | 'ring' | 'en_route' | 'called_911' | 'called_campus' | 'found' | 'resolved'
-  | 'unlock_requested' | 'unlock_approved' | 'phone_offline' | 'battery_dying';
+  | 'unlock_requested' | 'unlock_approved' | 'phone_offline' | 'battery_dying'
+  | 'call_option' | 'escalated' | 'location_requested' | 'check_answered';
 export type UnlockStatus = 'open' | 'fulfilled' | 'denied';
 
 export type Profile = { id: Uuid; display_name: string | null; phone: string | null; created_at: string };

@@ -1,5 +1,5 @@
 //! Model parameters, loaded from `core/config/model-v1.toml`.
-use crate::types::EngineError;
+use crate::types::{EngineError, IncidentKind};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_TOML: &str = include_str!("../../../config/model-v1.toml");
@@ -24,6 +24,10 @@ pub struct Config {
 pub struct ThresholdCfg {
     /// false = log incidents only; no automatic check-in / heads-up / unlock / grab alert (manual SOS still works)
     pub auto_escalate: bool,
+    /// Demo: an unanswered Danger incident (down after a fall, snoring, missed check-in) unlocks the location at once
+    /// instead of waiting for the check-in deadline. Off in model-v1; model-demo.toml turns it on.
+    #[serde(default)]
+    pub unlock_on_danger: bool,
     /// the user gets this long to answer before CheckInMissed + HeadsUp
     pub check_deadline_s: u32,
     /// no response for this long (since the check) while the trigger still holds => UnlockLocation
@@ -135,6 +139,18 @@ pub struct IncidentCfg {
     pub snore_frames: u32,
     pub snore_window_s: f32,
     pub listen_hold_min: f32,
+    /// Kinds that ask "You okay?" on their own (snake_case names), once active for `check_alone_after_s`.
+    #[serde(default)]
+    pub check_alone: Vec<String>,
+    #[serde(default)]
+    pub check_alone_after_s: f32,
+}
+
+impl IncidentCfg {
+    /// `check_alone` resolved to kinds (validated in `Config::validate`, so unknown names never reach here).
+    pub fn check_alone_kinds(&self) -> Vec<IncidentKind> {
+        self.check_alone.iter().filter_map(|n| IncidentKind::ALL.iter().copied().find(|k| k.name() == n)).collect()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -227,6 +243,12 @@ impl Config {
         let i = &self.incidents;
         if i.repeated_stumbles_n < 2 || i.scream_frames == 0 || i.snore_frames == 0 || i.loud_venue_frames == 0 {
             return err("incidents: repeated_stumbles_n >= 2 and frame counts >= 1");
+        }
+        if let Some(bad) = i.check_alone.iter().find(|n| !IncidentKind::ALL.iter().any(|k| k.name() == n.as_str())) {
+            return Err(EngineError::Config { msg: format!("incidents.check_alone: unknown incident kind \"{bad}\"") });
+        }
+        if i.check_alone_after_s < 0.0 {
+            return err("incidents.check_alone_after_s must be >= 0");
         }
         if !(0.0..1.0).contains(&i.slowed_cadence_frac) {
             return err("incidents.slowed_cadence_frac must be within [0, 1)");

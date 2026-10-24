@@ -4,10 +4,12 @@ use safety_core::signal::{gait::compute_features, ImpactDetector, ImpactKind};
 use safety_core::synth::{self, Gen, Scenario, Trace, G_FLAT, G_HAND, G_POCKET};
 use safety_core::*;
 
-/// Escalation stories run with automatic escalation on and a 2-minute "down after fall" (the bundled default is
-/// incident logging only with a 5 s down timer, see `default_config_*`).
+/// Escalation stories run with automatic escalation on, a 2-minute "down after fall" and no lone-incident check-ins
+/// (`check_alone = []`), so each story exercises the Danger / two-family rules on their own. The bundled default
+/// (5 s down timer, possible fall / hard impact / scream ask on their own) is covered by `default_config_*` and
+/// `lone_*`.
 fn engine() -> Engine {
-    Engine::new("[thresholds]\nauto_escalate = true\n[incidents]\ndown_after_fall_s = 120\n", None, 0).unwrap()
+    Engine::new("[thresholds]\nauto_escalate = true\n[incidents]\ndown_after_fall_s = 120\ncheck_alone = []\n", None, 0).unwrap()
 }
 fn first<F: Fn(&EngineEvent) -> bool>(evs: &[(u64, EngineEvent)], f: F) -> Option<u64> {
     evs.iter().find(|(_, e)| f(e)).map(|(t, _)| *t)
@@ -106,11 +108,13 @@ fn story_a_unsteady_walk_then_fall_checks_at_once_then_unlocks() {
     assert!(e.incident_log().iter().all(|r| r.watched && r.sequence_id == 1), "{:?}", e.incident_log());
 }
 
-/// The bundled default logs incidents only: the same night as story A logs everything, but never checks or alerts.
+const LOG_ONLY: &str = "[thresholds]\nauto_escalate = false\n";
+
+/// `auto_escalate = false` logs incidents only: the same night as story A logs everything, but never checks or alerts.
 #[test]
-fn default_config_logs_incidents_without_escalating() {
+fn log_only_config_logs_incidents_without_escalating() {
     let tr = synth::trace(Scenario::Fall, 12, 1);
-    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let mut e = Engine::new(LOG_ONLY, None, 0).unwrap();
     let evs = synth::replay(&mut e, &tr);
     for k in [IncidentKind::UnsteadyGait, IncidentKind::PossibleFall, IncidentKind::DownAfterFall] {
         assert_eq!(incidents(&evs, k).len(), 1, "{k:?}: {:?}", kinds(&evs));
@@ -121,7 +125,7 @@ fn default_config_logs_incidents_without_escalating() {
     assert_eq!(s.escalation, EscalationLevel::Idle);
     assert!(s.sensing_full);
     // a grab is logged, not alerted
-    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let mut e = Engine::new(LOG_ONLY, None, 0).unwrap();
     let mut tr = synth::trace(Scenario::Snatch, 3, 31);
     tr.actions.clear();
     let evs = synth::replay(&mut e, &tr);
@@ -130,6 +134,83 @@ fn default_config_logs_incidents_without_escalating() {
     // manual SOS still unlocks
     e.push_action(UserAction::ManualSos, 200_000);
     assert_eq!(e.snapshot().escalation, EscalationLevel::Unlocked);
+}
+
+/// The bundled default escalates, and a possible fall asks "You okay?" on its own 5 s after it opened, without
+/// waiting for "down after fall" or a second family. The check says what it is about.
+#[test]
+fn default_config_asks_after_a_lone_possible_fall() {
+    let mut g = Gen::new(0, 201);
+    g.walk(60.0, G_POCKET);
+    g.fall(G_POCKET, 30.0);
+    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let evs = synth::replay(&mut e, &motion_trace(g.out, 201));
+    let fall = incidents(&evs, IncidentKind::PossibleFall);
+    assert_eq!(fall.len(), 1, "{:?}", kinds(&evs));
+    let (t_check, ev) = evs.iter().find(|(_, e)| is_check(e)).expect("a lone possible fall asks").clone();
+    let opened = fall[0].1.t_ms;
+    assert!(t_check >= opened + 5_000 && t_check < opened + 7_000, "check {} ms after the fall", t_check - opened);
+    match ev {
+        EngineEvent::CheckRequested { summary, phrase, .. } => {
+            assert!(summary.to_lowercase().contains("fall"), "summary: {summary}");
+            assert_eq!(phrase.split(' ').count(), 3);
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Demo config: a red (Danger) incident unlocks the location the moment it opens (no check-in deadline), and a
+/// new check-in may follow 15 s after the last one.
+#[test]
+fn demo_config_unlocks_on_a_red_incident_at_once() {
+    let demo = include_str!("../../../config/model-demo.toml");
+    let mut g = Gen::new(0, 203);
+    g.walk(60.0, G_POCKET);
+    g.fall(G_POCKET, 60.0);
+    let mut e = Engine::new(demo, None, 0).unwrap();
+    let evs = synth::replay(&mut e, &motion_trace(g.out, 203));
+    let down = incidents(&evs, IncidentKind::DownAfterFall);
+    assert_eq!(down.len(), 1, "{:?}", kinds(&evs));
+    let unlock = first(&evs, is_unlock).expect("a red incident unlocks in demo mode");
+    assert_eq!(unlock, down[0].0, "unlock on the same tick as down-after-fall");
+    let check = first(&evs, is_check).expect("the possible fall asked first");
+    assert!(check < unlock);
+    // v1 keeps the check-in deadline: no unlock at the down-after-fall tick
+    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let mut g = Gen::new(0, 203);
+    g.walk(60.0, G_POCKET);
+    g.fall(G_POCKET, 60.0);
+    let evs = synth::replay(&mut e, &motion_trace(g.out, 203));
+    let down = incidents(&evs, IncidentKind::DownAfterFall);
+    assert!(first(&evs, is_unlock).map(|t| t > down[0].0).unwrap_or(true));
+}
+
+/// Lone-incident check-ins only cover the serious kinds: a phone dropped on its own (its high-g warning clears when
+/// the impact is classified as a drop, ~2.4 s) never asks.
+#[test]
+fn lone_dropped_phone_does_not_ask() {
+    let mut g = Gen::new(0, 202);
+    g.walk(60.0, G_HAND);
+    g.drop(120.0);
+    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let evs = synth::replay(&mut e, &motion_trace(g.out, 202));
+    assert!(!incidents(&evs, IncidentKind::HardImpact).is_empty() || !incidents(&evs, IncidentKind::PhoneDrop).is_empty(), "{:?}", kinds(&evs));
+    assert!(first(&evs, is_check).is_none(), "a dropped phone must not ask: {:?}", kinds(&evs));
+}
+
+/// Milder Watch kinds still need two families: `check_alone` does not change the combination rule.
+#[test]
+fn lone_mild_incident_does_not_ask_but_two_families_do() {
+    let cfg = safety_core::config::Config::from_toml(DEFAULT_TOML).unwrap();
+    let alone = cfg.incidents.check_alone_kinds();
+    assert_eq!(alone, vec![IncidentKind::PossibleFall, IncidentKind::HardImpact, IncidentKind::ScreamShout]);
+    for k in [IncidentKind::SlowedWalk, IncidentKind::Separated, IncidentKind::UnsteadyGait, IncidentKind::StoppedOnWayHome] {
+        assert!(!alone.contains(&k), "{k:?} must not ask alone");
+    }
+    assert!(matches!(
+        safety_core::config::Config::from_toml("[incidents]\ncheck_alone = [\"not_a_kind\"]\n"),
+        Err(EngineError::Config { .. })
+    ));
 }
 
 /// Default timing: the high-g warning on the tick that holds the peak, PossibleFall once the impact settles

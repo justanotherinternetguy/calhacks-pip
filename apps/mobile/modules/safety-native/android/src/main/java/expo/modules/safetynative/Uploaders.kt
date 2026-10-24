@@ -47,6 +47,8 @@ class HeartbeatUploader(rt: SafetyRuntime) : PeriodicUploader(rt, "Heartbeat") {
     rt.supabase.patch("devices", "id=eq.${cfg.deviceId}", patch)
     rt.lastHeartbeatMs = rt.now()
     rt.emitStatus()
+    // Backstop for friend actions (marked safe, location request) when the telemetry-cmd socket is down.
+    if (rt.currentIncidentId != null) rt.scope.launch { runCatching { rt.pollFriendActions() }.onFailure { Log.w("Heartbeat", "friend-action poll failed", it) } }
   }
   suspend fun sendNow() { runCatching { rt.io { tickOnce() } }.onFailure { Log.w("Heartbeat", "sendNow failed", it) } }
 }

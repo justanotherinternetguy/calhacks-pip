@@ -17,6 +17,7 @@ import expo.modules.kotlin.records.Record
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import uniffi.safety.EscalationLevel
 import uniffi.safety.TypingSample
 import uniffi.safety.UserAction
 
@@ -185,6 +186,8 @@ class SafetyNativeModule : Module() {
     // ---- check-in / SOS ------------------------------------------------------
 
     AsyncFunction("submitCheckIn") { r: TypingRecord -> rt.submitCheckIn(r.toSample()) }
+    // The one check-in UI (fingerprint / PIN, then the phrase) is native: JS only opens it.
+    AsyncFunction("openCheckIn") { rt.app.startActivity(CheckInActivity.intent(rt.app)) }
     AsyncFunction("needHelp") { rt.needHelp() }
     AsyncFunction("triggerSos") { rt.sos.trigger() }
     AsyncFunction("cancelSos") Coroutine { -> rt.sos.cancel(appContext.currentActivity as? FragmentActivity) }
@@ -263,12 +266,37 @@ class SafetyNativeModule : Module() {
 }
 
 // Check-in helpers shared by the module, CheckInActivity and the notification action.
+
+/**
+ * A typed check-in answer. Owner proof first: unless the device has no secure lock screen, the answer counts only
+ * within [SafetyRuntime.ownerVerified] (a fingerprint / PIN passed in [CheckInActivity]); otherwise it is refused
+ * before the engine sees it. The engine decides the rest in `push_typing` (accepted → DismissOk, wrong phrase →
+ * retry, typing far off the owner's rhythm → TypingOff + heads-up); this only ticks so its events go out now.
+ */
 fun SafetyRuntime.submitCheckIn(sample: TypingSample): Map<String, Any?> {
+  val secure = deviceSecure()
+  if (secure && !ownerVerified()) {
+    android.util.Log.w("SafetyRuntime", "check-in answer refused: owner not verified")
+    return mapOf("accepted" to false, "zScore" to 0.0, "reason" to "Confirm it's you first (fingerprint or PIN)")
+  }
   val verdict = engine.get().pushTyping(sample, now().toULong())
-  pushAction(if (verdict.accepted) UserAction.DISMISS_OK else UserAction.DISMISS_WRONG_PHRASE)
-  if (verdict.accepted) { alerts.cancelCheckIn(); AlarmReceiver.cancelCheckTimeout(app) }
+  val dismissed = verdict.accepted && escalationLevel().let { it == EscalationLevel.RESOLVED || it == EscalationLevel.IDLE }
+  scope.launch { runTick() }
+  if (dismissed) {
+    alerts.cancelCheckIn(); alerts.cancelEscalated(); AlarmReceiver.cancelCheckTimeout(app)
+    logCheckAnswered(verified = secure)   // no-op before friends were involved (no incident row yet)
+    clearOwnerVerified()
+  }
   engine.saveNow()
-  return mapOf("accepted" to verdict.accepted, "zScore" to verdict.zScore.toDouble(), "reason" to verdict.reason)
+  return mapOf("accepted" to dismissed, "zScore" to verdict.zScore.toDouble(), "reason" to verdict.reason)
+}
+
+/** Owner confirmed with fingerprint / PIN while friends already hold the location or a grab is running: dismiss. */
+fun SafetyRuntime.biometricDismiss() {
+  logCheckAnswered(verified = true)
+  pushAction(UserAction.BIOMETRIC_DISMISS)
+  alerts.cancelCheckIn(); alerts.cancelEscalated(); AlarmReceiver.cancelCheckTimeout(app)
+  clearOwnerVerified()
 }
 
 fun SafetyRuntime.needHelp() {

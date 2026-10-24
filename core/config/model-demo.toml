@@ -34,3 +34,7 @@ check_deadline_s = 30          # check-in window (v1: 120)
 unlock_no_response_s = 60      # location unlock 60 s after the check if it still holds (v1: 240)
 call_option_s = 90             # call option after 90 s (v1: 600)
 grab_unlock_s = 30             # grab: unlock after 30 s unless the owner unlocks (v1: 120)
+check_repeat_cooldown_s = 15   # a new check-in can follow 15 s after the last one, for back-to-back demos (v1: 300)
+# A red (Danger) incident, e.g. "down after fall", unlocks the location at once: friends' dashboards open the
+# escalation dock with the map right away instead of after the check-in deadline (v1: false).
+unlock_on_danger = true

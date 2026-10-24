@@ -354,7 +354,8 @@ pub struct IncidentRecord {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum EngineEvent {
-    CheckRequested { phrase: String, deadline_ms: u64 },
+    /// `summary`: what the check is about ("A possible fall"), for the notification.
+    CheckRequested { phrase: String, deadline_ms: u64, summary: String },
     HeadsUp { summary: String },
     UnlockLocation { summary: String },
     SnatchDetected { summary: String },

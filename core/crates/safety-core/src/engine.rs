@@ -356,7 +356,10 @@ impl Engine {
         }
         self.log.maintain(now_ms);
         if self.night_mode {
-            let trigger = self.cfg.thresholds.auto_escalate && self.log.check_trigger(self.cfg.thresholds.check_min_families);
+            let ic = &self.cfg.incidents;
+            let trigger = self.cfg.thresholds.auto_escalate
+                && (self.log.check_trigger(self.cfg.thresholds.check_min_families)
+                    || self.log.check_trigger_alone(&ic.check_alone_kinds(), (ic.check_alone_after_s * 1000.0) as u64, now_ms));
             let summary = self.summary();
             let (ev, fx) = self.esc.update(now_ms, trigger, &summary);
             if fx.episode_started {
@@ -366,6 +369,14 @@ impl Engine {
             if fx.check_missed {
                 let raw = format!("{{\"deadline_s\":{}}}", self.cfg.thresholds.check_deadline_s);
                 self.open(IncidentKind::CheckInMissed, now_ms, "\"You okay?\" check-in not answered".into(), 0.0, raw);
+            }
+            if self.cfg.thresholds.auto_escalate && self.cfg.thresholds.unlock_on_danger && self.log.unacked_danger() {
+                let summary = self.summary();
+                let (ev, started) = self.esc.unlock_now(now_ms, &summary);
+                if started {
+                    self.log.start_episode(now_ms);
+                }
+                self.events.extend(ev);
             }
             if fx.resolved {
                 // the evidence cleared on its own: the unanswered check-in is no longer news

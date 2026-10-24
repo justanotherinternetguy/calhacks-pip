@@ -201,6 +201,18 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
         Log.i(TAG, "monitor command: reset_incidents")
         runCatching { rt.resetIncidents() }.onFailure { Log.w(TAG, "remote reset failed", it) }
       }
+      // Friend actions on an escalated incident. The phone checks the incident row on the server before acting.
+      "friend_marked_safe" -> rt.scope.launch {
+        Log.i(TAG, "monitor command: friend_marked_safe")
+        runCatching { rt.onFriendMarkedSafe(payload.optString("incidentId"), payload.optString("by").ifBlank { null }) }
+          .onFailure { Log.w(TAG, "friend_marked_safe failed", it) }
+      }
+      "release_location" -> rt.scope.launch {
+        Log.i(TAG, "monitor command: release_location")
+        runCatching {
+          rt.onLocationRequested(payload.optString("incidentId"), payload.optString("requestId").ifBlank { null }, payload.optString("by").ifBlank { null })
+        }.onFailure { Log.w(TAG, "release_location failed", it) }
+      }
       else -> Log.w(TAG, "unknown monitor command: $cmd")
     }
   }
@@ -287,7 +299,8 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
       .put("placement", metrics["placement"] ?: "unknown")
       .put("samplingFull", metrics["samplingFull"] ?: false)
     if (snap?.escalation == EscalationLevel.CHECK) {
-      rt.pendingCheck?.let { (phrase, deadlineMs) -> s.put("checkPhrase", phrase).put("checkDeadlineMs", deadlineMs) }
+      // Never the phrase itself: group-mates read this stream, and the phrase is the owner's answer.
+      rt.pendingCheck?.let { s.put("checkPending", true).put("checkDeadlineMs", it.deadlineMs).put("checkSummary", it.summary) }
     }
     return s
   }

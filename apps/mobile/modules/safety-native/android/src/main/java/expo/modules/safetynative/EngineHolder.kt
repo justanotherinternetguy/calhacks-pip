@@ -69,12 +69,35 @@ class EngineHolder(private val context: Context, private val prefs: Prefs) {
 
   fun snapshotOrNull(): Snapshot? = try { engine?.snapshot() } catch (e: Throwable) { null }
 
-  /** Server config from `configure` (every launch): persist it as the normal model and run it unless demo is on. */
+  /** A served config arrived while an escalation was running; applied by [applyPendingReload] once it is over. */
+  @Volatile private var pendingReload = false
+
+  /**
+   * Server config from `configure` (every launch): persist it as the normal model and run it unless demo is on.
+   * A reload rebuilds the engine (escalation back to Idle), so while a check-in or alert is running it waits.
+   */
   @Synchronized
   fun setConfigToml(toml: String) {
     if (toml.isBlank()) return
     modelFile.writeText(toml)
-    if (prefs.demoSensitivity) Log.i(TAG, "server config stored; live engine keeps the demo override") else reload()
+    when {
+      prefs.demoSensitivity -> Log.i(TAG, "server config stored; live engine keeps the demo override")
+      escalating() -> { pendingReload = true; Log.i(TAG, "server config stored; reload deferred until the escalation ends") }
+      else -> reload()
+    }
+  }
+
+  /** Called after every tick: applies a deferred server config once the escalation is back to idle. */
+  @Synchronized
+  fun applyPendingReload() {
+    if (!pendingReload || escalating()) return
+    pendingReload = false
+    runCatching { reload() }.onFailure { Log.w(TAG, "deferred reload failed", it) }
+  }
+
+  private fun escalating(): Boolean {
+    val level = snapshotOrNull()?.escalation ?: return false
+    return level != uniffi.safety.EscalationLevel.IDLE && level != uniffi.safety.EscalationLevel.RESOLVED
   }
 
   /** "Demo sensitivity" switch (Settings). The pref is reverted if the swap fails, so a bad override is never sticky. */
@@ -99,9 +122,14 @@ class EngineHolder(private val context: Context, private val prefs: Prefs) {
   private fun reload() {
     val old = engine
     old?.let { saveBaseline(it) }
+    // A fresh engine starts with night mode off: carry it over, or a mid-night reload (every app launch runs
+    // `configure`) would silently stop incident rules and escalation until the next night session.
+    val wasNight = runCatching { old?.snapshot()?.nightMode }.getOrNull() == true
     val fresh = create(activeConfigToml())   // throws EngineException → old engine stays live
+    if (wasNight) fresh.setNightMode(true, System.currentTimeMillis().toULong())
     engine = fresh
     old?.close()
+    Log.i(TAG, "engine reloaded${if (wasNight) " (night mode kept on)" else ""}")
   }
 
   private fun asset(name: String): String = context.assets.open(name).bufferedReader().use { it.readText() }

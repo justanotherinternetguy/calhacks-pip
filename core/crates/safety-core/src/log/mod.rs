@@ -220,6 +220,18 @@ impl IncidentLog {
         fams.len() as u32 >= min_families
     }
 
+    /// An unacknowledged active Danger incident (a grab has its own path).
+    pub fn unacked_danger(&self) -> bool {
+        self.active().any(|r| !r.acknowledged && r.tier == IncidentTier::Danger && r.kind != IncidentKind::Grab)
+    }
+
+    /// Ask "You okay?" because of one serious incident on its own: an unacknowledged active incident of a
+    /// `check_alone` kind that has been open for at least `after_ms` (so an impact can be reclassified first).
+    pub fn check_trigger_alone(&self, alone: &[IncidentKind], after_ms: u64, now_ms: u64) -> bool {
+        self.active()
+            .any(|r| !r.acknowledged && alone.contains(&r.kind) && now_ms.saturating_sub(r.t_ms) >= after_ms)
+    }
+
     /// Any active Watch / Danger incident (acknowledged ones included): full sensing stays on.
     pub fn watching(&self) -> bool {
         self.active().any(|r| r.tier >= IncidentTier::Watch)

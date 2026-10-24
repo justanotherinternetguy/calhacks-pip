@@ -111,6 +111,8 @@ function pickState(t: TelemetryTick): TelemetryState {
     metrics: t.metrics, escalation: t.escalation, listening: t.listening, nightMode: t.nightMode,
     battery: t.battery, activity: t.activity, placement: t.placement, samplingFull: t.samplingFull,
   };
+  if (t.checkPending !== undefined) s.checkPending = t.checkPending;
+  if (t.checkSummary !== undefined) s.checkSummary = t.checkSummary;
   if (t.checkPhrase !== undefined) s.checkPhrase = t.checkPhrase;
   if (t.checkDeadlineMs !== undefined) s.checkDeadlineMs = t.checkDeadlineMs;
   return s;

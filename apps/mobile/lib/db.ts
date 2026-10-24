@@ -30,7 +30,15 @@ export const getProfiles = async (ids: Uuid[]) => (ids.length ? unwrap<Profile[]
 export async function upsertDevice(d: Partial<Device> & { id: Uuid; user_id: Uuid; platform: Device['platform'] }) {
   return unwrap<Device>(await supabase.from('devices').upsert(d).select().single());
 }
-export const getDevicesForUsers = async (ids: Uuid[]) => (ids.length ? unwrap<Device[]>(await supabase.from('devices').select('*').in('user_id', ids)) : []);
+/** Public keys of group-mates' devices. RLS lets a user read only their own `devices` row, so this goes through the
+ *  `device_status` view (0002_rls.sql), which exposes keys + coarse status for anyone sharing a group. */
+export type DeviceKeys = Pick<Device, 'id' | 'user_id' | 'x25519_pub' | 'ed25519_pub'>;
+export const getDevicesForUsers = async (ids: Uuid[]): Promise<DeviceKeys[]> =>
+  ids.length
+    ? unwrap<{ device_id: Uuid; user_id: Uuid; x25519_pub: string | null; ed25519_pub: string | null }[]>(
+        await supabase.from('device_status').select('device_id, user_id, x25519_pub, ed25519_pub').in('user_id', ids),
+      ).map((d) => ({ id: d.device_id, user_id: d.user_id, x25519_pub: d.x25519_pub, ed25519_pub: d.ed25519_pub }))
+    : [];
 
 // ---- groups
 export async function listMyGroups(userId: Uuid) {

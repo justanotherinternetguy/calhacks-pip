@@ -34,6 +34,8 @@ class AlertManager(private val ctx: Context, private val rt: SafetyRuntime) {
     const val NOTIF_CHECKIN = 1002
     const val NOTIF_ALARM = 1003
     const val NOTIF_REARM = 1004
+    const val NOTIF_ESCALATED = 1005
+    const val NOTIF_INFO = 1006
     private const val TAG = "AlertManager"
   }
 
@@ -82,25 +84,75 @@ class AlertManager(private val ctx: Context, private val rt: SafetyRuntime) {
       .setOngoing(true).setSilent(true).setContentIntent(launcherIntent())
       .setCategory(NotificationCompat.CATEGORY_SERVICE).build()
 
-  /** "You okay?" — full-screen on the lock screen; opening it requires unlocking the phone. */
-  fun showCheckIn(phrase: String, deadlineMs: Long) {
-    val full = PendingIntent.getActivity(ctx, 20, CheckInActivity.intent(ctx, phrase, deadlineMs), flags())
+  /**
+   * "You okay?" with what was detected ("A possible fall"). Full-screen on the lock screen when the OS allows it
+   * (Android 14+ can revoke full-screen intents; then it is a heads-up notification). "I'm OK" opens
+   * [CheckInActivity], which asks for the fingerprint / PIN before the phrase; "I need help" works while locked.
+   */
+  fun showCheckIn(summary: String, deadlineMs: Long) {
+    val full = PendingIntent.getActivity(ctx, 20, CheckInActivity.intent(ctx), flags())
     val help = PendingIntent.getBroadcast(ctx, 21, Intent(ctx, AlarmReceiver::class.java).setAction(AlarmReceiver.ACTION_NEED_HELP), flags())
-    val n = NotificationCompat.Builder(ctx, CH_CHECKIN)
+    val what = summary.ifBlank { "Something looked wrong" }
+    val by = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(deadlineMs))
+    val b = NotificationCompat.Builder(ctx, CH_CHECKIN)
       .setSmallIcon(android.R.drawable.ic_dialog_info)
       .setContentTitle("You okay?")
-      .setContentText("Tap and type the phrase to let us know you're fine")
+      .setContentText("$what. Answer by $by or your friends will be told.")
+      .setStyle(NotificationCompat.BigTextStyle().bigText("$what. Answer by $by or your friends will be told."))
       .setPriority(NotificationCompat.PRIORITY_MAX)
       .setCategory(NotificationCompat.CATEGORY_ALARM)
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-      .setFullScreenIntent(full, true)
       .setContentIntent(full)
       .setAutoCancel(true)
       .setTimeoutAfter((deadlineMs - System.currentTimeMillis()).coerceAtLeast(10_000L))
-      .addAction(0, "I'm fine", full)
+      .addAction(0, "I'm OK", full)
       .addAction(0, "I need help", help)
+    if (canFullScreen()) b.setFullScreenIntent(full, true) else Log.w(TAG, "full-screen intents not allowed: check-in posted as a heads-up notification")
+    nm.notify(NOTIF_CHECKIN, b.build())
+  }
+
+  /** Android 14+ lets the user (or Play policy) revoke full-screen intents; before that they are always allowed. */
+  fun canFullScreen(): Boolean = android.os.Build.VERSION.SDK_INT < 34 || nm.canUseFullScreenIntent()
+
+  /**
+   * Ongoing while friends are involved (heads-up, location released, grab): tapping it opens [CheckInActivity] so
+   * the owner can still say they are OK (fingerprint / PIN first). Replaced on every level change.
+   */
+  fun showEscalated(level: String, summary: String) {
+    val open = PendingIntent.getActivity(ctx, 22, CheckInActivity.intent(ctx), flags())
+    val help = PendingIntent.getBroadcast(ctx, 21, Intent(ctx, AlarmReceiver::class.java).setAction(AlarmReceiver.ACTION_NEED_HELP), flags())
+    val title = when (level) {
+      "unlocked" -> "Your friends can see your location"
+      "snatch" -> "Phone grab detected"
+      else -> "Your friends were told"
+    }
+    val text = (if (summary.isNotBlank()) "$summary. " else "") + "Tap if you're OK."
+    val n = NotificationCompat.Builder(ctx, CH_CHECKIN)
+      .setSmallIcon(android.R.drawable.ic_dialog_alert)
+      .setContentTitle(title).setContentText(text)
+      .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+      .setPriority(NotificationCompat.PRIORITY_HIGH).setCategory(NotificationCompat.CATEGORY_ALARM)
+      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+      .setOngoing(true).setOnlyAlertOnce(true)
+      .setContentIntent(open)
+      .addAction(0, "I'm OK", open)
+      .apply { if (level != "unlocked") addAction(0, "I need help", help) }
       .build()
-    nm.notify(NOTIF_CHECKIN, n)
+    nm.notify(NOTIF_ESCALATED, n)
+  }
+
+  fun cancelEscalated() = nm.cancel(NOTIF_ESCALATED)
+
+  /** One-off notice for the owner ("Sam marked you safe", "Your location was shared with your group"). */
+  fun showInfo(title: String, body: String) {
+    val n = NotificationCompat.Builder(ctx, CH_CHECKIN)
+      .setSmallIcon(android.R.drawable.ic_dialog_info)
+      .setContentTitle(title).setContentText(body)
+      .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+      .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+      .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+      .setContentIntent(launcherIntent()).setAutoCancel(true).build()
+    nm.notify(NOTIF_INFO, n)
   }
 
   fun cancelCheckIn() = nm.cancel(NOTIF_CHECKIN)
@@ -161,6 +213,16 @@ class AlertManager(private val ctx: Context, private val rt: SafetyRuntime) {
   }
 
   // ---- fan-out -----------------------------------------------------------
+
+  /** Writes one incident_events row as the owner (no push). */
+  suspend fun insertEvent(incidentId: String, kind: String, payload: JSONObject) {
+    val cfg = rt.prefs.serverConfig ?: return
+    rt.io {
+      runCatching {
+        rt.supabase.insert("incident_events", JSONObject().put("incident_id", incidentId).put("actor_id", cfg.userId).put("kind", kind).put("payload", payload))
+      }.onFailure { Log.w(TAG, "event $kind failed", it) }
+    }
+  }
 
   /** Writes an incident_events row and asks the `push` function to notify the group (APNs/FCM). */
   suspend fun pushToGroup(incidentId: String?, kind: String, title: String, body: String, critical: Boolean) {

@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Linking, Platform, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams } from 'expo-router';
 import { format, formatDistanceToNow } from 'date-fns';
@@ -8,17 +8,14 @@ import { Map } from '@/components/Map';
 import { SafetyNative, type DecryptedLocation } from '@/modules/safety-native';
 import { MIN_MEMBERS_FOR_FALLBACK, NO_EVENTS, useStore, useUserId } from '@/lib/store';
 import {
-  fn, getActiveEpoch, getIncident, listIncidentEvents, listLocationBlobs, listReleasedKeysForMe,
+  fn, getActiveEpoch, getIncident, listIncidentEvents, listLocationBlobs,
   listUnlockApprovals, listUnlockRequests, rpc, subscribe,
 } from '@/lib/db';
-import type { Incident, IncidentEventKind, ReleasedKey, UnlockApproval, UnlockRequest } from '@/lib/types';
+import type { Incident, IncidentEventKind, UnlockApproval, UnlockRequest } from '@/lib/types';
 import { colors, levelColor } from '@/lib/theme';
-
-const EVENT_LABEL: Record<IncidentEventKind, string> = {
-  nudge: 'asked "you okay?"', heads_up: 'friends notified', release: 'location unlocked', ring: 'rang the phone', en_route: 'is on the way',
-  called_911: 'called 911', called_campus: 'called campus safety', found: 'found them', resolved: 'marked safe', unlock_requested: 'requested fallback unlock',
-  unlock_approved: 'approved unlock', phone_offline: 'phone went offline', battery_dying: 'battery dying',
-};
+import { EVENT_LABEL } from '@/components/monitor/labels';
+import { useIncidentLocation } from '@/components/incident/useIncidentLocation';
+import * as actions from '@/lib/incidentActions';
 
 export default function IncidentScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -29,8 +26,8 @@ export default function IncidentScreen() {
   const stored = useStore((s) => s.incidents.find((i) => i.id === id));
   const events = useStore((s) => s.events[id] ?? NO_EVENTS);
   const [incident, setIncident] = useState<Incident | undefined>(stored);
-  const [trail, setTrail] = useState<DecryptedLocation[]>([]);
-  const [keys, setKeys] = useState<ReleasedKey[]>([]);
+  const [recovered, setRecovered] = useState<DecryptedLocation[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
   const [req, setReq] = useState<UnlockRequest | null>(null);
   const [approvals, setApprovals] = useState<UnlockApproval[]>([]);
   const [k, setK] = useState(2);
@@ -46,35 +43,21 @@ export default function IncidentScreen() {
   const fallbackAllowed = activeMembers >= MIN_MEMBERS_FOR_FALLBACK;
   const offlineLevel = incident?.level === 'offline' || incident?.level === 'battery_dying';
 
-  // Decrypt whatever blobs we can with the keys we've been given (normal unlock path).
-  const loadTrail = useCallback(async (ks: ReleasedKey[]) => {
-    if (!subject || !ks.length) return;
-    try {
-      for (const rk of ks) await SafetyNative.openReleasedKey({ subjectUserId: subject, epochId: rk.epoch_id, hourIndex: rk.hour_index, sealedB64: rk.sealed, senderEd25519Pub: rk.sender_ed25519_pub });
-      const epochIds = [...new Set(ks.map((x) => x.epoch_id))];
-      const blobs = (await Promise.all(epochIds.map((e) => listLocationBlobs(subject, e)))).flat();
-      const hours = new Set(ks.map((x) => x.hour_index));
-      const usable = blobs.filter((b) => hours.has(b.hour_index));
-      const pts = await SafetyNative.decryptLocations(subject, usable.map((b) => ({ epochId: b.epoch_id, seq: Number(b.seq), hourIndex: b.hour_index, ciphertextB64: b.ciphertext })));
-      setTrail(pts.sort((a, b) => a.tMs - b.tMs));
-    } catch (e) { console.warn('trail', e); }
-  }, [subject]);
+  // Normal unlock path: keys the phone released to me (shared hook, live). Fallback unlock fills `recovered`.
+  const loc = useIncidentLocation(id, subject, me);
+  const trail = recovered.length ? recovered : loc.trail;
 
   useEffect(() => {
     if (!id || !me) return;
     getIncident(id).then(setIncident).catch(() => {});
     listIncidentEvents(id).then((evs) => evs.forEach(useStore.getState().addEvent)).catch(() => {});
-    listReleasedKeysForMe(id, me).then((ks) => { setKeys(ks); void loadTrail(ks); }).catch(() => {});
     listUnlockRequests(id).then((rs) => setReq(rs.find((r) => r.status !== 'denied') ?? null)).catch(() => {});
     const chans = [
       subscribe('incidents', `id=eq.${id}`, (row) => setIncident(row)),
-      subscribe('released_keys', `incident_id=eq.${id}`, (row) => { if (row.recipient_user_id === me) setKeys((ks) => { const n = [...ks.filter((x) => x.id !== row.id), row]; void loadTrail(n); return n; }); }),
-      subscribe('location_blobs', undefined, (row) => { if (row.user_id === subject && keys.length) void loadTrail(keys); }),
       subscribe('unlock_requests', `incident_id=eq.${id}`, (row) => setReq(row)),
     ];
     return () => chans.forEach((c) => c.unsubscribe());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, me, subject]);
+  }, [id, me]);
 
   // Fallback unlock: watch approvals; when ≥k, recover K_day and decrypt.
   useEffect(() => {
@@ -90,25 +73,24 @@ export default function IncidentScreen() {
       if (!r.ok) return;
       const blobs = await listLocationBlobs(subject, req.epoch_id);
       const pts = await SafetyNative.decryptLocations(subject, blobs.map((b) => ({ epochId: b.epoch_id, seq: Number(b.seq), hourIndex: b.hour_index, ciphertextB64: b.ciphertext })));
-      setTrail(pts.sort((a, b) => a.tMs - b.tMs));
-    })().catch((e) => Alert.alert('Recovery failed', e.message));
+      setRecovered(pts.sort((a, b) => a.tMs - b.tMs));
+    })().catch((e) => setNotice(`Recovery failed: ${e.message}`));
   }, [approvals, k, req, subject, me, trail.length]);
 
-  const act = (label: string, f: () => Promise<unknown>) => async () => {
-    setBusy(label);
-    try { await f(); } catch (e: any) { Alert.alert('Failed', e.message ?? String(e)); } finally { setBusy(null); }
+  // Errors and confirmations show inline (Alert.alert is a no-op on web).
+  const act = (label: string, f: () => Promise<unknown>, done?: string) => async () => {
+    setBusy(label); setNotice(null);
+    try { await f(); if (done) setNotice(done); } catch (e: any) { setNotice(e?.message ?? String(e)); } finally { setBusy(null); }
   };
   const event = (kind: IncidentEventKind, payload: Record<string, unknown> = {}) => rpc.addIncidentEvent({ incident_id: id, kind, payload });
-  const ring = act('ring', async () => {
-    await fn.push({ incidentId: id, kind: 'ring', title: 'Your friends are ringing you', body: 'Tap to answer', recipients: subject ? [subject] : [], critical: true, data: { route: '/home' } });
-    await event('ring');
-  });
-  const call = act('call', async () => {
-    const dev = subject ? profiles[subject]?.phone : null;
-    if (dev) await Linking.openURL(`tel:${dev}`); else Alert.alert('No phone number on their profile');
-  });
-  const going = act('en_route', () => event('en_route'));
-  const found = act('found', async () => { await event('found'); await rpc.resolveIncident(id); });
+  const ctx = useMemo<actions.IncidentActionContext | null>(() => (incident ? {
+    incident, subjectName, myName: (me && profiles[me]?.display_name) || 'A friend',
+    friendIds: members.filter((m) => m.group_id === incident.group_id && m.status === 'active' && m.user_id !== me && m.user_id !== incident.user_id).map((m) => m.user_id),
+  } : null), [incident, subjectName, me, profiles, members]);
+  const ring = act('ring', () => actions.ringPhone(ctx!), 'Ringing their phone.');
+  const call = act('call', () => actions.callPerson(ctx!, subject ? profiles[subject]?.phone : null));
+  const going = act('en_route', () => actions.enRoute(ctx!), 'Logged: you are on the way.');
+  const found = act('found', () => (isSubject ? event('found').then(() => rpc.resolveIncident(id)) : actions.markSafe(ctx!)), 'Marked safe.');
   const requestUnlock = act('unlock', async () => {
     if (!subject || !incident) return;
     const epoch = await getActiveEpoch(subject, incident.group_id);
@@ -126,9 +108,8 @@ export default function IncidentScreen() {
   });
 
   const last = trail[trail.length - 1];
-  const infoText = useMemo(() => `${subjectName} may need help. ${incident?.summary ?? ''}. ${last ? `Last location ${last.lat.toFixed(5)}, ${last.lng.toFixed(5)} at ${format(last.tMs, 'HH:mm')}.` : 'Location not available.'} Reported by the Safe app.`, [subjectName, incident, last]);
-  const copyInfo = () => Clipboard.setStringAsync(infoText).then(() => Alert.alert('Copied'));
-  const dial = (n: string) => Linking.openURL(`tel:${n}`);
+  const infoText = useMemo(() => (incident ? actions.dispatcherText({ subjectName, incident }, last) : ''), [subjectName, incident, last]);
+  const copyInfo = () => Clipboard.setStringAsync(infoText).then(() => setNotice('Copied.'));
 
   if (!incident) return <Screen><P muted>Loading…</P></Screen>;
   return (
@@ -153,7 +134,10 @@ export default function IncidentScreen() {
       ) : (
         <Card>
           <P style={{ fontWeight: '700' }}>Location locked</P>
-          <P muted>{incident.level === 'heads_up' ? 'Unlocks automatically if things look serious.' : offlineLevel ? `Their phone is offline. ${group?.threshold_k ?? 2} friends can unlock the last known location together.` : 'Waiting for keys…'}</P>
+          <P muted>{offlineLevel ? `Their phone is offline. ${group?.threshold_k ?? 2} friends can unlock the last known location together.` : 'Unlocks automatically if things look serious, or ask their phone for it now.'}</P>
+          {!offlineLevel && !isSubject && !resolved && (
+            <Button title="Get location now" kind="danger" onPress={act('location', () => actions.requestLocation(ctx!), 'Asked their phone for its location. It appears here in a few seconds.')} loading={busy === 'location'} />
+          )}
           {offlineLevel && !req && !isSubject && (
             <>
               <Button title="Request location" kind="danger" onPress={requestUnlock} loading={busy === 'unlock'} disabled={!fallbackAllowed} />
@@ -179,6 +163,7 @@ export default function IncidentScreen() {
         </Row>
       )}
       {isSubject && !resolved && <Button title="I'm safe — resolve" kind="ok" onPress={found} loading={busy === 'found'} />}
+      {!!notice && <P muted testID="incident-notice">{notice}</P>}
 
       {!isSubject && !resolved && (
         <Card tint={colors.warn}>
@@ -187,8 +172,8 @@ export default function IncidentScreen() {
           <P style={{ fontSize: 14 }}>{infoText}</P>
           <Button title="Copy info" kind="ghost" onPress={copyInfo} />
           <Row>
-            {group?.campus_safety_number && <Button title="Call campus safety" kind="ghost" style={{ flex: 1 }} onPress={async () => { await event('called_campus'); dial(group.campus_safety_number!); }} />}
-            <Button title="Call 911" kind="danger" style={{ flex: 1 }} onPress={async () => { await event('called_911'); dial(Platform.OS === 'web' ? '911' : '911'); }} />
+            {group?.campus_safety_number && <Button title="Call campus safety" kind="ghost" style={{ flex: 1 }} onPress={act('campus', () => actions.callCampus(ctx!, group.campus_safety_number!))} />}
+            <Button title="Call 911" kind="danger" style={{ flex: 1 }} onPress={act('911', () => actions.call911(ctx!))} />
           </Row>
         </Card>
       )}

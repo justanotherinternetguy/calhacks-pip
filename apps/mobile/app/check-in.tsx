@@ -8,7 +8,23 @@ import { colors } from '@/lib/theme';
 
 const GLAD_MS = 2500;
 
+/**
+ * On the phone the check-in is the native CheckInActivity (fingerprint / PIN first, then the phrase): this route only
+ * opens it and steps back. The JS screen below is the fallback where no native screen exists (web, mock).
+ */
 export default function CheckIn() {
+  const router = useRouter();
+  const [native, setNative] = useState<boolean | null>(null);
+  useEffect(() => {
+    SafetyNative.openCheckIn()
+      .then(() => { setNative(true); if (router.canGoBack()) router.back(); else router.replace('/home'); })
+      .catch(() => setNative(false));
+  }, [router]);
+  if (native !== false) return <Screen style={{ justifyContent: 'center' }}><P muted style={{ textAlign: 'center' }}>Opening check-in…</P></Screen>;
+  return <JsCheckIn />;
+}
+
+function JsCheckIn() {
   const router = useRouter();
   const params = useLocalSearchParams<{ phrase?: string; deadline?: string }>();
   const pending = useStore((s) => s.pendingCheck);
@@ -68,7 +84,7 @@ export default function CheckIn() {
     return (
       <Screen style={{ justifyContent: 'center', alignItems: 'center' }}>
         <H1>Glad you're okay</H1>
-        <P muted style={{ textAlign: 'center' }}>Nobody was told. Sensitivity is lowered for the next 30 minutes.</P>
+        <P muted style={{ textAlign: 'center' }}>Thanks for letting us know.</P>
       </Screen>
     );
   }

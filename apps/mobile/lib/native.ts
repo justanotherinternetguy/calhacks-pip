@@ -104,9 +104,11 @@ function wireEvents() {
   const s = useStore.getState().set;
   subs = [
     SafetyNative.addListener('statusChanged', (status) => s({ status })),
+    // The check-in UI is native (CheckInActivity: fingerprint / PIN, then the phrase); the notification's
+    // full-screen intent usually opens it already, this covers the app being in the foreground.
     SafetyNative.addListener('checkRequested', (c) => {
       s({ pendingCheck: c });
-      router.push({ pathname: '/check-in', params: { phrase: c.phrase, deadline: String(c.deadlineMs) } });
+      void SafetyNative.openCheckIn().catch(() => router.push('/check-in'));
     }),
     SafetyNative.addListener('escalation', (e) => {
       // Anything past 'check' closes the check-in modal (the screen watches pendingCheck); resolved clears a snatch too.

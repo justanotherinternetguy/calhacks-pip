@@ -65,7 +65,7 @@ pub struct IncidentRecord {
 }
 #[derive(uniffi::Enum, Clone, Debug)]
 pub enum EngineEvent {
-    CheckRequested { phrase: String, deadline_ms: u64 },
+    CheckRequested { phrase: String, deadline_ms: u64, summary: String },
     HeadsUp { summary: String },
     UnlockLocation { summary: String },
     SnatchDetected { summary: String },
@@ -221,7 +221,7 @@ impl From<core::Snapshot> for Snapshot {
 impl From<core::EngineEvent> for EngineEvent {
     fn from(e: core::EngineEvent) -> Self {
         match e {
-            core::EngineEvent::CheckRequested { phrase, deadline_ms } => EngineEvent::CheckRequested { phrase, deadline_ms },
+            core::EngineEvent::CheckRequested { phrase, deadline_ms, summary } => EngineEvent::CheckRequested { phrase, deadline_ms, summary },
             core::EngineEvent::HeadsUp { summary } => EngineEvent::HeadsUp { summary },
             core::EngineEvent::UnlockLocation { summary } => EngineEvent::UnlockLocation { summary },
             core::EngineEvent::SnatchDetected { summary } => EngineEvent::SnatchDetected { summary },

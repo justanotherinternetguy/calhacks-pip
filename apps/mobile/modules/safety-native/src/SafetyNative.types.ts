@@ -143,8 +143,13 @@ export type TelemetryState = {
   activity: Activity;
   placement: Placement;
   samplingFull: boolean;
-  checkPhrase?: string; // while a check-in is pending
+  /** while a "You okay?" check-in is pending (never the phrase itself: that is the owner's answer) */
+  checkPending?: boolean;
   checkDeadlineMs?: number;
+  /** what the check-in is about ("A possible fall") */
+  checkSummary?: string;
+  /** @deprecated sent by phones before checkPending; read only through `isCheckPending` */
+  checkPhrase?: string;
 };
 /**
  * Wire frame (§7 v2), 10 Hz while streaming / 1 Hz in night mode: always the raw samples since the previous frame,
@@ -195,7 +200,7 @@ export type TelemetryStatus = {
 
 export type SafetyNativeEvents = {
   statusChanged: Status;
-  checkRequested: { phrase: string; deadlineMs: number };
+  checkRequested: { phrase: string; deadlineMs: number; summary?: string };
   escalation: { level: EscalationLevel; summary: string };
   snatch: { summary: string; lat?: number; lng?: number };
   sos: { active: boolean };
@@ -225,6 +230,8 @@ export interface SafetyNativeModuleType {
   getStatus(): Promise<Status>;
   submitCheckIn(r: TypingRecord): Promise<TypingVerdict>;
   needHelp(): Promise<void>;
+  /** Opens the native check-in screen (fingerprint / PIN, then the phrase). */
+  openCheckIn(): Promise<void>;
   triggerSos(): Promise<void>;
   cancelSos(): Promise<boolean>;
   startBaselineWalk(): Promise<void>;
@@ -261,3 +268,7 @@ export interface SafetyNativeModuleType {
   /** true when running against the JS mock (web / Expo Go), not the real native service */
   readonly isMock?: boolean;
 }
+
+/** A check-in is pending on the phone (current phones send `checkPending`; older ones sent the phrase). */
+export const isCheckPending = (t: Pick<TelemetryState, 'checkPending' | 'checkPhrase'> | null | undefined): boolean =>
+  !!t && (t.checkPending === true || !!t.checkPhrase);

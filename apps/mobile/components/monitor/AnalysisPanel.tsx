@@ -4,11 +4,12 @@ import { Button, Card, Pill } from '@/components/ui';
 import { colors, radius } from '@/lib/theme';
 import { fmtClock } from '@/components/telemetry/labels';
 import type { AnalysisState } from './useRiskAnalysis';
-import type { RiskLevel, Urgency } from './riskAnalysis';
+import type { RiskLevel, Trajectory, Urgency } from './riskAnalysis';
 
 export const RISK_COLOR: Record<RiskLevel, string> = { low: colors.ok, elevated: colors.warn, high: colors.danger, critical: colors.danger };
 export const URGENCY_COLOR: Record<Urgency, string> = { info: colors.accent, warn: colors.warn, urgent: colors.danger };
 const RISK_LABEL: Record<RiskLevel, string> = { low: 'low risk', elevated: 'elevated', high: 'high risk', critical: 'critical' };
+const TRAJECTORY_LABEL: Record<Trajectory, string> = { rising: '↑ rising', steady: '→ steady', easing: '↓ easing' };
 
 const ago = (ms: number, now: number) => {
   const s = Math.max(0, Math.round((now - ms) / 1000));
@@ -50,9 +51,9 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
 
       {!state.configured && (
         <Card>
-          <Text style={styles.body}>AI analysis is off. Add an OpenRouter key to <Text style={styles.code}>apps/mobile/.env</Text>:</Text>
-          <Text style={styles.code}>OPENROUTER_API_KEY=sk-or-…</Text>
-          <Text style={styles.meta}>Then restart Metro. Free models are used by default (OPENROUTER_MODEL overrides).</Text>
+          <Text style={styles.body}>AI analysis is off. Add a key to <Text style={styles.code}>apps/mobile/.env</Text>:</Text>
+          <Text style={styles.code}>EXPO_PUBLIC_ANTHROPIC_API_KEY=sk-ant-…</Text>
+          <Text style={styles.meta}>Claude Haiku 5.5 by default (EXPO_PUBLIC_ANTHROPIC_MODEL overrides). Or a free OpenRouter key (OPENROUTER_API_KEY), which is also the fallback. Restart Metro after editing.</Text>
         </Card>
       )}
 
@@ -81,9 +82,18 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
         <>
           <Card tint={RISK_COLOR[a.risk]} style={{ gap: 8 }}>
             <View style={styles.riskRow}>
-              <Pill text={RISK_LABEL[a.risk]} color={RISK_COLOR[a.risk]} />
+              <View style={styles.riskLeft}>
+                <Pill text={RISK_LABEL[a.risk]} color={RISK_COLOR[a.risk]} />
+                <Text style={[styles.score, { color: RISK_COLOR[a.risk] }]}>{a.score}<Text style={styles.meta}>/100</Text></Text>
+              </View>
               <Text style={styles.meta}>{subjectName}</Text>
             </View>
+            <View style={styles.meter}>
+              <View style={[styles.meterFill, { width: `${a.score}%`, backgroundColor: RISK_COLOR[a.risk] }]} />
+            </View>
+            <Text style={styles.meta}>
+              {TRAJECTORY_LABEL[a.trajectory]} · {a.confidence} confidence{a.floor ? ` · raised to ${RISK_LABEL[a.risk]}: ${a.floor}` : ''}
+            </Text>
             <Text style={styles.headline}>{a.headline}</Text>
             {!!a.analysis && <Text style={styles.body}>{a.analysis}</Text>}
           </Card>
@@ -105,6 +115,21 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
                   </View>
                 ))}
               </View>
+            </View>
+          )}
+
+          {a.drivers.length > 0 && (
+            <View style={{ gap: 6 }}>
+              <Text style={styles.h3}>What moves the score</Text>
+              {a.drivers.map((d, i) => (
+                <View key={i} style={styles.driver}>
+                  <Text style={[styles.driverSign, { color: d.effect === 'up' ? colors.danger : colors.ok }]}>{d.effect === 'up' ? '▲' : '▼'}</Text>
+                  <Text style={[styles.body, { flex: 1 }]}>
+                    {d.factor}
+                    {d.ids.length > 0 && <Text style={styles.meta}>{'  '}{d.ids.map((id) => `#${id}`).join(' ')}</Text>}
+                  </Text>
+                </View>
+              ))}
             </View>
           )}
 
@@ -137,8 +162,8 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
 
       {state.configured && (
         <Text style={styles.foot}>
-          An AI reading of the incident reports (types and times only, no measurements, location or audio), sent from this
-          browser to OpenRouter. It can be wrong:
+          An AI reading of the incident timeline (kinds, order, gaps and durations only, no measurements, location or
+          audio), sent from this browser to the model provider (Claude, or OpenRouter as fallback). It can be wrong:
           the engine's escalation and your own call come first.
         </Text>
       )}
@@ -156,6 +181,12 @@ const styles = StyleSheet.create({
   headline: { color: colors.text, fontSize: 16, fontWeight: '700', lineHeight: 22 },
   code: { color: colors.accent, fontFamily: 'monospace', fontSize: 13 },
   riskRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  riskLeft: { flexDirection: 'row', alignItems: 'baseline', gap: 10 },
+  score: { fontSize: 22, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  meter: { height: 4, borderRadius: 2, backgroundColor: colors.border, overflow: 'hidden' },
+  meterFill: { height: 4, borderRadius: 2 },
+  driver: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  driverSign: { fontSize: 11, lineHeight: 20, width: 12 },
   box: { backgroundColor: colors.card, borderRadius: radius - 4, padding: 10, borderWidth: 1, borderColor: colors.border },
   step: { flexDirection: 'row', gap: 10 },
   stepRail: { width: 10, alignItems: 'center' },

@@ -89,17 +89,31 @@ one-line summary ("Unsteady walking, then a hard fall, then down for 2 min, then
 Encrypted location uploads every 5 minutes in night mode, every minute once friends were alerted.
 
 ### Escalation (Rust state machine)
-1. **Check** — the trigger above holds: a high-priority "You okay?" notification. Opening it requires unlocking
-   the phone (which blocks a thief). The subject types a random three-word phrase in a native input that
-   measures their typing; they can also tap **"I need help"**, which skips straight to step 3.
+Automatic escalation is on (`auto_escalate = true`, served config v3). A possible fall, hard impact or scream
+asks on its own once it has been open 5 s (`incidents.check_alone`, so a dropped phone's impact is reclassified
+first); Danger incidents always do; milder ones need two families at once.
+
+1. **Check** — a full-screen "You okay?" on the lock screen saying what was detected ("A possible fall"), with a
+   countdown. **I'm OK** first proves the owner: unlocking the secure lock screen, or a fingerprint / device PIN
+   prompt if the phone is already unlocked (a thief cannot pass it; native refuses a typed answer without it).
+   Only then is the random three-word phrase shown, typed in a native input that measures their typing: accepted
+   dismisses; far off their rhythm tells friends "answered, but may be impaired". **I need help** works for anyone
+   and skips straight to step 3. Phones without a secure lock screen answer by typing only, logged as unverified.
 2. **Heads-up** — no answer within 2 minutes while the trigger still holds (logged as *check-in missed*), or
    typing far off baseline: friends get "Sam might not be okay", with **no location**. If the evidence clears on
    its own (got up and walked, back with the group) the episode resolves instead.
 3. **Location unlock** — still no answer 4 minutes after the check and the trigger still holds: the phone
    releases the current and next hour keys to friends and keeps uploading encrypted live location.
-4. **Friends act** — ring the phone loudly, call, "I'm going", mark found/safe.
+4. **Friends act** — from the monitor's escalation dock or the incident screen: ring the phone loudly, call
+   the person, alert every friend, call 911 / campus safety, ask for the location now (the phone releases it to the
+   group and tells its owner who asked), "I'm going", mark found/safe (the phone is told and stops alerting).
+   While friends are involved the phone keeps an ongoing "Your friends were told · Tap if you're OK" notification.
 5. **Call option** — after 10 minutes with no response, friends get a one-tap campus safety / 911 option
    with a prefilled card. The app never calls on its own.
+
+**Demo mode** (Settings → Demo sensitivity) shortens every timer and makes a red incident (e.g. down after a fall)
+unlock the location immediately, so the friends' dashboard opens its escalation dock with the phone's map within a
+second of the incident; a new check-in can follow 15 s after the last.
 
 Other paths: a **grab** skips the check (immediate heads-up with no location; location unlocks after
 2 minutes unless the owner unlocks the phone). **Manual SOS** (hold button, quick-settings tile, widget)
@@ -162,22 +176,39 @@ counts as consent and unlocks immediately. A wrong phrase leaves the check open 
   (OpenStreetMap, no key), Ring / Call / I'm going / Found, fallback-unlock approval. All escrow operations
   (opening released keys, decrypting blobs, re-sealing shares, recovering the day key) run in the browser
   via the Rust crypto compiled to WebAssembly.
+- `/monitor` has an **escalation dock** in the bottom-right while the subject has an escalated, unresolved incident:
+  elapsed time, then red, a beep and auto-open when it is not resolved in time (the phone's 10-minute call option,
+  or open 10 min). Actions: call 911 / campus safety (with copyable "what to tell them"), call or ring the person,
+  alert all friends, get location (inline map once keys arrive), I'm going, found / safe.
 - `/monitor` is a **real-time telemetry console** for the subject's phone, fed ten frames a second over one
   persistent Supabase Realtime WebSocket (no database writes; the phone measures and shows its own server round
   trip, and the waveform is drawn on the phone's sensor clock so network jitter never distorts it): scrolling 50 Hz accelerometer and
   gyroscope waveforms with the impact line, metric band tiles with out-of-band flashes and sparklines,
   a five-minute mic-listening strip, the live incident log (tier, cleared time, answered) and sequence markers,
   the engine event ticker and a check-in countdown. Location is never part of telemetry; it stays on the escrow path.
-- The monitor's right column is an **AI read of the incident log**: the friend's browser sends the engine's
-  incident reports only (kind, tier, time, gap since the previous one, cleared / answered, episode; no measurements,
-  sensor state, location or audio) to a small free OpenRouter model (default NVIDIA
-  Nemotron 3.5 Lightning, 3B active parameters, low reasoning effort), which returns a risk
-  level, how the incidents chain together (for example impact → scream → down and still), the innocent
-  explanation, what would change the read, and short pop-up reminders for the friends (`components/monitor/
-  riskAnalysis.ts`). It is advisory: detection and escalation stay in the Rust engine. The model is only asked when
-  the picture changes (new / cleared / answered record, escalation step, check-in, friend action), debounced, at
-  most every 45 s unless the escalation rises, and the last read is cached per person. Key: `OPENROUTER_API_KEY`
-  in `apps/mobile/.env` (it ends up in the web bundle, so use a free-tier key).
+- The monitor's right column is an **AI read of the incident log**. `components/monitor/incidentTimeline.ts`
+  first turns the log into a structured JSON timeline: each incident's kind, tier, family, clock time, how long ago,
+  gap since the previous one, how long it lasted (or has lasted so far), active / answered, episode, and whether it
+  came after a grab; bursts (incidents each within 5 min of the last); pairs open at the same time; a weighted
+  15-minute trend; and matched ordered **chains** with their timing windows (impact → scream within 2 min;
+  fall → down → missed check-in → snoring; impaired → separated → in a vehicle; grab → phone moving away; and
+  reassuring ones such as a recovered fall or a lone drop). A part-way chain says which step would come next and how
+  long that window stays open, or that it stalled. No measurements, summaries, sensor state, location or audio go in.
+  The friend's browser sends that timeline to Claude (default Claude Haiku 5.5 via the official SDK, medium effort,
+  answer shape enforced with structured outputs) when `EXPO_PUBLIC_ANTHROPIC_API_KEY` is set, otherwise, or when
+  Claude fails or declines, to a small free OpenRouter model (default NVIDIA Nemotron 3.5 Lightning, 3B active
+  parameters, low reasoning effort). The model reasons over order, gaps and durations and returns a risk
+  level with a 0-100 score (low 0-24, elevated 25-49, high 50-74, critical 75-100), trajectory, confidence, the
+  factors that moved the score up or down, how the incidents chain together, the innocent explanation, what would
+  change the read, and short pop-up reminders (`components/monitor/riskAnalysis.ts`). The engine's own escalation
+  sets a floor (heads-up ⇒ at least high; unlocked / snatch ⇒ critical). It is advisory: detection and escalation
+  stay in the Rust engine. The model is only asked when the picture changes (new / cleared / answered record,
+  escalation step, check-in, friend action, or an open incident / calm period crossing 1, 2, 5, 10, 20, 40, 60 min
+  or 10, 30, 60 min), debounced, at most every 45 s unless the escalation rises, and the last read is cached per
+  person. Chain tests: `pnpm --filter mobile test`. Keys in `apps/mobile/.env`: `EXPO_PUBLIC_ANTHROPIC_API_KEY`
+  and/or `OPENROUTER_API_KEY`. Both end up in the web bundle: give the Claude key a low monthly spend limit, and use a
+  free-tier OpenRouter key. A plain `ANTHROPIC_API_KEY` is deliberately not read, so a shell-exported key is never
+  bundled by accident.
 
 ---
 

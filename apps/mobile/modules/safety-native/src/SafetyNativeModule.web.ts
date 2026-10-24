@@ -144,6 +144,7 @@ export class WebSafetyNative implements SafetyNativeModuleType {
   getStatus() { return this.mock.getStatus(); }
   submitCheckIn(r: TypingRecord) { return this.mock.submitCheckIn(r); }
   needHelp() { return this.mock.needHelp(); }
+  openCheckIn() { return this.mock.openCheckIn(); }
   triggerSos() { return this.mock.triggerSos(); }
   cancelSos() { return this.mock.cancelSos(); }
   startBaselineWalk() { return this.mock.startBaselineWalk(); }

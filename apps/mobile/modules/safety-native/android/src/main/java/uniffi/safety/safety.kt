@@ -2737,7 +2737,8 @@ sealed class EngineEvent {
     
     data class CheckRequested(
         val `phrase`: kotlin.String, 
-        val `deadlineMs`: kotlin.ULong) : EngineEvent() {
+        val `deadlineMs`: kotlin.ULong, 
+        val `summary`: kotlin.String) : EngineEvent() {
         companion object
     }
     
@@ -2816,6 +2817,7 @@ public object FfiConverterTypeEngineEvent : FfiConverterRustBuffer<EngineEvent>{
             1 -> EngineEvent.CheckRequested(
                 FfiConverterString.read(buf),
                 FfiConverterULong.read(buf),
+                FfiConverterString.read(buf),
                 )
             2 -> EngineEvent.HeadsUp(
                 FfiConverterString.read(buf),
@@ -2859,6 +2861,7 @@ public object FfiConverterTypeEngineEvent : FfiConverterRustBuffer<EngineEvent>{
                 4UL
                 + FfiConverterString.allocationSize(value.`phrase`)
                 + FfiConverterULong.allocationSize(value.`deadlineMs`)
+                + FfiConverterString.allocationSize(value.`summary`)
             )
         }
         is EngineEvent.HeadsUp -> {
@@ -2951,6 +2954,7 @@ public object FfiConverterTypeEngineEvent : FfiConverterRustBuffer<EngineEvent>{
                 buf.putInt(1)
                 FfiConverterString.write(value.`phrase`, buf)
                 FfiConverterULong.write(value.`deadlineMs`, buf)
+                FfiConverterString.write(value.`summary`, buf)
                 Unit
             }
             is EngineEvent.HeadsUp -> {

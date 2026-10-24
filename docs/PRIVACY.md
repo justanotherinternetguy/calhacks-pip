@@ -18,7 +18,7 @@ ask for help. It first asks *you*. Only if you don't answer does it tell the fri
 
 | Data | Who can read it |
 |---|---|
-| Your location (every 1–5 min during night mode) | **Nobody**, until an incident. It is encrypted with a key only your phone has. Your friends get the key only if you don't respond to a check-in, you tap "I need help" / SOS, or your phone goes offline and at least 2 friends agree to unlock. The company never has the key. |
+| Your location (every 1–5 min during night mode) | **Nobody**, until an incident. It is encrypted with a key only your phone has. Your friends get the key only if you don't respond to a check-in, you tap "I need help" / SOS, a friend asks for it while an alert about you is already in progress (your phone shares it at once and tells you who asked), or your phone goes offline and at least 2 friends agree to unlock. The company never has the key. |
 | Whether night mode is on, your battery level, whether an alert is in progress | Your group's friends and the server (every 2 min, no location) |
 | Whether you are near or apart from your friends | Your group. The server sees only a yes/no; it never sees coordinates. |
 | That a check-in / heads-up / unlock happened, with a short reason ("a hard fall, then down for 2 min") | Your group and the server |

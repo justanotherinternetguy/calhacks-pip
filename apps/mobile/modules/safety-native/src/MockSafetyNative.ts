@@ -161,6 +161,10 @@ export class MockSafetyNative implements SafetyNativeModuleType {
     if (ok) this.emit('escalation', { level: 'resolved', summary: 'Check-in dismissed' });
     return { accepted: ok, zScore: ok ? 0.3 : 2.4, reason: ok ? 'mock: phrase matched' : 'mock: phrase mismatch' };
   }
+  /** No native check-in screen in the mock: the caller falls back to the JS /check-in screen. */
+  async openCheckIn(): Promise<void> {
+    throw new Error('native check-in screen not available');
+  }
   async needHelp() {
     this.clearScenario();
     this.push({ engine: { ...this.status.engine, escalation: 'unlocked', evidence: 'user asked for help' } });

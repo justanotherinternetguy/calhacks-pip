@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(34);
+select plan(40);
 
 -- ------------------------------------------------------------ fixtures
 -- alice = subject (group owner), bob + carol = active group-mates, dave = outsider
@@ -155,6 +155,30 @@ reset role;
 select pg_temp.login('00000000-0000-0000-0000-00000000000a');
 select is((select count(*) from public.audit_log where kind = 'call_option'), 1::bigint,
           'subject sees the call_option event in audit_log');
+reset role;
+
+-- escalation: 'escalated' / 'location_requested' (friends, audited) and 'check_answered' (the subject, not audited)
+select pg_temp.login('00000000-0000-0000-0000-00000000000b');
+select lives_ok(
+  $$select public.add_incident_event('44444444-4444-4444-4444-444444444441', 'escalated', '{}'::jsonb)$$,
+  'group-mate can log an escalated event');
+select lives_ok(
+  $$select public.add_incident_event('44444444-4444-4444-4444-444444444441', 'location_requested', '{}'::jsonb)$$,
+  'group-mate can log a location_requested event');
+reset role;
+select pg_temp.login('00000000-0000-0000-0000-00000000000a');
+select lives_ok(
+  $$select public.add_incident_event('44444444-4444-4444-4444-444444444441', 'check_answered', '{"verified":true}'::jsonb)$$,
+  'subject can log a check_answered event');
+select is((select count(*) from public.audit_log where kind in ('escalated', 'location_requested')), 2::bigint,
+          'subject sees escalated and location_requested in audit_log');
+select is((select count(*) from public.audit_log where kind = 'check_answered'), 0::bigint,
+          'check_answered is not audited');
+reset role;
+select pg_temp.login('00000000-0000-0000-0000-00000000000d');
+select throws_ok(
+  $$select public.add_incident_event('44444444-4444-4444-4444-444444444441', 'location_requested', '{}'::jsonb)$$,
+  '42501', null, 'outsider cannot request a location');
 reset role;
 
 -- ------------------------------------------------------------ 3. no decrypt anywhere

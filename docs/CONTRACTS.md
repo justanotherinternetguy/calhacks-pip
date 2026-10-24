@@ -302,3 +302,41 @@ rests sensing (`SafetyEngine.reset_incidents`). Kept apart from `telemetry:{uid}
 per channel, so group-mates must never get write access to the tick stream. The web monitor's "Clear incidents" button
 sends it (acked) and empties its own list.
 
+
+## 10. v3: automatic escalation, owner-verified check-ins, friend actions (migration 0013)
+
+- **Config v3** (`core/config/model-v1.toml`, served as `v3`): `thresholds.auto_escalate = true`. New
+  `[incidents] check_alone = ["possible_fall", "hard_impact", "scream_shout"]` (snake_case kind names, validated) and
+  `check_alone_after_s = 5`: an unacknowledged active incident of one of these kinds asks on its own once it has been
+  open that long (`IncidentLog::check_trigger_alone`, OR-ed with the Danger / `check_min_families` rule).
+- **`EngineEvent::CheckRequested { phrase, deadline_ms, summary }`**: `summary` is the episode / active-incident
+  one-liner ("A possible fall") for the notification. JS `checkRequested` gains `summary`.
+- **Owner proof (Android).** The only check-in UI is `CheckInActivity` (JS `openCheckIn()`; `/check-in` only opens
+  it, and is the fallback where no native screen exists). "I'm OK" requires unlocking a secure keyguard or a
+  `BiometricPrompt` (`BIOMETRIC_STRONG | DEVICE_CREDENTIAL`); that sets `SafetyRuntime.ownerVerifiedUntil` (90 s).
+  `submitCheckIn` refuses a typed answer outside it (unless the device has no secure lock screen). The phrase is shown
+  only after the proof. At Unlocked / Snatch the proof alone dismisses (`BiometricDismiss`). Native no longer pushes a
+  second `DismissOk` / `DismissWrongPhrase` after `push_typing` (the engine already does).
+- **Telemetry state:** `checkPending: true`, `checkDeadlineMs`, `checkSummary` while a check is pending. The phrase is
+  never sent (`checkPhrase` from older phones is still read, via `isCheckPending`).
+- **`incident_events.kind`** gains `escalated` (a friend alerted the group; audited), `location_requested` (a friend
+  asked for the location; audited) and `check_answered` (the owner answered while friends were involved; payload
+  `{ verified }`).
+- **`telemetry-cmd:{uid}` commands** (any group-mate may publish; the phone checks the incident row before acting):
+  - `{ cmd: "friend_marked_safe", incidentId, by }`: if that incident is resolved on the server, the phone pushes
+    `FriendMarkedSafe` and tells its owner.
+  - `{ cmd: "release_location", incidentId, requestId?, by }`: if that incident is open at heads_up / unlocked /
+    snatch / sos, the phone releases the current hour keys to the group, uploads a fix (60 s interval) and tells its
+    owner who asked.
+  - Backstop: after each heartbeat the phone polls its open incident (resolved?) and new `location_requested` events.
+- **Engine reload** (`EngineHolder`): night mode is carried over to the fresh engine; a served config that arrives
+  mid-escalation is applied once the escalation is back to idle.
+- **Monitor escalation dock** (`components/monitor/EscalationDock.tsx`): shown while the subject has an open incident
+  at heads_up / unlocked / snatch / sos / offline / battery_dying; overdue (red, beep, auto-open) on a `call_option`
+  event or 600 s after `opened_at`. Actions live in `lib/incidentActions.ts` (shared with `/incident/[id]`); location
+  via `components/incident/useIncidentLocation.ts`. `profiles.phone` is now editable in Settings.
+- **Demo mode** (`model-demo.toml`, Settings → Demo sensitivity): `thresholds.unlock_on_danger = true` (an
+  unanswered red / Danger incident goes straight to Unlocked: `Escalation::unlock_now` → `UnlockLocation`, so the
+  group gets the location at once) and `check_repeat_cooldown_s = 15`. Off in model-v1. The monitor's dock also opens
+  (one beep) the moment the phone's live log shows an active red record, before the incident row lands, with the
+  phone's location map at the top once keys arrive.

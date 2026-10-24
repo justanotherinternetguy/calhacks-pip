@@ -6,7 +6,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Button, Card, H2, Input, P, Row, Screen, Toggle } from '@/components/ui';
 import { SafetyNative, type TelemetryStatus } from '@/modules/safety-native';
 import { signOut } from '@/lib/native';
-import { useStore, writeDashboardEnabled } from '@/lib/store';
+import { useStore, useUserId, writeDashboardEnabled } from '@/lib/store';
+import { getMyProfile, upsertProfile } from '@/lib/db';
 
 export default function Settings() {
   const router = useRouter();
@@ -16,6 +17,25 @@ export default function Settings() {
   const [learning, setLearning] = useState(true);
   const [start, setStart] = useState('20');
   const [end, setEnd] = useState('6');
+
+  // Phone number friends can call from an alert (profiles.phone, readable by group-mates only).
+  const me = useUserId();
+  const [phone, setPhone] = useState('');
+  const [phoneNote, setPhoneNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!me) return;
+    getMyProfile(me).then((p) => { if (p?.phone) setPhone(p.phone); }).catch(() => {});
+  }, [me]);
+  const savePhone = async () => {
+    if (!me) return;
+    const v = phone.trim();
+    if (v && !/^\+?[\d\s().-]{6,20}$/.test(v)) { setPhoneNote('That does not look like a phone number.'); return; }
+    try {
+      const p = await upsertProfile({ id: me, phone: v || null });
+      useStore.getState().set({ profiles: { ...useStore.getState().profiles, [me]: p } });
+      setPhoneNote(v ? 'Saved. Your friends can call you from an alert.' : 'Removed.');
+    } catch (e) { setPhoneNote(e instanceof Error ? e.message : String(e)); }
+  };
 
   // §7 telemetry publisher: default on (native starts it once configured); poll the status while this screen is open.
   const telemetry = useNativeSwitch(() => SafetyNative.getTelemetryStatus().then((s) => s.on), SafetyNative.setTelemetry, 'Telemetry', 'This build cannot stream telemetry.');
@@ -56,6 +76,13 @@ export default function Settings() {
 
   return (
     <Screen>
+      <Card>
+        <H2>Emergency contact</H2>
+        <P muted style={{ fontSize: 14 }}>Your phone number, shared only with your group so they can call you from an alert.</P>
+        <Input value={phone} onChangeText={setPhone} placeholder="+1 555 123 4567" keyboardType="phone-pad" testID="settings-phone" />
+        <Button title="Save number" kind="ghost" onPress={savePhone} />
+        {!!phoneNote && <P muted style={{ fontSize: 13 }}>{phoneNote}</P>}
+      </Card>
       <Card>
         <H2>Sensors</H2>
         <Toggle label="Sound detection" hint="Mic sampled briefly in night mode; audio never stored." value={mic} onChange={async (v) => {
@@ -107,7 +134,7 @@ export default function Settings() {
             <P style={{ fontSize: 14 }}>Grab: screen on, phone in hand; yank it away sharply with a twist, then jog for 2 to 3 s.</P>
             <P style={{ fontSize: 14 }}>Unsteady gait: stagger or sway while walking for 10 s. Slowed walk: walk very slowly for 15 s. Stumble: trip mid-stride and keep walking (3 in 5 min → repeated stumbles).</P>
             <P style={{ fontSize: 14 }}>Phone left behind: leave it flat on a table, untouched, for 2 min while night mode is on.</P>
-            <P style={{ fontSize: 14 }}>Incidents are logged only (no automatic check-in or alerts); see them in the personal dashboard.</P>
+            <P style={{ fontSize: 14 }}>A possible fall, hard impact or scream asks "You okay?" after 5 s (milder incidents need two kinds at once). Unanswered, friends get a heads-up, then the location. Confirm with fingerprint or PIN, then type the phrase, to dismiss.</P>
           </>
         )}
       </Card>
