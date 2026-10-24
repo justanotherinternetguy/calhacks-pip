@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { Link, useRouter } from 'expo-router';
 import { formatDistanceToNow } from 'date-fns';
 import { Button, Card, H2, P, Pill, Row, Screen } from '@/components/ui';
@@ -68,6 +68,8 @@ export default function Home() {
       <ConfirmItsYou state={cancel.state} what="cancel the SOS" />
 
       {!sosActive && <EscalationCard level={escalation} evidence={eng?.evidence} onOpenSnatch={() => router.push('/snatch')} />}
+
+      {Platform.OS === 'web' && <Button title="Open monitor" kind="ghost" onPress={() => router.push('/monitor')} />}
 
       {groups.map((g) => {
         const others = (presence[g.id] ?? []).filter((p) => p.user_id !== userId);

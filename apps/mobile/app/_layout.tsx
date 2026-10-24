@@ -63,6 +63,7 @@ export default function RootLayout() {
         <Stack.Screen name="debug/friend-view" options={{ title: 'Friend view (demo)' }} />
         <Stack.Screen name="scan" options={{ presentation: 'modal', title: 'Scan friend QR' }} />
         <Stack.Screen name="incident/[id]" options={{ title: 'Incident' }} />
+        <Stack.Screen name="monitor" options={{ headerShown: false }} />
         <Stack.Screen name="unlock-approve/[requestId]" options={{ presentation: 'modal', title: 'Approve location unlock' }} />
       </Stack>
     </GestureHandlerRootView>
