@@ -1,3 +1,4 @@
+import { uuidv4 } from '@/lib/uuid';
 import React, { useState } from 'react';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
@@ -20,7 +21,7 @@ export default function HomePlaces() {
     add(p);
   };
   const add = (p: { lat: number; lng: number }) =>
-    setPlaces((ps) => [...ps, { id: crypto.randomUUID(), label: label || `Place ${ps.length + 1}`, lat: p.lat, lng: p.lng, radiusM: 150 }]);
+    setPlaces((ps) => [...ps, { id: uuidv4(), label: label || `Place ${ps.length + 1}`, lat: p.lat, lng: p.lng, radiusM: 150 }]);
 
   const save = async () => {
     await SafetyNative.setHomePlaces(places); // device-only; never written to the DB

@@ -19,7 +19,7 @@ export function initNotifications() {
   Notifications.getLastNotificationResponseAsync().then((r) => r && routeFrom(r.notification.request.content.data as Record<string, unknown>)).catch(() => {});
   if (Platform.OS === 'android') {
     Notifications.setNotificationChannelAsync('safe-alerts', {
-      name: 'Safety alerts', importance: AndroidImportance.MAX, sound: 'default', vibrationPattern: [0, 500, 250, 500], bypassDnd: true,
+      name: 'Safety alerts', importance: AndroidImportance.MAX, vibrationPattern: [0, 500, 250, 500], bypassDnd: true,
     }).catch(() => {});
   }
   return () => sub.remove();

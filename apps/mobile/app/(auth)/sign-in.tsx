@@ -5,6 +5,8 @@ import * as WebBrowser from 'expo-web-browser';
 import { Button, Card, H1, Input, P, Row, Screen } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import { DEMO_MODE } from '@/lib/env';
+import { makeDemoSession, setDemoFlag } from '@/lib/demo';
+import { onAuthSession } from '@/lib/native';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -43,7 +45,13 @@ export default function SignIn() {
     if (access_token && refresh_token) { const { error: e3 } = await supabase.auth.setSession({ access_token, refresh_token }); if (e3) throw e3; }
   });
   const demo = () => run(async () => {
-    // Anonymous sign-in for demos (enable in Supabase Auth settings). Falls back to a fake local session in web mock mode.
+    if (DEMO_MODE) {
+      // No backend configured: use an offline local session (native sensing + mock still work).
+      await setDemoFlag(true);
+      await onAuthSession(makeDemoSession());
+      return;
+    }
+    // Anonymous sign-in for demos (enable in Supabase Auth settings).
     const { error } = await supabase.auth.signInAnonymously();
     if (error) throw error;
   });

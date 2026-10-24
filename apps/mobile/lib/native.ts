@@ -1,4 +1,5 @@
 // Wires SafetyNative <-> Supabase session <-> store. No detection logic here.
+import { uuidv4 } from '@/lib/uuid';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { router } from 'expo-router';
@@ -6,6 +7,7 @@ import type { Session } from '@supabase/supabase-js';
 import { SafetyNative } from '@/modules/safety-native';
 import { supabase } from './supabase';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from './env';
+import { setDemoFlag } from './demo';
 import { fn, listMyGroups, getDevicesForUsers, getProfiles, getPresence, listIncidents, subscribe, upsertDevice, rpc } from './db';
 import { useStore } from './store';
 import type { Incident, IncidentEvent, Presence } from './types';
@@ -17,11 +19,11 @@ let channels: { unsubscribe(): unknown }[] = [];
 async function deviceId(): Promise<string> {
   if (Platform.OS === 'web') {
     let id = globalThis.localStorage?.getItem('safe.deviceId');
-    if (!id) { id = crypto.randomUUID(); globalThis.localStorage?.setItem('safe.deviceId', id); }
+    if (!id) { id = uuidv4(); globalThis.localStorage?.setItem('safe.deviceId', id); }
     return id;
   }
   let id = await SecureStore.getItemAsync('safe.deviceId');
-  if (!id) { id = crypto.randomUUID(); await SecureStore.setItemAsync('safe.deviceId', id); }
+  if (!id) { id = uuidv4(); await SecureStore.setItemAsync('safe.deviceId', id); }
   return id;
 }
 
@@ -57,8 +59,8 @@ export async function onAuthSession(session: Session | null) {
     });
   } catch (e) { console.warn('device upsert failed', e); }
   wireEvents();
-  await refreshAll();
-  wireRealtime(session.user.id);
+  try { await refreshAll(); } catch (e) { console.warn('refreshAll failed (offline/demo?)', e); }
+  try { wireRealtime(session.user.id); } catch (e) { console.warn('realtime failed', e); }
 }
 
 function wireEvents() {
@@ -153,5 +155,7 @@ export async function sos() {
 
 export async function signOut() {
   await SafetyNative.setNightMode('off').catch(() => {});
-  await supabase.auth.signOut();
+  await setDemoFlag(false);
+  await supabase.auth.signOut().catch(() => {});
+  await onAuthSession(null); // also clears an offline demo session
 }
