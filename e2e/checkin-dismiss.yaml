@@ -1,6 +1,6 @@
 # Check-in: stumble → impact → still. 'You okay?' appears, typing the phrase dismisses it.
 # appId must match apps/mobile/app.json (android.package / ios.bundleIdentifier).
-appId: com.safe.mobile
+appId: app.safe.mobile
 tags: [debug]
 ---
 - launchApp:

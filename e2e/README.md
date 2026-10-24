@@ -27,7 +27,7 @@ on two real phones use `docs/DEMO.md` instead.
 
 ## Contract with the app
 
-`appId` is `com.safe.mobile`; change it in all five files if `apps/mobile/app.json` differs.
+`appId` is `app.safe.mobile`; change it in all five files if `apps/mobile/app.json` differs.
 The flows assert these strings / test IDs, so the app should render them verbatim:
 
 | Flow | Visible text | testID |

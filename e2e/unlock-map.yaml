@@ -1,6 +1,6 @@
 # Unlock: P(danger) ≥ T_unlock, no dismiss → epoch key released, map visible on the friend screen (web mock friend).
 # appId must match apps/mobile/app.json (android.package / ios.bundleIdentifier).
-appId: com.safe.mobile
+appId: app.safe.mobile
 tags: [debug]
 ---
 - launchApp:

@@ -1,38 +1,169 @@
--- 0004_seed_model.sql — placeholder model config served by the `config` edge
--- function. Replace `toml` with core/config/model-v1.toml and sign it for prod.
+-- Seed the v1 model config. Body is core/config/model-v1.toml verbatim (keep in sync; sign for prod).
 insert into public.model_configs (version, toml, signature)
 values (
   'v1',
   $toml$
-# placeholder — mirrors core/config/model-v1.toml shape
-version = "v1"
+# Safety detection model v1 — hand-set parameters (learned from data in v2).
+# Loaded by safety_core::config::Config::from_toml. Every number here is a
+# tunable; the structure must match config.rs.
+#
+# States are indexed everywhere as: 0 = Normal, 1 = Impaired, 2 = Incident, 3 = Unresponsive.
 
 [hmm]
-states = ["normal", "impaired", "incident", "unresponsive"]
+# Initial posterior when night mode starts.
+initial = [0.97, 0.02, 0.005, 0.005]
+# Forward filter step period. Impacts trigger an immediate extra step.
 step_seconds = 60
+# Base transition logits, row = from-state, col = to-state. Rows are softmaxed
+# at runtime (after context is added to the forward entries), so only relative
+# values matter. Recovery transitions (Incident→Impaired, Impaired→Normal,
+# Unresponsive→Incident) are built in here so story B resolves without alarm.
+base_logits = [
+  [ 4.0, -0.6, -3.5, -6.5],   # Normal:       ~0.985 stay, ~1%/min leak to Impaired, ~0.05%/min direct to Incident
+  [ 1.6,  3.0,  0.0, -1.4],   # Impaired:     ~19%/min back to Normal, ~4%/min to Incident
+  [-2.0, -0.4,  2.2,  1.2],   # Incident:     transient: ~25%/min to Unresponsive, ~5%/min to Impaired (walking resumes)
+  [-3.5, -2.6, -0.6,  3.5],   # Unresponsive: sticky (~98%), recovers via Incident
+]
+
+[hmm.context]
+# Weights added to the logits of *forward* transitions (to-state > from-state)
+# for each from-state when the context flag is active:
+# T(ctx) = softmax(base_logits + Σ ctx_i · w_i), forward entries only.
+away_from_home = [0.3, 0.4, 0.3, 0.0]
+separated      = [0.5, 0.8, 0.8, 0.0]
+late           = [0.3, 0.4, 0.3, 0.0]
+rapid_drift    = [1.0, 1.2, 0.3, 0.0]
+# hour_local in [late_hour_start, late_hour_end] counts as "late" (wraps midnight).
+late_hour_start = 0
+late_hour_end = 5
+# Gait drift z rising faster than this per minute flags "rapid drift onset" (possible spiking).
+rapid_drift_z_per_min = 1.0
+
+[emissions]
+# Rule: a quiet minute (nothing observed) is ~equally likely under Normal and Unresponsive, so
+# sitting at a table for hours can never compound into danger; only the Incident gateway
+# (impact) separates them. Positive events carry the information.
+# P(walking observed | state) — applied only when walking is seen
+p_walking = [0.4, 0.7, 0.1, 0.02]
+# Gait-drift z (given walking observed) ~ N(mean, sd) per state
+# Incident shares Impaired's gait emission so drift raises P(Impaired), not P(Incident).
+# The engine clips drift z to [0, 4].
+gait_z_mean = [0.0, 2.5, 2.5, 0.0]
+gait_z_sd   = [1.0, 1.5, 1.5, 2.0]
+# P(fall-like impact this step | state). A detector likelihood ≥0.5 counts as an impact;
+# otherwise the "no impact" term (1-p) applies — it drains the transient Incident state.
+p_impact = [0.001, 0.005, 0.6, 0.01]
+# Stillness is emitted as bounded bucket-crossing events: when the still duration first
+# passes each edge, P(reached bucket | state) is applied once. Buckets reset once motion resumes.
+stillness_buckets_s = [30, 120, 240, 480]
+p_stillness = [
+  [0.30, 0.20, 0.10, 0.10],   # Normal: sitting at a table is fine
+  [0.30, 0.20, 0.10, 0.10],
+  [0.30, 0.25, 0.12, 0.10],
+  [0.30, 0.40, 0.60, 0.50],   # Unresponsive favours long stillness (≥4 min: 6x, ≥8 min: 5x)
+]
+# P(agitation | state) — weighted low because dancing looks the same (Unresponsive = Normal: quiet parity)
+p_agitation = [0.10, 0.15, 0.30, 0.10]
+# P(audio jump above venue background | state)
+p_audio = [0.05, 0.08, 0.25, 0.05]
+# P(phone touched / screen on during the minute | state) — applied only when touched
+p_touched = [0.40, 0.40, 0.15, 0.02]
+# Evidence pushed immediately on a wrong check-in phrase
+p_wrong_phrase = [0.10, 0.50, 0.50, 0.50]
+# Evidence pushed immediately when check-in typing is far off baseline
+p_typing_impaired = [0.10, 0.60, 0.60, 0.30]
 
 [thresholds]
-check = 0.60
-heads_up = 0.80
-unlock = 0.95
-check_timeout_seconds = 90
-dismiss_cooldown_minutes = 30
-
-[heartbeat]
-interval_seconds = 120
-offline_after_minutes = 10
+t_check = 0.6
+t_heads_up = 0.5
+t_unlock = 0.95
+check_deadline_s = 90
+# A good dismiss resets the posterior toward Normal and raises every threshold
+# by `cooldown_threshold_boost` for `dismiss_cooldown_s`.
+dismiss_cooldown_s = 1800
+cooldown_threshold_boost = 0.2
+# Posterior after a good dismiss
+dismiss_posterior = [0.9, 0.09, 0.005, 0.005]
+# Minimum gap between two Check prompts
+check_repeat_cooldown_s = 300
+# Risk band 0..3 from P(danger); hysteresis applies when going down
+risk_band_edges = [0.2, 0.45, 0.7]
+risk_band_hysteresis = 0.05
+# Location upload interval per risk band (seconds)
+location_interval_s = [300, 180, 120, 60]
 battery_dying_pct = 3
+# Typing z above this = "far off baseline"
+typing_z_reject = 2.5
+# Edit distance / phrase length above this = wrong phrase
+typing_max_edit_ratio = 0.3
 
-[location]
-min_interval_seconds = 60
-max_interval_seconds = 300
-retention_hours = 6
+[gait]
+sample_hz = 50
+window_s = 6.0
+hop_s = 2.0
+band_low_hz = 0.5
+band_high_hz = 3.0
+# Peak threshold on band-passed vertical accel (g)
+peak_min_g = 0.05
+min_step_interval_s = 0.25
+walk_cadence_min = 70.0
+walk_cadence_max = 150.0
+run_cadence_min = 150.0
+min_regularity_walk = 0.35
+# Window RMS below this = no motion (stillness tracker)
+still_rms_g = 0.04
+# Window RMS above this with no periodic gait = agitation
+agitation_rms_g = 0.35
 
-[proximity]
-interval_seconds = 120
-token_ttl_minutes = 15
-$toml$,
+[impact]
+free_fall_g = 0.5
+min_free_fall_ms = 80
+peak_g = 3.0
+impact_window_ms = 400
+post_window_ms = 2000
+orientation_change_deg = 45.0
+post_still_rms_g = 0.15
+# "Phone dropped alone": long free fall, lands flat, no body motion after
+drop_min_free_fall_ms = 350
+drop_flat_gz = 0.85
+drop_post_rms_g = 0.06
+# Motion above this after a drop = picked up (drop resolves)
+pickup_rms_g = 0.12
+
+[snatch]
+# Sudden jerk (g/s) and rotation (deg/s) while screen is on arms the detector
+jerk_g_per_s = 50.0
+rotation_deg_per_s = 300.0
+arm_window_s = 15
+speed_mps = 3.0
+# Running cadence / speed must persist this long (halved when separated)
+confirm_s = 4
+
+[baseline]
+# Below this much learned walking, population priors dominate and z is scaled
+mature_walking_s = 7200
+cold_start_z_scale = 0.7
+min_samples = 10
+max_samples = 300
+ewma_alpha = 0.05
+
+[baseline.priors]
+# Population priors per gait feature: [median, sd]
+cadence        = [110.0, 10.0]
+step_cv        = [0.04, 0.02]
+regularity     = [0.90, 0.06]
+harmonic_ratio = [4.0, 1.5]
+sway_rms       = [0.05, 0.025]
+
+[baseline.typing_priors]
+# Population priors per typing feature: [median, sd]
+ik_median_ms   = [250.0, 80.0]
+ik_cv          = [0.6, 0.2]
+backspace_rate = [0.05, 0.08]
+edit_ratio     = [0.02, 0.05]
+ms_per_char    = [350.0, 120.0]
+
+  $toml$,
   'unsigned-dev'
 )
-on conflict (version) do update
-  set toml = excluded.toml, signature = excluded.signature;
+on conflict (version) do update set toml = excluded.toml, signature = excluded.signature;

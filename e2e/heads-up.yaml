@@ -1,6 +1,6 @@
 # Heads-up: check-in ignored for 90 s → friends get a no-location heads-up.
 # appId must match apps/mobile/app.json (android.package / ios.bundleIdentifier).
-appId: com.safe.mobile
+appId: app.safe.mobile
 tags: [debug]
 ---
 - launchApp:

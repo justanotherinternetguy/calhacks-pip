@@ -94,7 +94,7 @@ bindgen() {
   local lang="$1" out="$2"
   mkdir -p "$out"
   cargo run --release -q -p "$CRATE" --bin uniffi-bindgen -- \
-    generate --library "$HOST_DYLIB" --language "$lang" --out-dir "$out"
+    generate --library "$HOST_DYLIB" --language "$lang" --no-format --out-dir "$out"
 }
 
 # ------------------------------------------------------------------ Android
