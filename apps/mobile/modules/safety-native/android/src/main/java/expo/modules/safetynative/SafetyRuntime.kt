@@ -70,8 +70,17 @@ class SafetyRuntime private constructor(val app: Context) {
   /** The live foreground service, if any (set in onCreate/onDestroy), so engine events can reconfigure sensors. */
   @Volatile var sensing: SensingService? = null
 
+  /**
+   * True while the personal dashboard is on screen (setDashboardStreaming). Forces FULL sampling and a 1 s engine
+   * tick in SensingService; each tick is followed by a `dashboard` event so the UI never paints a stale snapshot.
+   */
+  @Volatile var dashboardStreaming = false
+  /** Wall-clock time of the last engine tick (any loop); getDashboard re-ticks when this is older than 1 s. */
+  @Volatile var lastTickMs = 0L
+
   /** Native-side copy of the last SignalIncident records (newest last, capped); the engine keeps the authoritative log. */
   private val signalRing = ArrayDeque<IncidentRecord>()
+  /** Fallback 1 s ticker used only while streaming without a running service (no sensors, but the engine still ages). */
   private var dashboardJob: Job? = null
 
   init { touch.start() }
@@ -128,14 +137,33 @@ class SafetyRuntime private constructor(val app: Context) {
     return mapOf("metrics" to metrics, "incidents" to incidents)
   }
 
-  /** While on, emits `dashboard` once a second (only while the JS sink is attached). */
+  /** `dashboardMap()` after a fresh engine tick when the last one is older than 1 s, so the first paint is current. */
+  fun freshDashboardMap(): Map<String, Any?> {
+    val now = now()
+    if (now - lastTickMs >= 1_000L) {
+      runCatching { sensing?.tickNow(now, emitDashboard = false) ?: runTick(now, emitDashboard = false) }
+        .onFailure { Log.w(TAG, "dashboard tick failed", it) }
+    }
+    return dashboardMap()
+  }
+
+  /**
+   * While on: SensingService forces FULL sampling and ticks the engine every second (pushing Context each time),
+   * and every tick is followed by a `dashboard` event (see [runTick]). Off: sampling returns to what the engine asked for.
+   * Without a running service a fallback job ticks the engine itself so the dashboard still moves.
+   */
   @Synchronized
   fun setDashboardStreaming(on: Boolean) {
+    if (dashboardStreaming == on) return
+    dashboardStreaming = on
+    val svc = sensing
+    val mode = if (on) "FULL (50 Hz + gyro, forced)" else "engine-requested (${if (samplingFull) "FULL" else "LOW"})"
+    Log.i(TAG, "dashboard streaming ${if (on) "on" else "off"}: sampling $mode, tick ${if (on) "1 s" else "engine cadence"}${if (svc == null) ", service not running" else ""}")
+    svc?.onDashboardStreamingChanged()
     if (!on) { dashboardJob?.cancel(); dashboardJob = null; return }
-    if (dashboardJob?.isActive == true) return
     dashboardJob = scope.launch {
       while (isActive) {
-        if (sink != null) runCatching { emit("dashboard", dashboardMap()) }.onFailure { Log.w(TAG, "dashboard emit failed", it) }
+        if (sensing == null) runCatching { runTick(now()) }.onFailure { Log.w(TAG, "fallback tick failed", it) }
         delay(1_000L)
       }
     }
@@ -152,7 +180,20 @@ class SafetyRuntime private constructor(val app: Context) {
 
   // ---- engine events ------------------------------------------------------
 
-  /** Called from the sensing service's 1 s tick loop (and the trace injector). */
+  /**
+   * One engine tick: dispatch its events, then (while streaming and JS is attached) emit `dashboard` right behind it,
+   * so the snapshot the UI receives is the one this tick produced. Every wall-clock tick loop goes through here.
+   */
+  fun runTick(now: Long = now(), emitDashboard: Boolean = true) {
+    val events = engine.get().tick(now.toULong())
+    lastTickMs = now
+    dispatch(events)
+    if (emitDashboard && dashboardStreaming && sink != null) {
+      runCatching { emit("dashboard", dashboardMap()) }.onFailure { Log.w(TAG, "dashboard emit failed", it) }
+    }
+  }
+
+  /** Called from the sensing service's tick loops (via [runTick]) and the trace injector. */
   fun dispatch(events: List<EngineEvent>) {
     for (ev in events) {
       try { handle(ev) } catch (e: Throwable) { Log.e(TAG, "event $ev failed", e) }
@@ -239,7 +280,7 @@ class SafetyRuntime private constructor(val app: Context) {
 
   fun pushAction(action: UserAction) {
     engine.get().pushAction(action, now().toULong())
-    scope.launch { dispatch(engine.get().tick(now().toULong())) }
+    scope.launch { runTick() }
   }
 
   fun displayName(): String = prefs.getString("display_name") ?: "Your friend"

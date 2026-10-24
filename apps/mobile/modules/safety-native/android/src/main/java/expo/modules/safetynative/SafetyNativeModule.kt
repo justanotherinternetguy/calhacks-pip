@@ -157,7 +157,7 @@ class SafetyNativeModule : Module() {
 
     // ---- dashboard (CONTRACTS §6) --------------------------------------------
 
-    AsyncFunction("getDashboard") { rt.dashboardMap() }
+    AsyncFunction("getDashboard") { rt.freshDashboardMap() }   // ticks first if the last tick is > 1 s old
     AsyncFunction("setDashboardStreaming") { on: Boolean -> rt.setDashboardStreaming(on) }
 
     // ---- check-in / SOS ------------------------------------------------------

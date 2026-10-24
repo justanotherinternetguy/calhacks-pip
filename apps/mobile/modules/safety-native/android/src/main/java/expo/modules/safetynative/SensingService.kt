@@ -53,8 +53,10 @@ import kotlin.math.sqrt
  * duty-cycled audio, uploaders, and `engine.tick` every second with event dispatch.
  *
  * Sampling mode (CONTRACTS §6) is owned by the engine: `EngineEvent.SamplingRateChanged` flips
- * between LOW and FULL (50 Hz + gyroscope). Native additionally forces FULL during a baseline walk
- * and while opportunistic daytime gait learning is active (walking + learning enabled).
+ * between LOW and FULL (50 Hz + gyroscope). Native additionally forces FULL during a baseline walk,
+ * while opportunistic daytime gait learning is active (walking + learning enabled), and while the
+ * personal dashboard is streaming (`SafetyRuntime.dashboardStreaming`, which also makes the day
+ * ticker run every second so `engine.metrics()` is fresh for each `dashboard` event).
  */
 class SensingService : Service(), SensorEventListener {
   companion object {
@@ -268,11 +270,8 @@ class SensingService : Service(), SensorEventListener {
       while (isActive) {
         val now = rt.now()
         runCatching {
-          rt.touch.poll(now)
-          pushContext(now)
-          val engine = rt.engine.get()
-          rt.dispatch(engine.tick(now.toULong()))
-          val snap = engine.snapshot()
+          tickNow(now)
+          val snap = rt.engine.get().snapshot()
           if (snap.riskBand.toInt() >= 1 || snap.hmmState != HmmState.NORMAL) audio.boost()
           if (now - lastRotateCheck > 60_000) { lastRotateCheck = now; rt.escrow.rotateIfNewDay() }
         }.onFailure { Log.e(TAG, "tick failed", it) }
@@ -299,9 +298,12 @@ class SensingService : Service(), SensorEventListener {
 
   /**
    * Low-power loop outside night sessions: re-evaluate the window and feed the engine context + tick.
-   * Once a minute in LOW mode; every second while the engine has asked for FULL sampling (e.g. after an
-   * incident) so grab/impact logic keeps running at the same cadence as at night.
+   * Once a minute in LOW mode; every second while FULL sampling is active (engine request after an
+   * incident, or the dashboard streaming) so grab/impact logic keeps running at the same cadence as at
+   * night and the dashboard gets a fresh `metrics()` each second. Restarted (ticks immediately) when the
+   * streaming flag flips, so a pending 60 s delay does not hold the first fresh frame back.
    */
+  @Synchronized
   private fun startDayTicker() {
     dayJob?.cancel()
     dayJob = rt.scope.launch {
@@ -312,14 +314,29 @@ class SensingService : Service(), SensorEventListener {
           if (!rt.nightActive) {
             val now = rt.now()
             if (now - lastPassiveFix >= 60_000L) { lastPassiveFix = now; refreshPassiveLocation() }
-            rt.touch.poll(now)
-            pushContext(now)
-            rt.dispatch(rt.engine.get().tick(now.toULong()))
+            tickNow(now)
           }
         }.onFailure { Log.e(TAG, "day tick failed", it) }
-        delay(if (!rt.nightActive && fullActive) 1_000L else 60_000L)
+        delay(if (!rt.nightActive && (fullActive || rt.dashboardStreaming)) 1_000L else 60_000L)
       }
     }
+  }
+
+  /**
+   * One full tick: keyguard poll, Context push (so `samplingFull`, `lastTouchMs`, activity... are current),
+   * then `engine.tick` via [SafetyRuntime.runTick], which dispatches events and emits `dashboard` while streaming.
+   * Shared by the day ticker, the night loop and `getDashboard` (through [SafetyRuntime.freshDashboardMap]).
+   */
+  fun tickNow(now: Long = rt.now(), emitDashboard: Boolean = true) {
+    rt.touch.poll(now)
+    pushContext(now)
+    rt.runTick(now, emitDashboard)
+  }
+
+  /** Streaming flag flipped: re-register sensors for the new effective mode and re-arm the day ticker cadence. */
+  fun onDashboardStreamingChanged() {
+    applySampling()
+    startDayTicker()
   }
 
   private fun pushContext(now: Long) {
@@ -346,14 +363,15 @@ class SensingService : Service(), SensorEventListener {
 
   // ---- motion --------------------------------------------------------------
 
-  /** FULL when the engine asked for it, during a baseline walk, or while learning gait on a daytime walk. */
+  /** FULL when the engine asked for it, the dashboard is streaming, during a baseline walk, or while learning gait on a daytime walk. */
   private fun effectiveFull(): Boolean =
-    rt.samplingFull || rt.baselineWalkStartMs != 0L || (activity == Activity.WALKING && rt.prefs.learningEnabled)
+    rt.samplingFull || rt.dashboardStreaming || rt.baselineWalkStartMs != 0L || (activity == Activity.WALKING && rt.prefs.learningEnabled)
 
   /**
    * (Re)registers the motion listeners for the current effective mode. Idempotent; safe from any thread
    * (SensorManager delivers to the main looper when no Handler is given). Called from onCreate, the
-   * engine's SamplingRateChanged, activity transitions, baseline-walk start/stop and night start/stop.
+   * engine's SamplingRateChanged, activity transitions, baseline-walk start/stop, night start/stop and
+   * dashboard streaming on/off.
    */
   @Synchronized
   fun applySampling() {
