@@ -1,90 +1,108 @@
 package expo.modules.safetynative
 
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import uniffi.safety.EscalationLevel
 import uniffi.safety.HmmState
 import uniffi.safety.IncidentRecord
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToLong
 
-/** Per-sample magnitudes SensingService collected since the previous telemetry tick (CONTRACTS §7 `accel` / `gyro`, newest last). */
-class RawSamples(val accel: FloatArray, val gyro: FloatArray, val sampleHz: Int) {
-  companion object { val EMPTY = RawSamples(FloatArray(0), FloatArray(0), 0) }
+/**
+ * Per-sample magnitudes SensingService collected since the previous telemetry frame (CONTRACTS §7, newest last).
+ * `lastTMs` is the phone wall-clock of the newest sample (0 when empty); `hz` the measured delivery rate.
+ */
+class RawSamples(val accel: FloatArray, val gyro: FloatArray, val lastTMs: Long, val hz: Float) {
+  companion object { val EMPTY = RawSamples(FloatArray(0), FloatArray(0), 0L, 0f) }
 }
 
 /**
- * Live telemetry stream to the web monitor (CONTRACTS §7). Each tick is one `TelemetryTick` JSON POSTed to
- * `{supabaseUrl}/realtime/v1/api/broadcast` as a private broadcast on `telemetry:{userId}` / event `tick` — no DB rows,
- * no location.
+ * Live telemetry stream to the web monitor (CONTRACTS §7). Frames go out as `tick` broadcasts on the private
+ * Realtime channel `telemetry:{userId}` over one persistent WebSocket ([RealtimeSocket]) — no DB rows, no location.
  *
- * Rate policy (re-evaluated every iteration, so night start/stop and the two switches need no wiring):
- * 4 Hz while `SafetyRuntime.telemetryOn` or `dashboardStreaming`, 1 Hz while night mode is active, otherwise idle.
- * The engine is still ticked at 1 s by SensingService; at 4 Hz this only re-reads `engine.metrics()` / `snapshot()`
- * (no I/O) and drains the per-sample rings (|a|, |ω|) and the engine-event ring, which are filled per sample / per tick.
+ * Rate policy (re-evaluated every iteration): [HZ_STREAM] while `SafetyRuntime.telemetryOn` or `dashboardStreamingOn`,
+ * [HZ_NIGHT] while night mode is active, otherwise idle (socket closed). The engine is still ticked at 1 s by
+ * SensingService; a frame only drains the per-sample rings (|a|, |ω| with timestamps) and the engine-event ring,
+ * and attaches the full state block (metrics, probabilities, mode pills, check-in) when the engine has ticked since
+ * the previous state block or at least every [STATE_EVERY_MS], so a subscriber joining mid-stream is complete within a second.
  *
- * Delivery: one in-flight request at a time (a tick that lands while the previous POST is still out is dropped, not
- * queued); every failure counts and arms an exponential backoff 1 → 30 s during which ticks are skipped (rings keep the
- * last ≤ 64 samples / events). Incident deltas are the records with `id > lastSentIncidentId`, which only advances
- * when a POST succeeded, so a lost tick re-sends them. Logs one line per rate / network state change, never per tick.
+ * Latency probe: while streaming fast the channel is joined with `self = true`, so the server echoes our frames back;
+ * `rttMs` (phone → Realtime → phone, same clock, no skew) rides on the next frame and is shown by the monitor and Settings.
+ *
+ * Delivery: a frame that lands while the socket is not joined is dropped (counted), never queued. Incident deltas are
+ * the records with `id > lastSentIncidentId`, which advances when a frame was handed to the socket; every (re)join
+ * replays the whole live log once (the monitor dedups by id). Logs one line per rate / socket state change, never per frame.
  */
 class TelemetryPublisher(private val rt: SafetyRuntime) {
   companion object {
     private const val TAG = "Telemetry"
-    private const val HZ_FAST = 4
-    private const val HZ_SLOW = 1
+    private const val HZ_STREAM = 10
+    private const val HZ_NIGHT = 1
     private const val IDLE_POLL_MS = 1_000L
-    private const val BACKOFF_MIN_MS = 1_000L
-    private const val BACKOFF_MAX_MS = 30_000L
-    private const val CALL_TIMEOUT_S = 5L
+    private const val STATE_EVERY_MS = 1_000L
     private const val BATTERY_REFRESH_MS = 10_000L
     private const val LOG_REFRESH_MS = 1_000L
-    private const val BROADCAST_PATH = "/realtime/v1/api/broadcast"
+    private const val RTT_EVERY_MS = 1_000L
+    /** One status line a minute while publishing (rate, round trip, drops, session), for field diagnosis from logcat. */
+    private const val SUMMARY_EVERY_MS = 60_000L
   }
 
-  /** Same pool / dispatcher as the PostgREST client, shorter call timeout so a hung POST cannot block the stream for 30 s. */
-  private val http by lazy { rt.supabase.client.newBuilder().callTimeout(CALL_TIMEOUT_S, TimeUnit.SECONDS).build() }
+  /** Same pool / dispatcher as the PostgREST client; no call timeout (the socket is long-lived), short connect timeout. */
+  private val http by lazy { rt.supabase.client.newBuilder().callTimeout(0, TimeUnit.SECONDS).connectTimeout(10, TimeUnit.SECONDS).readTimeout(0, TimeUnit.SECONDS).build() }
+  private val socket by lazy { RealtimeSocket(rt.scope, http, TAG, ::onEcho) }
   private var job: Job? = null
-  private val inFlight = AtomicBoolean(false)
 
   /** Current publish rate (0 = idle). */
   @Volatile var hz: Int = 0
     private set
-  /** Wall-clock ms of the last POST that returned 2xx (0 = never). */
+  /** Wall-clock ms of the last frame handed to a joined socket (0 = never). */
   @Volatile var lastSentMs: Long = 0L
     private set
-  /** Total failed POSTs (HTTP non-2xx or I/O error) since process start. */
-  @Volatile var failures: Int = 0
+  /** Frames dropped because the socket was not joined. */
+  @Volatile var dropped: Int = 0
+    private set
+  /** Smoothed phone → Realtime → phone round trip from the self-echo (null until the first echo). */
+  @Volatile var rttMs: Int? = null
     private set
 
   private var seq = 0L
-  private var dropped = 0
-  /** Highest incident id acknowledged by a successful POST; the next tick sends the records above it. */
   @Volatile private var lastSentIncidentId = 0L
-  private var backoffMs = 0L
-  @Volatile private var backoffUntilMs = 0L
+  private var seenJoinEpoch = 0L
+  private var lastStateMs = 0L
+  private var lastStateTickMs = -1L
   private var batteryPct = 0
   private var batteryReadMs = 0L
   private var cachedLog: List<IncidentRecord> = emptyList()
   private var logReadMs = 0L
   private var netState = "idle"
+  /** `seq → sent-at ms` of the frames awaiting their echo (bounded; only one probe per [RTT_EVERY_MS]). */
+  private val probes = LinkedHashMap<Long, Long>()
+  private var lastProbeMs = 0L
+  private var rttEma = -1.0
+  private var lastSummaryMs = 0L
 
   fun desiredHz(): Int = when {
-    rt.telemetryOn || rt.dashboardStreamingOn -> HZ_FAST
-    rt.nightActive -> HZ_SLOW
+    rt.telemetryOn || rt.dashboardStreamingOn -> HZ_STREAM
+    rt.nightActive -> HZ_NIGHT
     else -> 0
   }
 
   /** `getTelemetryStatus()` payload: `on` is the explicit switch, `hz` what is actually being published right now. */
-  fun statusMap(): Map<String, Any?> = mapOf("on" to rt.telemetryOn, "hz" to hz, "lastSentMs" to lastSentMs, "failures" to failures)
+  fun statusMap(): Map<String, Any?> = mapOf(
+    "on" to rt.telemetryOn, "hz" to hz, "lastSentMs" to lastSentMs, "failures" to socket.failures,
+    "connected" to socket.joined, "reconnects" to socket.reconnects, "dropped" to dropped, "rttMs" to rttMs, "error" to socket.lastError,
+  )
+
+  /** Session refresh: the joined channel gets the new JWT without reconnecting. */
+  fun onTokenChanged(jwt: String) = socket.setToken(jwt)
+
+  /** Connectivity restored (SafetyRuntime's NetworkCallback): reconnect without waiting out the backoff. */
+  fun onNetworkAvailable() { if (hz != 0) socket.retryNow() }
 
   @Synchronized
   fun start() {
@@ -93,15 +111,21 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
       var next = rt.now()
       while (isActive) {
         val h = desiredHz()
+        val cfg = rt.prefs.serverConfig?.takeIf { it.accessToken.isNotBlank() }
         if (h != hz) {
           hz = h
           Log.i(TAG, if (h == 0) "idle (telemetry off, no dashboard, no night mode)" else "$h Hz (${rateReason()})")
           next = rt.now()
         }
-        if (h == 0) { delay(IDLE_POLL_MS); continue }
+        if (h == 0 || cfg == null) { socket.stop(); setNetState("idle"); delay(IDLE_POLL_MS); continue }
+        socket.start(RealtimeSocket.Target(cfg.supabaseUrl, cfg.supabaseAnonKey, "telemetry:${cfg.userId}", selfEcho = h == HZ_STREAM), cfg.accessToken)
         val period = 1_000L / h
         val now = rt.now()
-        if (now >= backoffUntilMs) publishOnce(now)
+        publishOnce(now, cfg.userId)
+        if (now - lastSummaryMs >= SUMMARY_EVERY_MS) {
+          lastSummaryMs = now
+          Log.i(TAG, "summary: $h Hz joined=${socket.joined} rtt=${rttMs?.let { "$it ms" } ?: "-"} seq=$seq dropped=$dropped reconnects=${socket.reconnects} failures=${socket.failures}; ${rt.session.statusLine()}")
+        }
         next += period
         val wait = next - rt.now()
         if (wait < 0) next = rt.now()          // fell behind (Doze, slow build): resync instead of bursting
@@ -115,6 +139,7 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
     val j = job ?: return
     job = null
     j.cancel()
+    socket.stop()
     if (hz != 0) { hz = 0; Log.i(TAG, "stopped") }
   }
 
@@ -124,64 +149,56 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
     else -> "night mode"
   }
 
-  // ---- one tick ---------------------------------------------------------------
+  // ---- one frame -----------------------------------------------------------------
 
-  private fun publishOnce(now: Long) {
-    val cfg = rt.prefs.serverConfig ?: return
-    if (!inFlight.compareAndSet(false, true)) { dropped++; return }   // previous POST still out: drop, never queue
-    val body: String
+  private fun publishOnce(now: Long, userId: String) {
+    if (!socket.joined) { dropped++; setNetState("waiting for channel (${socket.lastError ?: "connecting"})"); return }
+    if (socket.joinEpoch != seenJoinEpoch) {           // fresh join: replay the live log and send a state block right away
+      seenJoinEpoch = socket.joinEpoch
+      lastSentIncidentId = 0L
+      lastStateMs = 0L
+      synchronized(probes) { probes.clear() }
+    }
+    val frame: JSONObject
     val maxIncidentId: Long
     try {
-      val (tick, maxId) = buildTick(now, cfg.userId)
-      maxIncidentId = maxId
-      val msg = JSONObject().put("topic", "telemetry:${cfg.userId}").put("event", "tick").put("private", true).put("payload", tick)
-      body = JSONObject().put("messages", JSONArray().put(msg)).toString()
+      val (f, maxId) = buildFrame(now, userId)
+      frame = f; maxIncidentId = maxId
     } catch (t: Throwable) {
-      inFlight.set(false)
       setNetState("build failed: ${t.javaClass.simpleName}: ${t.message?.take(80)}")
       return
     }
-    rt.scope.launch(Dispatchers.IO) {
-      try {
-        val req = rt.supabase.authed(BROADCAST_PATH).post(body.toRequestBody(SupabaseRest.JSON)).build()
-        http.newCall(req).execute().use { resp ->
-          if (resp.isSuccessful) onSuccess(maxIncidentId) else onFailure("http ${resp.code}")
-        }
-      } catch (t: Throwable) {
-        onFailure("io ${t.javaClass.simpleName}")
-      } finally {
-        inFlight.set(false)
-      }
+    if (socket.send("tick", frame)) {
+      lastSentMs = now
+      if (maxIncidentId > lastSentIncidentId) lastSentIncidentId = maxIncidentId
+      setNetState("ok")
+    } else {
+      dropped++
+      setNetState("send failed")
     }
   }
 
-  private fun onSuccess(maxIncidentId: Long) {
-    lastSentMs = rt.now()
-    if (maxIncidentId > lastSentIncidentId) lastSentIncidentId = maxIncidentId
-    backoffMs = 0L
-    backoffUntilMs = 0L
-    setNetState("ok")
-  }
-
-  private fun onFailure(reason: String) {
-    failures++
-    backoffMs = if (backoffMs == 0L) BACKOFF_MIN_MS else (backoffMs * 2).coerceAtMost(BACKOFF_MAX_MS)
-    backoffUntilMs = rt.now() + backoffMs
-    setNetState("failing ($reason)")
+  /** Our own frame echoed by the server: round trip on the phone's clock. */
+  private fun onEcho(event: String, payload: JSONObject, receivedAtMs: Long) {
+    if (event != "tick") return
+    val s = payload.optLong("seq", -1L)
+    val sentAt = synchronized(probes) { probes.remove(s) } ?: return
+    val rtt = (receivedAtMs - sentAt).toDouble()
+    if (rttEma < 0) Log.i(TAG, "first echo: round trip ${rtt.toLong()} ms")
+    rttEma = if (rttEma < 0) rtt else rttEma * 0.7 + rtt * 0.3
+    rttMs = rttEma.roundToLong().toInt()
   }
 
   @Synchronized
   private fun setNetState(s: String) {
     if (s == netState) return
     netState = s
-    Log.i(TAG, "$s; failures=$failures dropped=$dropped backoff=${backoffMs} ms")
+    Log.i(TAG, "$s; dropped=$dropped failures=${socket.failures} reconnects=${socket.reconnects}${rttMs?.let { " rtt=${it} ms" } ?: ""}")
   }
 
-  /** The §7 `TelemetryTick` object plus the highest incident id it carries (to acknowledge on success). */
-  private fun buildTick(now: Long, userId: String): Pair<JSONObject, Long> {
+  /** The §7 v2 frame plus the highest incident id it carries (acknowledged once the socket took the frame). */
+  private fun buildFrame(now: Long, userId: String): Pair<JSONObject, Long> {
     val engine = runCatching { rt.engine.get() }.getOrNull()
-    val snap = runCatching { engine?.snapshot() }.getOrNull()
-    val metrics = runCatching { engine?.metrics()?.toMap() }.getOrNull() ?: emptyMetricsMap(now)
     val events = rt.drainTelemetryEvents()
     val raw = rt.sensing?.drainTelemetrySamples() ?: RawSamples.EMPTY
 
@@ -194,13 +211,44 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
     val fresh = cachedLog.filter { it.id.toLong() > sentId }
     val maxId = fresh.maxOfOrNull { it.id.toLong() } ?: sentId
 
-    if (now - batteryReadMs >= BATTERY_REFRESH_MS) { batteryPct = rt.batteryPct(); batteryReadMs = now }
-
     val o = JSONObject()
-      .put("v", 1)
+      .put("v", 2)
       .put("t", now)
       .put("seq", ++seq)
       .put("user", userId)
+      .put("accel", magnitudes(raw.accel))
+      .put("gyro", magnitudes(raw.gyro))
+      .put("st", raw.lastTMs)
+      .put("sampleHz", (raw.hz * 10f).roundToLong() / 10.0)
+      .put("incidents", JSONArray().also { a -> fresh.forEach { a.put(jsonOf(it.toMap())) } })
+      .put("incidentCount", cachedLog.size)
+      .put("events", JSONArray(events))
+    rttMs?.let { o.put("rttMs", it) }
+
+    // State block: after every engine tick, at least once a second, and whenever something happened.
+    val tickMs = rt.lastTickMs
+    if (tickMs != lastStateTickMs || now - lastStateMs >= STATE_EVERY_MS || events.isNotEmpty() || fresh.isNotEmpty()) {
+      lastStateTickMs = tickMs
+      lastStateMs = now
+      o.put("state", stateBlock(now, engine))
+    }
+
+    // Latency probe: remember when this frame left; the echo (self = true) closes the loop in [onEcho].
+    if (socket.currentTarget()?.selfEcho == true && now - lastProbeMs >= RTT_EVERY_MS) {
+      lastProbeMs = now
+      synchronized(probes) {
+        probes[seq] = now
+        while (probes.size > 8) probes.remove(probes.keys.first())
+      }
+    }
+    return o to maxId
+  }
+
+  private fun stateBlock(now: Long, engine: uniffi.safety.SafetyEngine?): JSONObject {
+    val snap = runCatching { engine?.snapshot() }.getOrNull()
+    val metrics = runCatching { engine?.metrics()?.toMap() }.getOrNull() ?: emptyMetricsMap(now)
+    if (now - batteryReadMs >= BATTERY_REFRESH_MS) { batteryPct = rt.batteryPct(); batteryReadMs = now }
+    val s = JSONObject()
       .put("metrics", jsonOf(metrics))
       .put("hmm", rt.hmmName(snap?.hmmState ?: HmmState.NORMAL))
       .put("escalation", rt.escalationName(snap?.escalation ?: EscalationLevel.IDLE))
@@ -211,19 +259,13 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
       .put("activity", metrics["activity"] ?: "unknown")
       .put("placement", metrics["placement"] ?: "unknown")
       .put("samplingFull", metrics["samplingFull"] ?: false)
-      .put("accel", magnitudes(raw.accel))
-      .put("gyro", magnitudes(raw.gyro))
-      .put("sampleHz", raw.sampleHz)
-      .put("incidents", JSONArray().also { a -> fresh.forEach { a.put(jsonOf(it.toMap())) } })
-      .put("incidentCount", cachedLog.size)
-      .put("events", JSONArray(events))
     if (snap?.escalation == EscalationLevel.CHECK) {
-      rt.pendingCheck?.let { (phrase, deadlineMs) -> o.put("checkPhrase", phrase).put("checkDeadlineMs", deadlineMs) }
+      rt.pendingCheck?.let { (phrase, deadlineMs) -> s.put("checkPhrase", phrase).put("checkDeadlineMs", deadlineMs) }
     }
-    return o to maxId
+    return s
   }
 
-  /** 4-decimal magnitudes; non-finite values become 0 so one bad sample cannot sink the tick (org.json rejects NaN). */
+  /** 4-decimal magnitudes; non-finite values become 0 so one bad sample cannot sink the frame (org.json rejects NaN). */
   private fun magnitudes(v: FloatArray): JSONArray = JSONArray().also { a ->
     for (x in v) a.put(if (x.isFinite()) (x.toDouble() * 10_000.0).roundToLong() / 10_000.0 else 0.0)
   }

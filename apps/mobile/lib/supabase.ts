@@ -30,14 +30,42 @@ const webStorage = {
   removeItem: async (k: string) => globalThis.localStorage?.removeItem(k),
 };
 
+const authStorage = Platform.OS === 'web' ? webStorage : secureStorage;
+/** supabase-js's own storage key for the persisted session (`sb-<project ref>-auth-token`). */
+const AUTH_STORAGE_KEY = `sb-${(() => { try { return new URL(SUPABASE_URL).hostname.split('.')[0]; } catch { return 'local'; } })()}-auth-token`;
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
-    storage: Platform.OS === 'web' ? webStorage : secureStorage,
+    storage: authStorage,
+    storageKey: AUTH_STORAGE_KEY,
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: Platform.OS === 'web',
   },
 });
+
+/**
+ * The persisted session as supabase-js stored it, read WITHOUT going through `auth.getSession()` (which would try to
+ * refresh an expired session with a refresh token native may already have rotated). Used by `adoptNativeSession`.
+ */
+export async function readStoredSession(): Promise<{ access_token: string; refresh_token: string; user?: { id: string } } | null> {
+  try {
+    const raw = await authStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw) as { access_token?: unknown; refresh_token?: unknown; user?: { id: string } };
+    return typeof s.access_token === 'string' && typeof s.refresh_token === 'string' ? (s as { access_token: string; refresh_token: string; user?: { id: string } }) : null;
+  } catch { return null; }
+}
+
+/** `exp` (unix ms) of a JWT, or 0 when it is not one. */
+export function jwtExpMs(jwt: string): number {
+  try {
+    const b64 = jwt.split('.')[1]?.replace(/-/g, '+').replace(/_/g, '/');
+    if (!b64) return 0;
+    const exp = (JSON.parse(atob(b64)) as { exp?: number }).exp;
+    return typeof exp === 'number' ? exp * 1000 : 0;
+  } catch { return 0; }
+}
 
 if (Platform.OS !== 'web') {
   AppState.addEventListener('change', (state) => {

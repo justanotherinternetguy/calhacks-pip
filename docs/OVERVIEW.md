@@ -24,7 +24,9 @@ Expo code base built for the browser, with the Rust crypto compiled to WebAssemb
 ### Sensing (Kotlin service, 50 Hz)
 - **Two sampling modes.** Low rate by default (10 Hz accelerometer, no gyro). Full rate (50 Hz accelerometer
   + gravity + gyroscope) when away from home at night, for 30 minutes after any incident, while the personal
-  dashboard or telemetry stream is open, and during baseline walks.
+  dashboard or telemetry stream is open, and during baseline walks. Sensor events arrive on their own thread,
+  batched up to 1 s normally; while a stream is open batching is off (every sample as it happens) and a partial
+  wake lock keeps the CPU up with the screen off and the phone unplugged.
 - Also fed in: motion activity (still / walking / running / vehicle), screen and unlock events, time since the
   last touch, battery, distance from home, together/separated status from the server, and (at night) a
   duty-cycled microphone classified on-device by **YAMNet** for screams, shouts and breaking glass. Audio
@@ -120,6 +122,8 @@ counts as consent and unlocks immediately. A correct check-in resets the model a
   `proximity`, `unlock`, `purge`, `config`.
 - Realtime: friends' screens subscribe to incidents, events, released keys, location blobs and presence.
 - A private **telemetry broadcast channel** per subject (`telemetry:{uid}`) carries the live stream below;
+  the phone also refreshes its own JWT (native `SessionKeeper`) so uploads and the channel outlive a sleeping
+  JS runtime, a backgrounded app or a reboot;
   policies allow the subject to publish and only group-mates to subscribe.
 
 ---
@@ -130,8 +134,9 @@ counts as consent and unlocks immediately. A correct check-in resets the model a
   (OpenStreetMap, no key), Ring / Call / I'm going / Found, fallback-unlock approval. All escrow operations
   (opening released keys, decrypting blobs, re-sealing shares, recovering the day key) run in the browser
   via the Rust crypto compiled to WebAssembly.
-- `/monitor` is a **real-time telemetry console** for the subject's phone, fed four times a second over
-  Supabase Realtime broadcast (~100–300 ms latency, no database writes): scrolling 50 Hz accelerometer and
+- `/monitor` is a **real-time telemetry console** for the subject's phone, fed ten frames a second over one
+  persistent Supabase Realtime WebSocket (no database writes; the phone measures and shows its own server round
+  trip, and the waveform is drawn on the phone's sensor clock so network jitter never distorts it): scrolling 50 Hz accelerometer and
   gyroscope waveforms with the impact line, metric band tiles with out-of-band flashes and sparklines, a
   five-minute danger strip, the stacked state probabilities, the live incident log and sequence markers,
   the engine event ticker, a check-in countdown, device status (heartbeat age, battery, night mode, risk

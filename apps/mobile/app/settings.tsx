@@ -31,7 +31,14 @@ export default function Settings() {
   const telemetryHint = telemetryError
     ? `Unavailable: ${telemetryError}`
     : telemetryStatus
-      ? `${telemetryStatus.on ? `${telemetryStatus.hz} Hz` : 'off'} · last sent ${telemetryStatus.lastSentMs ? new Date(telemetryStatus.lastSentMs).toLocaleTimeString() : '—'}${telemetryStatus.failures ? ` · ${telemetryStatus.failures} failed` : ''}`
+      ? [
+          telemetryStatus.hz ? `${telemetryStatus.hz} Hz` : telemetryStatus.on ? 'on · idle' : 'off',
+          telemetryStatus.hz ? (telemetryStatus.connected ? 'channel joined' : `channel down${telemetryStatus.error ? ` (${telemetryStatus.error})` : ''}`) : null,
+          telemetryStatus.rttMs != null ? `round trip ${telemetryStatus.rttMs} ms` : null,
+          `last sent ${telemetryStatus.lastSentMs ? new Date(telemetryStatus.lastSentMs).toLocaleTimeString() : '—'}`,
+          telemetryStatus.reconnects ? `${telemetryStatus.reconnects} reconnects` : null,
+          telemetryStatus.dropped ? `${telemetryStatus.dropped} dropped` : null,
+        ].filter(Boolean).join(' · ')
       : 'Checking…';
 
   // Demo sensitivity: live engine on the bundled model-demo.toml (lenient thresholds).
@@ -82,7 +89,7 @@ export default function Settings() {
       </Card>
       <Card>
         <H2>Live telemetry</H2>
-        <Toggle label="Stream telemetry to monitor" hint="Motion metrics, state probabilities and engine events go to your group's web monitor in real time (4 Hz). Location is never included." value={telemetry.value} onChange={(v) => void telemetry.toggle(v)} />
+        <Toggle label="Stream telemetry to monitor" hint="Raw motion, metrics, state probabilities and engine events go to your group's web monitor over one live connection (10 frames/s). Keeps the sensors at full rate and the CPU awake, so it costs battery. Location is never included." value={telemetry.value} onChange={(v) => void telemetry.toggle(v)} />
         <P muted style={{ fontSize: 13 }}>{telemetryHint}</P>
       </Card>
       <Card>

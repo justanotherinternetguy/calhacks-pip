@@ -30,8 +30,8 @@ const RIGHT_W = 380;
 const BEEP_RECORD_AGE_MS = 30_000;
 
 /**
- * /monitor — the friend's desktop telemetry console (laptop browser). The subject's Android phone broadcasts a
- * 4 Hz tick on a private Realtime channel (CONTRACTS §7); this page subscribes as a group-mate and draws it:
+ * /monitor — the friend's desktop telemetry console (laptop browser). The subject's Android phone broadcasts
+ * 10 Hz frames on a private Realtime channel (CONTRACTS §7); this page subscribes as a group-mate and draws it:
  *   left   live |a| / |ω| traces, P(danger) strip, HMM probability stack (canvas, rAF)
  *   middle metric band tiles, evidence line, the engine's incident log, the engine event ticker
  *   right  the escrow-side incident panel (map after unlock, Ring / I'm going / Found / Request location) + group rail
@@ -137,7 +137,7 @@ export default function MonitorScreen() {
       {me && !memberIds.length && <Banner color={colors.muted} label="no group" text="Join a group on your phone first; the console lists its members here." />}
       {notStreaming && (
         <Banner color={colors.warn} label={conn?.state === 'stale' ? 'stream stopped' : 'not streaming'}
-          text={`${subjectName}'s phone is not streaming: open the app, Settings → Stream telemetry to monitor. Ticks go out at 4 Hz while on (1 Hz in night mode otherwise).`} />
+          text={`${subjectName}'s phone is not streaming: open the app, Settings → Stream telemetry to monitor. Frames go out at 10 Hz while on (1 Hz in night mode otherwise).`} />
       )}
       {rejected && <Banner color={colors.danger} label="channel refused" text={`Could not join telemetry:${subjectId?.slice(0, 8)}… (${conn?.error ?? 'unknown'}). Only the subject and their group-mates may read it.`} />}
       {publisher && subjectId !== publisher && !manual && (

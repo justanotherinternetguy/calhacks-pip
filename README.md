@@ -125,4 +125,8 @@ Update this table at the end of the hackathon.
 - All detection logic lives in Rust + native, never JS (`CLAUDE.md`).
 - Owners per path are in [docs/CONTRACTS.md §4](docs/CONTRACTS.md); do not cross-write.
 - CI: `.github/workflows/ci.yml` runs on every PR; `eas.yml` is manual (`EXPO_TOKEN` secret).
+- Live telemetry (phone → `/monitor`) is one WebSocket to Supabase Realtime at 10 frames/s; the phone measures its own
+  server round trip. Watch it with `adb logcat -s Telemetry:V SensingService:V Session:V` (one summary line a minute).
+  The native service keeps the JWT alive itself (CONTRACTS §8), so the stream and uploads survive a backgrounded app,
+  a screen-off / unplugged phone and a reboot; it needs no USB or Metro — only a dev-client build needs Metro for the UI.
 - License: MIT.

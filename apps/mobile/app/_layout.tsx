@@ -6,7 +6,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { supabase } from '@/lib/supabase';
-import { onAuthSession } from '@/lib/native';
+import { adoptNativeSession, onAuthSession } from '@/lib/native';
 import { hasDemoFlag, makeDemoSession } from '@/lib/demo';
 import { initNotifications } from '@/lib/notifications';
 import { useStore } from '@/lib/store';
@@ -33,7 +33,9 @@ export default function RootLayout() {
   useEffect(() => {
     const off = initNotifications();
     readOnboarded().then((o) => useStore.getState().set({ onboarded: o }));
-    supabase.auth.getSession()
+    adoptNativeSession()
+      .catch((e) => console.warn('adoptNativeSession', e))
+      .then(() => supabase.auth.getSession())
       .then(async ({ data }) => onAuthSession(data.session ?? ((await hasDemoFlag()) ? makeDemoSession() : null)))
       .catch((e) => console.warn('session restore', e?.stack ?? e))
       .finally(() => setReady(true));

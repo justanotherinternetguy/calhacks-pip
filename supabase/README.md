@@ -137,14 +137,21 @@ canonical uuid form *before* casting, so garbage topics yield `null` instead of
 a cast error. The policies are created inside an `if exists realtime.messages`
 guard, so the migration is a no-op on bare postgres (pgTAP run).
 
-Publish (Android native does this at 4 Hz; same request from curl):
+Publish. Android native keeps **one WebSocket** open (Phoenix serializer v2, the
+same frames realtime-js sends) and pushes a `tick` broadcast 10 times a second
+(CONTRACTS §7). The REST endpoint still works for a one-off check from curl:
 
 ```sh
 curl -i -X POST "$SUPABASE_URL/realtime/v1/api/broadcast" \
   -H "apikey: $ANON_KEY" -H "Authorization: Bearer $USER_JWT" -H "Content-Type: application/json" \
-  -d '{"messages":[{"topic":"telemetry:'"$USER_ID"'","event":"tick","private":true,"payload":{"v":1,"t":1}}]}'
+  -d '{"messages":[{"topic":"telemetry:'"$USER_ID"'","event":"tick","private":true,"payload":{"v":2,"t":1,"seq":1,"user":"'"$USER_ID"'","accel":[],"gyro":[],"st":0,"sampleHz":0,"incidents":[],"incidentCount":0,"events":[]}}]}'
 # HTTP/2 202
 ```
+
+Over the socket the same authorisation applies: the join carries the user JWT,
+`telemetry_select` decides the join, `telemetry_insert` each pushed message.
+With `broadcast.self = true` the server echoes an authorised message back to
+the sender, which the phone uses as its round-trip probe (`rttMs`).
 
 Subscribe (web monitor, supabase-js v2):
 

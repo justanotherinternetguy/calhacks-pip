@@ -5,7 +5,7 @@ import * as SecureStore from 'expo-secure-store';
 import { router } from 'expo-router';
 import type { Session } from '@supabase/supabase-js';
 import { SafetyNative } from '@/modules/safety-native';
-import { supabase } from './supabase';
+import { jwtExpMs, readStoredSession, supabase } from './supabase';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from './env';
 import { setDemoFlag } from './demo';
 import { registerPushToken, unregisterPushToken } from './push';
@@ -40,22 +40,49 @@ async function modelConfigToml(): Promise<string> {
   } catch { return ''; }
 }
 
+/** Only a real Supabase session (JWT) is worth refreshing natively; the offline demo session is not. */
+const refreshTokenFor = (session: Session) => (jwtExpMs(session.access_token) ? session.refresh_token : undefined);
+
+/**
+ * Startup, before `supabase.auth.getSession()`: if native holds a newer JWT pair than the one supabase-js persisted
+ * (its SessionKeeper rotated it while JS was asleep), install native's pair. Otherwise supabase-js would try to
+ * refresh with a refresh token the server has already rotated and sign the user out.
+ */
+export async function adoptNativeSession() {
+  if (Platform.OS === 'web' || SafetyNative.isMock) return;
+  let ns: Awaited<ReturnType<typeof SafetyNative.getSession>> = null;
+  try { ns = await SafetyNative.getSession(); } catch { return; }
+  if (!ns) return;
+  const stored = await readStoredSession();
+  if (stored && stored.user && stored.user.id !== ns.userId) return;            // a different account signed in on JS: leave it alone
+  if (stored && stored.refresh_token === ns.refreshToken) return;              // in sync
+  if (stored && jwtExpMs(stored.access_token) >= jwtExpMs(ns.accessToken)) return; // JS's pair is at least as new
+  console.log('native: adopting the session native refreshed while JS was asleep');
+  const { error } = await supabase.auth.setSession({ access_token: ns.accessToken, refresh_token: ns.refreshToken });
+  if (error) console.warn('adoptNativeSession', error.message);
+}
+
 /** Called on every auth state change. Configures native once per user, refreshes the token afterwards. */
 export async function onAuthSession(session: Session | null) {
   const store = useStore.getState();
   store.set({ session });
   if (!dashboardPrefLoaded) { dashboardPrefLoaded = true; readDashboardEnabled().then((on) => useStore.getState().set({ dashboardEnabled: on })).catch(() => {}); }
-  if (!session) { configuredFor = null; unregisterPushToken(); teardown(); store.reset(); return; }
+  if (!session) {
+    if (configuredFor) await SafetyNative.clearSession().catch(() => {});
+    configuredFor = null; unregisterPushToken(); teardown(); store.reset(); return;
+  }
 
   if (configuredFor === session.user.id) {
-    await SafetyNative.setAccessToken(session.access_token);
+    const refreshToken = refreshTokenFor(session);
+    if (refreshToken) await SafetyNative.setSession({ accessToken: session.access_token, refreshToken });
+    else await SafetyNative.setAccessToken(session.access_token);
     return;
   }
   configuredFor = session.user.id;
   console.log(`native: configuring for user ${session.user.id.slice(0, 8)}`);
   const devId = await deviceId(session.user.id);
   await SafetyNative.configure({
-    supabaseUrl: SUPABASE_URL, supabaseAnonKey: SUPABASE_ANON_KEY, accessToken: session.access_token,
+    supabaseUrl: SUPABASE_URL, supabaseAnonKey: SUPABASE_ANON_KEY, accessToken: session.access_token, refreshToken: refreshTokenFor(session),
     userId: session.user.id, deviceId: devId, modelConfigToml: await modelConfigToml(),
   });
   try {
@@ -96,6 +123,12 @@ function wireEvents() {
     // §6 live signals: ring of the last 50 engine records + the call-option flag, for the home tab / dashboard.
     SafetyNative.addListener('signalIncident', (r) => useStore.getState().pushSignal(r)),
     SafetyNative.addListener('callOption', (e) => s({ callOption: { summary: e.summary, atMs: Date.now() } })),
+    // Native rotated the JWT pair (SessionKeeper): adopt it, or supabase-js would later refresh with a dead token.
+    // setSession fires TOKEN_REFRESHED → onAuthSession → SafetyNative.setSession(same pair), which native ignores.
+    SafetyNative.addListener('sessionRefreshed', (ns) => {
+      if (ns.userId !== useStore.getState().session?.user.id) return;
+      void supabase.auth.setSession({ access_token: ns.accessToken, refresh_token: ns.refreshToken }).then(({ error }) => { if (error) console.warn('sessionRefreshed', error.message); });
+    }),
   ];
   SafetyNative.getStatus().then((status) => s({ status })).catch(() => {});
 }

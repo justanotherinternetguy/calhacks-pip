@@ -84,8 +84,12 @@ export type HomePlace = { id: string; label: string; lat: number; lng: number; r
 export type Status = { nightMode: NightModeStatus; engine: EngineSnapshot; permissions: Permissions; batteryPct: number; lastHeartbeatMs?: number; serviceRunning: boolean };
 
 // Methods (all Promise-returning)
-configure(opts: { supabaseUrl: string; supabaseAnonKey: string; accessToken: string; userId: string; deviceId: string; modelConfigToml: string }): Promise<void>;
+configure(opts: { supabaseUrl: string; supabaseAnonKey: string; accessToken: string; refreshToken?: string; userId: string; deviceId: string; modelConfigToml: string }): Promise<void>;
 setAccessToken(token: string): Promise<void>;
+// Session hand-off (Android keeps the JWT alive itself, see §8): JS delivers every new pair, adopts native's at startup, clears on sign-out.
+setSession(s: { accessToken: string; refreshToken: string }): Promise<void>;   // idempotent
+getSession(): Promise<{ accessToken: string; refreshToken: string; userId: string } | null>;
+clearSession(): Promise<void>;
 requestPermission(kind: keyof Permissions): Promise<PermissionState>;
 setHomePlaces(places: HomePlace[]): Promise<void>;                 // device-only storage
 setEveningWindow(startHour: number, endHour: number): Promise<void>;
@@ -114,6 +118,7 @@ injectTrace(json: string): Promise<void>;    // debug builds only; replays Motio
 'escalation': { level: EscalationLevel; summary: string }
 'snatch': { summary: string; lat?: number; lng?: number }
 'sos': { active: boolean }
+'sessionRefreshed': { accessToken: string; refreshToken: string; userId: string }   // native rotated the pair; JS calls supabase.auth.setSession
 ```
 Native owns: sensing, night-mode controller, heartbeats, location blob upload, proximity token upload, key rotation + share upload, released_keys posting on unlock, notifications/alarm, check-in notification. **Native talks to Supabase directly over PostgREST** (`{supabaseUrl}/rest/v1/{table}`, headers `apikey`, `Authorization: Bearer {accessToken}`, `Prefer: resolution=merge-duplicates` for upserts).
 
@@ -203,27 +208,45 @@ Default n = 4 friends, k = 2; fallback unlock requires ≥ 3 active members (enf
 
 ## 7. Live telemetry stream (Android → web monitor). iOS is out of scope (module removed).
 
-Transport: Supabase Realtime **broadcast** on a private channel, no DB rows.
+Transport: Supabase Realtime **broadcast** on a private channel over **one persistent WebSocket**, no DB rows.
 - Topic `telemetry:{subjectUserId}`, event `tick`. Private channel (`realtime.messages` RLS: subject may insert; subject + group-mates may select).
-- Publisher (Android native, OkHttp): `POST {supabaseUrl}/realtime/v1/api/broadcast` with headers `apikey`, `Authorization: Bearer {userJwt}`, `Content-Type: application/json`, body `{"messages":[{"topic":"telemetry:{uid}","event":"tick","private":true,"payload":{...}}]}`.
-- Rate: 4 Hz while telemetry is explicitly enabled (`setTelemetry(true)`, default ON when the app is configured) or the dashboard streams; 1 Hz in night mode otherwise; off when neither. One in-flight request at a time; drop (don't queue) if the previous POST hasn't returned.
-- Subscriber (web): `supabase.channel('telemetry:'+uid, { config: { private: true, broadcast: { ack: false } } }).on('broadcast', { event: 'tick' }, cb).subscribe()`.
+- Publisher (Android native, OkHttp WebSocket, Phoenix serializer v2 — the same frames realtime-js sends): connect `wss://{host}/realtime/v1/websocket?apikey={anon}&vsn=2.0.0`, join `realtime:telemetry:{uid}` with `{ config: { broadcast: { self, ack: false }, presence: { enabled: false }, postgres_changes: [], private: true }, access_token }`, heartbeat `phoenix`/`heartbeat` every 25 s, push `access_token` when the JWT rotates, reconnect with 1 / 2 / 5 / 10 s backoff. Each frame is `[join_ref, null, topic, "broadcast", { type: "broadcast", event: "tick", payload }]`. The old `POST /realtime/v1/api/broadcast` path is no longer used (one HTTP round trip per tick).
+- Rate: **10 Hz** while telemetry is explicitly enabled (`setTelemetry(true)`, default ON when the app is configured) or the dashboard streams; 1 Hz in night mode otherwise; socket closed when neither. While streaming, native delivers sensors unbatched (`maxReportLatency = 0`) on a dedicated thread and holds a partial wake lock, so the stream survives screen-off and unplugged.
+- A frame that lands while the channel is not joined is dropped, never queued. Every (re)join replays the whole live incident log once (the monitor dedups by id).
+- Latency probe: at 10 Hz the channel is joined with `self = true`; the phone receives its own frames back and reports the smoothed round trip (phone → Realtime → phone, one clock, no skew) as `rttMs`.
+- Subscriber (web): `supabase.channel('telemetry:'+uid, { config: { private: true, broadcast: { ack: false } } }).on('broadcast', { event: 'tick' }, cb).subscribe()`; `lib/telemetryFrames.ts` folds frames into complete ticks.
 
-Payload (`v: 1`), all keys camelCase:
+Payload (`v: 2`), all keys camelCase. Every frame carries the raw samples since the previous frame; `state` is attached after every engine tick, at least once a second, and whenever `events` / `incidents` are non-empty, so a subscriber joining mid-stream is complete within one second:
 ```ts
-type TelemetryTick = {
-  v: 1; t: number /* unix ms */; seq: number; user: string;
-  metrics: LiveMetrics;                     // §6 shape (bands[], p*, placement, samplingFull, evidence, …)
-  hmm: HmmState; escalation: EscalationLevel; riskBand: 0|1|2|3; pDanger: number;
-  nightMode: boolean; battery: number; activity: Activity; placement: Placement; samplingFull: boolean;
-  accel: number[];                          // |a| in g for the samples since the last tick (≤ 50), newest last
+type TelemetryFrame = {
+  v: 2; t: number /* unix ms, frame build time */; seq: number; user: string;
+  accel: number[];                          // |a| in g for the samples since the last frame (≈ 5 at 10 Hz, ≤ 128), newest last
   gyro: number[];                           // |ω| rad/s, same length (zeros in low-rate mode)
-  sampleHz: number;
-  incidents: IncidentRecord[];              // records with id > lastSentId (deltas); first tick after (re)subscribe may be empty
-  incidentCount: number;                    // total live log size, lets the UI detect gaps and call getDashboard-equivalent REST refresh
-  events: string[];                         // engine events since last tick, snake_case: check_requested, heads_up, unlock_location, snatch_detected, resolved, risk_band_changed, battery_dying, sampling_rate_changed, signal_incident, call_option
-  checkPhrase?: string; checkDeadlineMs?: number;   // while a check-in is pending
+  st: number;                               // phone unix ms of the newest sample (0 when the frame carries none)
+  sampleHz: number;                         // measured accelerometer delivery rate (e.g. 49.9)
+  incidents: IncidentRecord[];              // records with id > lastSentId (deltas; the whole live log again after a rejoin)
+  incidentCount: number;                    // total live log size, lets the UI detect gaps
+  events: string[];                         // engine events since the last frame, snake_case: check_requested, heads_up, unlock_location, snatch_detected, resolved, risk_band_changed, battery_dying, sampling_rate_changed, signal_incident, call_option
+  rttMs?: number;                           // self-echo round trip, smoothed
+  state?: {
+    metrics: LiveMetrics;                   // §6 shape (bands[], p*, placement, samplingFull, evidence, …)
+    hmm: HmmState; escalation: EscalationLevel; riskBand: 0|1|2|3; pDanger: number;
+    nightMode: boolean; battery: number; activity: Activity; placement: Placement; samplingFull: boolean;
+    checkPhrase?: string; checkDeadlineMs?: number;   // while a check-in is pending
+  };
 };
 ```
-Native facade: `setTelemetry(on: boolean): Promise<void>`, `getTelemetryStatus(): Promise<{ on: boolean; hz: number; lastSentMs: number; failures: number }>`.
+A `v: 1` payload (one complete tick per message, 4 Hz, as published before this revision) is still accepted by the monitor.
+
+Sample timing: the monitor places every sample on the phone's sensor clock (`st` minus `k / sampleHz`) and maps it to local time with a skew floor (fast-down / slow-up minimum of `arrival − st`), then draws `max(120 ms, 1.5 × frame interval + 2 × jitter)` behind wall-clock. Arrival jitter therefore cannot stretch or compress the waveform.
+
+Native facade: `setTelemetry(on: boolean): Promise<void>`, `getTelemetryStatus(): Promise<{ on: boolean; hz: number; lastSentMs: number; failures: number; connected: boolean; reconnects: number; dropped: number; rttMs: number | null; error: string | null }>`.
 Location is NOT in telemetry; it stays on the escrow path (location_blobs + released_keys).
+
+## 8. Session ownership on Android
+
+JS (supabase-js) refreshes the JWT only while it is awake and in the foreground; the native service runs all night and after reboots without JS. So on Android **native keeps the session alive**:
+- JS hands the pair over: `configure({ …, refreshToken })` at sign-in and `setSession({ accessToken, refreshToken })` on every `TOKEN_REFRESHED` / `SIGNED_IN`; `clearSession()` on sign-out. Demo / mock sessions (non-JWT access tokens) carry no refresh token and are never refreshed.
+- Native (`SessionKeeper`) refreshes 5 min before `exp` via `POST /auth/v1/token?grant_type=refresh_token`, stores the new pair, installs it in the PostgREST client and the telemetry channel (`access_token` push), and emits `sessionRefreshed`; JS answers with `supabase.auth.setSession(pair)`. A refusal (400/401/403: token used, revoked, signed out) parks the keeper until JS delivers a different refresh token.
+- At JS startup, before `supabase.auth.getSession()`, `adoptNativeSession()` compares the persisted supabase-js session with `getSession()` and installs native's pair when it is newer (same user) — otherwise supabase-js would refresh with a refresh token the server already rotated and sign the user out.
+- Whoever refreshes first wins and the other side adopts; both refreshing within Supabase's reuse interval returns the same new pair.

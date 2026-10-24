@@ -75,21 +75,21 @@ export function hband(ctx: CanvasRenderingContext2D, r: Rect, lo: number, hi: nu
 }
 
 /**
- * Display-time geometry shared by the sample trace renderers. Samples are drawn `delay` behind wall-clock so
- * a tick that lands late still scrolls in continuously instead of jumping; the viewport moves at constant speed.
+ * Display-time geometry shared by the sample trace renderers. Samples sit on the phone's sensor clock (mapped to
+ * local time by the buffers' skew floor) and are drawn `displayDelayMs()` behind wall-clock, so a frame that lands
+ * late still scrolls in continuously instead of jumping; the viewport moves at constant speed.
  */
 export function traceWindow(buf: TelemetryBuffers, windowSec: number, nowMs: number) {
-  const delay = Math.max(300, buf.tickIntervalMs * 1.5);
-  const rightT = nowMs - delay;
-  return { dt: 1000 / Math.max(1, buf.sampleHz), rightT, leftT: rightT - windowSec * 1000, span: windowSec * 1000 };
+  const rightT = nowMs - buf.displayDelayMs();
+  return { rightT, leftT: rightT - windowSec * 1000, span: windowSec * 1000 };
 }
 
 /** Max |value| of the samples currently inside the display window (for autoscaling). */
 export function traceMax(buf: TelemetryBuffers, which: 'accel' | 'gyro', windowSec: number, nowMs: number): number {
-  const { dt, rightT, leftT } = traceWindow(buf, windowSec, nowMs);
+  const { rightT, leftT } = traceWindow(buf, windowSec, nowMs);
   let max = 0;
   for (let k = 0; k < buf.count; k++) {
-    const t = buf.lastTickAt - k * dt;
+    const t = buf.sampleTimeLocal(k);
     if (t > rightT) continue;
     if (t < leftT) break;
     const v = buf.sample(which, k);
@@ -101,7 +101,7 @@ export function traceMax(buf: TelemetryBuffers, which: 'accel' | 'gyro', windowS
 /** The scrolling |a| / |ω| trace: newest sample at the (delayed) right edge, one polyline, clamped to [lo, hi]. */
 export function drawTrace(ctx: CanvasRenderingContext2D, r: Rect, buf: TelemetryBuffers, which: 'accel' | 'gyro', windowSec: number, lo: number, hi: number, color: string, nowMs: number) {
   if (!buf.count) return;
-  const { dt, rightT, leftT, span } = traceWindow(buf, windowSec, nowMs);
+  const { rightT, leftT, span } = traceWindow(buf, windowSec, nowMs);
   ctx.save();
   ctx.beginPath();
   ctx.rect(r.x, r.y, r.w, r.h);
@@ -112,7 +112,7 @@ export function drawTrace(ctx: CanvasRenderingContext2D, r: Rect, buf: Telemetry
   ctx.beginPath();
   let started = false;
   for (let k = 0; k < buf.count; k++) {
-    const t = buf.lastTickAt - k * dt;
+    const t = buf.sampleTimeLocal(k);
     if (t > rightT) continue;
     if (t < leftT) break;
     const x = r.x + ((t - leftT) / span) * r.w;

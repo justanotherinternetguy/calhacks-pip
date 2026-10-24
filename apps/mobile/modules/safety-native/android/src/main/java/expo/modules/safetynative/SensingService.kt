@@ -15,6 +15,8 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
@@ -57,8 +59,10 @@ import kotlin.math.sqrt
  * while opportunistic daytime gait learning is active (walking + learning enabled), and while the
  * personal dashboard is streaming (`SafetyRuntime.dashboardStreaming`) or the telemetry stream is on
  * (`SafetyRuntime.telemetryOn`, CONTRACTS §7); both also make the day ticker run every second so
- * `engine.metrics()` is fresh for each `dashboard` event / telemetry tick. Per-sample |a| and |ω| are kept in
- * small rings for the telemetry publisher ([drainTelemetrySamples]).
+ * `engine.metrics()` is fresh for each `dashboard` event / telemetry frame. While either streams, sensor
+ * batching is off (every sample is delivered as it happens instead of once a second), a partial wake lock keeps
+ * the CPU up with the screen off, and per-sample |a| / |ω| with timestamps are kept in a small ring for the
+ * telemetry publisher ([drainTelemetrySamples]). Sensor events arrive on a dedicated thread, never the UI thread.
  */
 class SensingService : Service(), SensorEventListener {
   companion object {
@@ -80,12 +84,17 @@ class SensingService : Service(), SensorEventListener {
     private const val SENSOR_PERIOD_FULL_US = 20_000
     /** LOW mode: ~10 Hz accel + gravity, no gyro. */
     private const val SENSOR_PERIOD_LOW_US = 100_000
-    /** Let the sensor hub batch for up to 1 s so the AP wakes at most once a second. */
+    /** Not streaming: let the sensor hub batch for up to 1 s so the AP wakes at most once a second. */
     private const val SENSOR_BATCH_US = 1_000_000
+    /** Streaming: deliver every sample immediately (lowest latency; the publisher drains at 10 Hz). */
+    private const val SENSOR_BATCH_LIVE_US = 0
     private const val G = 9.80665f
     private const val EARTH_RADIUS_M = 6_371_000.0
-    /** Telemetry rings (CONTRACTS §7): samples kept between two publisher drains (4 Hz × 50 Hz = ~13; 64 covers a 1 Hz drain). */
-    private const val TELEMETRY_RING_MAX = 64
+    /** Telemetry ring (CONTRACTS §7): samples kept between two publisher drains (50 Hz × 1 s = 50 in night mode; 128 covers a late frame). */
+    private const val TELEMETRY_RING_MAX = 128
+
+    /** What the motion listeners are registered for. */
+    private data class SamplingMode(val full: Boolean, val live: Boolean)
 
     fun sendAction(ctx: Context, action: String, fill: (Intent) -> Unit = {}) {
       val i = Intent(ctx, SensingService::class.java).setAction(action); fill(i)
@@ -119,13 +128,22 @@ class SensingService : Service(), SensorEventListener {
   private val rotation = floatArrayOf(0f, 0f, 0f) // latest gyro reading, rad/s; zeroed when the gyro is off
   private var batch = ArrayList<MotionSample>(60)
   private var lastFlushMs = 0L
-  /** null = listeners off; false = LOW registered; true = FULL registered. */
-  private var registeredFull: Boolean? = null
+  /** null = listeners off; otherwise the mode they are registered for. */
+  private var registered: SamplingMode? = null
   /** What we are currently delivering (mirrored into Context.sampling_full). */
   @Volatile private var fullActive = false
-  /** Telemetry rings: |a| (g) and |ω| (rad/s) per sample since the last [drainTelemetrySamples]; guarded by motionLock. */
+  /** Sensor events are delivered here (SensorManager would otherwise use the main looper, shared with the UI). */
+  private val sensorThread = HandlerThread("safe-sensors", android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE)
+  private lateinit var sensorHandler: Handler
+  /** Held while a stream is open so the CPU keeps delivering samples with the screen off and the phone unplugged. */
+  private var streamLock: PowerManager.WakeLock? = null
+  /** Telemetry ring: (wall-clock ms, |a| g, |ω| rad/s) per sample since the last [drainTelemetrySamples]; guarded by motionLock. */
+  private val telemetryT = ArrayDeque<Long>(TELEMETRY_RING_MAX + 1)
   private val telemetryAccel = ArrayDeque<Float>(TELEMETRY_RING_MAX + 1)
   private val telemetryGyro = ArrayDeque<Float>(TELEMETRY_RING_MAX + 1)
+  /** EMA of the accelerometer inter-sample interval (ns), for the measured `sampleHz`; -1 until two samples arrived. */
+  private var intervalEmaNs = -1.0
+  private var lastAccelNs = 0L
   private val bootToWallMs get() = System.currentTimeMillis() - SystemClock.elapsedRealtime()
 
   // context
@@ -139,6 +157,8 @@ class SensingService : Service(), SensorEventListener {
     rt = SafetyRuntime.get(this)
     rt.sensing = this
     sensors = getSystemService(SENSOR_SERVICE) as SensorManager
+    sensorThread.start()
+    sensorHandler = Handler(sensorThread.looper)
     audio = AudioMonitor(this, rt)
     ensureForeground(night = false)
     ContextCompat.registerReceiver(
@@ -180,6 +200,8 @@ class SensingService : Service(), SensorEventListener {
     dayJob?.cancel()
     rt.telemetry.stop()
     stopSensors()
+    setStreamLock(false)
+    sensorThread.quitSafely()
     runCatching { unregisterReceiver(screenReceiver) }
     rt.engine.saveNow()
     rt.serviceRunning = false
@@ -349,14 +371,35 @@ class SensingService : Service(), SensorEventListener {
   }
 
   /**
-   * Hands the per-sample magnitudes collected since the previous call to the telemetry publisher (newest last, ≤ 64
-   * each; `gyro` is all zeros in LOW mode) and clears the rings. `sampleHz` is the nominal rate of the registered mode.
+   * Hands the per-sample magnitudes collected since the previous call to the telemetry publisher (newest last, ≤ 128
+   * each; `gyro` is all zeros in LOW mode) and clears the ring. `lastTMs` is the wall-clock of the newest sample and
+   * `hz` the measured accelerometer rate (nominal 50 / 10 until two samples have arrived).
    */
   fun drainTelemetrySamples(): RawSamples = synchronized(motionLock) {
     val a = FloatArray(telemetryAccel.size) { telemetryAccel[it] }
     val g = FloatArray(telemetryGyro.size) { telemetryGyro[it] }
-    telemetryAccel.clear(); telemetryGyro.clear()
-    RawSamples(a, g, if (registeredFull == null) 0 else if (fullActive) 50 else 10)
+    val last = telemetryT.lastOrNull() ?: 0L
+    telemetryT.clear(); telemetryAccel.clear(); telemetryGyro.clear()
+    val nominal = if (registered == null) 0f else if (fullActive) 50f else 10f
+    val hz = if (intervalEmaNs > 0) (1e9 / intervalEmaNs).toFloat() else nominal
+    RawSamples(a, g, last, hz)
+  }
+
+  /** True while the personal dashboard or the telemetry stream wants every sample as it happens. */
+  private fun streamingOn(): Boolean = rt.dashboardStreamingOn || rt.telemetryOn
+
+  /** Partial wake lock for streaming (screen off + unplugged would otherwise suspend the CPU between sensor batches). */
+  @Synchronized
+  private fun setStreamLock(on: Boolean) {
+    if (on) {
+      if (streamLock?.isHeld == true) return
+      streamLock = (getSystemService(POWER_SERVICE) as PowerManager)
+        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "safe:stream").apply { setReferenceCounted(false); acquire() }
+      Log.i(TAG, "stream wake lock acquired")
+    } else {
+      streamLock?.let { if (it.isHeld) { it.release(); Log.i(TAG, "stream wake lock released") } }
+      streamLock = null
+    }
   }
 
   private fun pushContext(now: Long) {
@@ -388,37 +431,42 @@ class SensingService : Service(), SensorEventListener {
     rt.samplingFull || rt.dashboardStreamingOn || rt.telemetryOn || rt.baselineWalkStartMs != 0L || (activity == Activity.WALKING && rt.prefs.learningEnabled)
 
   /**
-   * (Re)registers the motion listeners for the current effective mode. Idempotent; safe from any thread
-   * (SensorManager delivers to the main looper when no Handler is given). Called from onCreate, the
-   * engine's SamplingRateChanged, activity transitions, baseline-walk start/stop, night start/stop and
-   * dashboard streaming / telemetry on/off.
+   * (Re)registers the motion listeners for the current effective mode (rate + batching) and the stream wake lock.
+   * Idempotent; safe from any thread (events are delivered on [sensorThread]). Called from onCreate, the engine's
+   * SamplingRateChanged, activity transitions, baseline-walk start/stop, night start/stop and dashboard streaming /
+   * telemetry on/off.
    */
   @Synchronized
   fun applySampling() {
-    val wantFull = effectiveFull()
-    if (registeredFull == wantFull) return
+    val want = SamplingMode(full = effectiveFull(), live = streamingOn())
+    setStreamLock(want.live)
+    if (registered == want) return
     val lin = sensors.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
     val grav = sensors.getDefaultSensor(Sensor.TYPE_GRAVITY)
     if (lin == null || grav == null) { Log.w(TAG, "linear accel / gravity sensors missing"); return }
-    if (registeredFull != null) { sensors.unregisterListener(this); flushMotion() }
-    val period = if (wantFull) SENSOR_PERIOD_FULL_US else SENSOR_PERIOD_LOW_US
-    sensors.registerListener(this, grav, period, SENSOR_BATCH_US)
-    sensors.registerListener(this, lin, period, SENSOR_BATCH_US)
-    if (wantFull) {
+    if (registered != null) { sensors.unregisterListener(this); flushMotion() }
+    val period = if (want.full) SENSOR_PERIOD_FULL_US else SENSOR_PERIOD_LOW_US
+    val latency = if (want.live) SENSOR_BATCH_LIVE_US else SENSOR_BATCH_US
+    sensors.registerListener(this, grav, period, latency, sensorHandler)
+    sensors.registerListener(this, lin, period, latency, sensorHandler)
+    if (want.full) {
       val gyro = sensors.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-      if (gyro != null) sensors.registerListener(this, gyro, period, SENSOR_BATCH_US) else Log.w(TAG, "gyroscope missing; rx/ry/rz stay 0")
+      if (gyro != null) sensors.registerListener(this, gyro, period, latency, sensorHandler) else Log.w(TAG, "gyroscope missing; rx/ry/rz stay 0")
     }
-    if (!wantFull) synchronized(motionLock) { rotation.fill(0f) }
-    fullActive = wantFull
-    registeredFull = wantFull
-    Log.i(TAG, "sampling ${if (wantFull) "FULL (50 Hz + gyro)" else "LOW (10 Hz, no gyro)"}")
+    synchronized(motionLock) {
+      if (!want.full) rotation.fill(0f)
+      intervalEmaNs = -1.0; lastAccelNs = 0L   // rate changed: re-measure
+    }
+    fullActive = want.full
+    registered = want
+    Log.i(TAG, "sampling ${if (want.full) "FULL (50 Hz + gyro)" else "LOW (10 Hz, no gyro)"}, ${if (want.live) "live (no batching)" else "batched 1 s"}")
   }
 
   @Synchronized
   private fun stopSensors() {
-    if (registeredFull == null) return
+    if (registered == null) return
     sensors.unregisterListener(this)
-    registeredFull = null
+    registered = null
     fullActive = false
     synchronized(motionLock) { rotation.fill(0f) }
     flushMotion()
@@ -450,9 +498,17 @@ class SensingService : Service(), SensorEventListener {
               rx = rx, ry = ry, rz = rz,
             ),
           )
-          // Telemetry rings (CONTRACTS §7 accel/gyro): magnitudes only, drained by TelemetryPublisher at its own cadence.
-          telemetryAccel.addLast(sqrt(ax * ax + ay * ay + az * az)); if (telemetryAccel.size > TELEMETRY_RING_MAX) telemetryAccel.removeFirst()
-          telemetryGyro.addLast(sqrt(rx * rx + ry * ry + rz * rz)); if (telemetryGyro.size > TELEMETRY_RING_MAX) telemetryGyro.removeFirst()
+          // Telemetry ring (CONTRACTS §7 accel/gyro/st): timestamped magnitudes, drained by TelemetryPublisher at its own cadence.
+          telemetryT.addLast(tMs)
+          telemetryAccel.addLast(sqrt(ax * ax + ay * ay + az * az))
+          telemetryGyro.addLast(sqrt(rx * rx + ry * ry + rz * rz))
+          if (telemetryT.size > TELEMETRY_RING_MAX) { telemetryT.removeFirst(); telemetryAccel.removeFirst(); telemetryGyro.removeFirst() }
+          // Measured delivery rate (sensor-hub timestamps, so batching does not distort it).
+          if (lastAccelNs != 0L) {
+            val dt = (e.timestamp - lastAccelNs).toDouble()
+            if (dt > 0) intervalEmaNs = if (intervalEmaNs < 0) dt else intervalEmaNs * 0.95 + dt * 0.05
+          }
+          lastAccelNs = e.timestamp
           batch.size >= 50 || tMs - lastFlushMs >= 1000
         }
         if (full) flushMotion()

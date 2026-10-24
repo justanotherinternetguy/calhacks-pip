@@ -55,6 +55,8 @@ class SafetyRuntime private constructor(val app: Context) {
   val sos = SosManager(this)
   /** Live telemetry stream to the web monitor (CONTRACTS §7). */
   val telemetry = TelemetryPublisher(this)
+  /** Native JWT refresh so uploads and the telemetry channel outlive a sleeping JS runtime. */
+  val session = SessionKeeper(this)
 
   @Volatile var sink: RuntimeEventSink? = null
   @Volatile var lastLocation: Location? = null
@@ -86,7 +88,7 @@ class SafetyRuntime private constructor(val app: Context) {
    * publisher and `effectiveFull()` read it often. Defaults to ON, but only counts once `configure` ran (see [telemetryOn]).
    */
   @Volatile private var telemetryEnabled = prefs.telemetryOn
-  @Volatile private var telemetryConfigured = prefs.serverConfig != null
+  @Volatile private var telemetryConfigured = prefs.serverConfig?.accessToken?.isNotBlank() == true
   /** True while the telemetry stream is explicitly on: publisher at 4 Hz and FULL sampling forced, like dashboard streaming. */
   val telemetryOn: Boolean get() = telemetryEnabled && telemetryConfigured
   /** `(phrase, deadlineMs)` of the open check-in, for the telemetry tick; set on CheckRequested, cleared on Resolved. */
@@ -99,7 +101,17 @@ class SafetyRuntime private constructor(val app: Context) {
   /** Fallback 1 s ticker used only while streaming without a running service (no sensors, but the engine still ages). */
   private var dashboardJob: Job? = null
 
-  init { touch.start() }
+  init { touch.start(); session.start(); watchNetwork() }
+
+  /** Default-network callback: the moment connectivity returns, the telemetry socket reconnects instead of finishing its backoff. */
+  private fun watchNetwork() {
+    runCatching {
+      val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+      cm.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) { telemetry.onNetworkAvailable() }
+      })
+    }.onFailure { Log.w(TAG, "network callback unavailable", it) }
+  }
 
   val isDebuggable: Boolean get() = (app.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
   val configured: Boolean get() = prefs.serverConfig != null
@@ -107,8 +119,49 @@ class SafetyRuntime private constructor(val app: Context) {
   /** `configure()` just stored a ServerConfig: telemetry (default on) becomes effective, sampling + publisher follow. */
   fun onConfigured() {
     telemetryConfigured = true
+    session.onSessionFromJs(prefs.serverConfig?.refreshToken)
     sensing?.onStreamingChanged()
     syncTelemetryPublisher()
+    Log.i(TAG, "configured; ${session.statusLine()}")
+  }
+
+  // ---- session ---------------------------------------------------------------
+
+  /**
+   * Installs a (possibly new) JWT pair everywhere it matters: prefs, the PostgREST client, the telemetry channel.
+   * `fromJs` = supabase-js delivered it (configure / setSession / setAccessToken); otherwise [SessionKeeper] rotated it
+   * and JS is told through `sessionRefreshed` so it adopts the pair. A null `refreshToken` keeps the stored one.
+   */
+  @Synchronized
+  fun applySession(accessToken: String, refreshToken: String?, fromJs: Boolean) {
+    val cfg = prefs.serverConfig ?: return
+    if (fromJs) session.onSessionFromJs(refreshToken)
+    val refresh = refreshToken ?: cfg.refreshToken
+    if (accessToken == cfg.accessToken && refresh == cfg.refreshToken) return
+    prefs.serverConfig = cfg.copy(accessToken = accessToken, refreshToken = refresh)
+    supabase.setAccessToken(accessToken)
+    telemetry.onTokenChanged(accessToken)
+    if (!fromJs) emit("sessionRefreshed", mapOf("accessToken" to accessToken, "refreshToken" to refresh, "userId" to cfg.userId))
+    Log.i(TAG, "session ${if (fromJs) "from JS" else "refreshed natively"}; ${session.statusLine()}")
+  }
+
+  /** Sign-out: forget the tokens so nothing is uploaded or streamed as the old user; identity / baselines stay. */
+  @Synchronized
+  fun clearSession() {
+    prefs.serverConfig?.let { prefs.serverConfig = it.copy(accessToken = "", refreshToken = null) }
+    supabase.setAccessToken("")
+    telemetryConfigured = false
+    syncTelemetryPublisher()
+    sensing?.onStreamingChanged()
+    Log.i(TAG, "session cleared")
+  }
+
+  /** `{ accessToken, refreshToken, userId }` for JS to adopt at startup, or null when native holds no refreshable session. */
+  fun sessionMap(): Map<String, Any?>? {
+    val c = prefs.serverConfig ?: return null
+    val r = c.refreshToken ?: return null
+    if (c.accessToken.isBlank()) return null
+    return mapOf("accessToken" to c.accessToken, "refreshToken" to r, "userId" to c.userId)
   }
   fun now(): Long = System.currentTimeMillis()
 

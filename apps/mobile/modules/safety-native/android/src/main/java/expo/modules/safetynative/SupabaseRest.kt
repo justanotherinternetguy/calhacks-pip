@@ -26,9 +26,21 @@ class SupabaseRest(private val prefs: Prefs) {
     .build()
 
   @Volatile private var tokenOverride: String? = null
-  fun setAccessToken(token: String) {
-    tokenOverride = token
-    prefs.serverConfig?.let { prefs.serverConfig = it.copy(accessToken = token) }
+  /** Installs a new JWT for every following request. Persisting it is [SafetyRuntime.setSession]'s job. */
+  fun setAccessToken(token: String) { tokenOverride = token }
+
+  /** `POST /auth/v1/token?grant_type=refresh_token` → (access, refresh). Throws on any non-2xx (invalid / revoked token included). */
+  fun refreshSession(refreshToken: String): Pair<String, String> {
+    val c = cfg()
+    val req = Request.Builder().url(c.supabaseUrl.trimEnd('/') + "/auth/v1/token?grant_type=refresh_token")
+      .header("apikey", c.supabaseAnonKey).header("Content-Type", "application/json")
+      .post(JSONObject().put("refresh_token", refreshToken).toString().toRequestBody(JSON)).build()
+    client.newCall(req).execute().use { resp ->
+      val text = resp.body?.string()
+      if (!resp.isSuccessful) throw IOException("auth refresh -> ${resp.code}: ${text?.take(200)}")
+      val o = JSONObject(text ?: "{}")
+      return o.getString("access_token") to o.getString("refresh_token")
+    }
   }
 
   private fun cfg(): ServerConfig = prefs.serverConfig ?: throw IOException("SafetyNative not configured")

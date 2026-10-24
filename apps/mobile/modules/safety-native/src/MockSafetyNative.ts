@@ -119,6 +119,9 @@ export class MockSafetyNative implements SafetyNativeModuleType {
     this.push({ serviceRunning: true });
   }
   async setAccessToken() {}
+  async setSession() {}
+  async getSession() { return null; }
+  async clearSession() {}
   async requestPermission(kind: keyof Permissions) {
     this.permissions = { ...this.permissions, [kind]: 'granted' };
     this.push({});
@@ -221,7 +224,8 @@ export class MockSafetyNative implements SafetyNativeModuleType {
     this.telemetryOn = on;
   }
   async getTelemetryStatus(): Promise<TelemetryStatus> {
-    return { on: this.telemetryOn, hz: this.telemetryOn ? (this.dashTimer ? 4 : this.status.nightMode.active ? 1 : 4) : 0, lastSentMs: 0, failures: 0 };
+    const hz = this.telemetryOn || this.dashTimer ? 10 : this.status.nightMode.active ? 1 : 0;
+    return { on: this.telemetryOn, hz, lastSentMs: 0, failures: 0, connected: false, reconnects: 0, dropped: 0, rttMs: null, error: 'mock: nothing is published' };
   }
   async setDemoSensitivity(on: boolean) {
     this.demoSensitivity = on;

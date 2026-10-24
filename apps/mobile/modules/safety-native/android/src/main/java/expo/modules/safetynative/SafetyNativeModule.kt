@@ -24,9 +24,16 @@ class ConfigureOptions : Record {
   @Field val supabaseUrl: String = ""
   @Field val supabaseAnonKey: String = ""
   @Field val accessToken: String = ""
+  /** Optional: lets native refresh the JWT itself while JS sleeps (SessionKeeper). */
+  @Field val refreshToken: String = ""
   @Field val userId: String = ""
   @Field val deviceId: String = ""
   @Field val modelConfigToml: String = ""
+}
+
+class SessionRecord : Record {
+  @Field val accessToken: String = ""
+  @Field val refreshToken: String = ""
 }
 
 class HomePlaceRecord : Record {
@@ -68,7 +75,7 @@ class SafetyNativeModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("SafetyNative")
-    Events("statusChanged", "checkRequested", "escalation", "snatch", "sos", "dashboard", "signalIncident", "callOption")
+    Events("statusChanged", "checkRequested", "escalation", "snatch", "sos", "dashboard", "signalIncident", "callOption", "sessionRefreshed")
 
     OnCreate {
       runCatching {
@@ -93,7 +100,7 @@ class SafetyNativeModule : Module() {
 
     AsyncFunction("configure") { opts: ConfigureOptions ->
       val r = rt
-      r.prefs.serverConfig = ServerConfig(opts.supabaseUrl, opts.supabaseAnonKey, opts.accessToken, opts.userId, opts.deviceId)
+      r.prefs.serverConfig = ServerConfig(opts.supabaseUrl, opts.supabaseAnonKey, opts.accessToken, opts.userId, opts.deviceId, opts.refreshToken.ifBlank { null })
       r.supabase.setAccessToken(opts.accessToken)
       if (opts.modelConfigToml.isNotBlank()) r.engine.setConfigToml(opts.modelConfigToml) else r.engine.get()
       r.onConfigured()   // telemetry stream (CONTRACTS §7) defaults to ON from here
@@ -102,7 +109,11 @@ class SafetyNativeModule : Module() {
       r.startService(allowMic = true)
     }
 
-    AsyncFunction("setAccessToken") { token: String -> rt.supabase.setAccessToken(token) }
+    // ---- session (JS ↔ native; native refreshes on its own, see SessionKeeper) ----
+    AsyncFunction("setAccessToken") { token: String -> rt.applySession(token, null, fromJs = true) }
+    AsyncFunction("setSession") { s: SessionRecord -> rt.applySession(s.accessToken, s.refreshToken.ifBlank { null }, fromJs = true) }
+    AsyncFunction("getSession") { rt.sessionMap() }
+    AsyncFunction("clearSession") { rt.clearSession() }
 
     AsyncFunction("requestPermission") perm@{ kind: String, promise: Promise ->
       val ctx = rt.app
@@ -164,7 +175,7 @@ class SafetyNativeModule : Module() {
     // ---- telemetry stream (CONTRACTS §7) ----------------------------------------
 
     AsyncFunction("setTelemetry") { on: Boolean -> rt.setTelemetry(on) }
-    AsyncFunction("getTelemetryStatus") { rt.telemetry.statusMap() }   // { on, hz, lastSentMs, failures }
+    AsyncFunction("getTelemetryStatus") { rt.telemetry.statusMap() }   // { on, hz, lastSentMs, failures, connected, reconnects, dropped, rttMs, error }
 
     // ---- demo sensitivity (Settings): live engine on assets/model-demo.toml, normal model kept on disk ----
     AsyncFunction("setDemoSensitivity") { on: Boolean -> rt.engine.setDemoSensitivity(on) }

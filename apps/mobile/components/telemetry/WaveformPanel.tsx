@@ -38,7 +38,7 @@ export function WaveformPanel({ buffers, tick }: { buffers: TelemetryBuffers; ti
       hline(ctx, r, IMPACT_G, 0, hi, colors.danger, `impact ${IMPACT_G} g`);
       drawTrace(ctx, r, buffers, 'accel', windowSec, 0, hi, SERIES.accel, now);
       label(ctx, `|a|  0–${hi.toFixed(1)} g`, 4, 2, SERIES.accel);
-      label(ctx, `${windowSec} s · ${buffers.sampleHz} Hz`, w - 4, 2, colors.muted, 'right');
+      label(ctx, `${windowSec} s · ${buffers.sampleHz.toFixed(1)} Hz`, w - 4, 2, colors.muted, 'right');
       if (!buffers.count) label(ctx, 'waiting for samples…', w / 2, h / 2 - 6, colors.muted, 'center');
     };
   }, [buffers, windowSec]);
@@ -91,7 +91,7 @@ export function WaveformPanel({ buffers, tick }: { buffers: TelemetryBuffers; ti
       <View style={styles.head}>
         <Text style={styles.title}>Motion</Text>
         <Text style={styles.meta}>
-          {tick ? `peak ${tickPeak.toFixed(2)} g · ${tickGyro.toFixed(2)} rad/s · ${tick.accel.length} samples/tick` : 'no samples yet'}
+          {tick ? `peak ${tickPeak.toFixed(2)} g · ${tickGyro.toFixed(2)} rad/s · ${tick.accel.length} samples/frame · drawn ${Math.round(buffers.displayDelayMs())} ms behind` : 'no samples yet'}
         </Text>
         <View style={{ flex: 1 }} />
         <View style={styles.seg}>

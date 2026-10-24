@@ -1,11 +1,14 @@
 // §7 live telemetry: a friend's browser subscribes to the subject phone's private Realtime broadcast channel
-// `telemetry:{subjectUserId}` (event `tick`, 4 Hz, no DB rows) and keeps enough history for the monitor's
-// live charts. Nothing here publishes — only the Android phone does (OkHttp → /realtime/v1/api/broadcast).
+// `telemetry:{subjectUserId}` (event `tick`, 10 Hz frames, no DB rows) and keeps enough history for the monitor's
+// live charts. Nothing here publishes — only the Android phone does (OkHttp WebSocket → Realtime).
 // RLS on realtime.messages lets the subject insert and subject + group-mates select, so a non-group-mate
 // gets CHANNEL_ERROR on join, never data.
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import type { IncidentRecord, TelemetryTick } from '@/modules/safety-native';
+import { FrameMerger, sampleTimes } from './telemetryFrames';
 import { supabase } from './supabase';
+
+export { isTelemetryTick, isTelemetryFrame } from './telemetryFrames';
 
 // ---- connection status -----------------------------------------------------------------------------
 
@@ -23,6 +26,8 @@ export type TelemetryConnection = {
   lastTickAt: number | null; // local ms of the last tick
   /** Smoothed max(0, Date.now() - tick.t). Clock skew between phone and browser makes this approximate ("~N ms"). */
   latencyMs: number | null;
+  /** Phone-measured round trip phone → Realtime → phone (same clock, no skew); null while the phone is not probing. */
+  rttMs: number | null;
   ticksPerSec: number;
   attempts: number; // consecutive resubscribe attempts
   nextRetryAt: number | null;
@@ -40,18 +45,10 @@ export const telemetryTopic = (userId: string) => `telemetry:${userId}`;
 /** realtime-js hands back the existing channel for a duplicate topic, so a resubscribe must wait for the old one to leave. */
 const pendingRemovals = new Map<string, Promise<unknown>>();
 
-/** Runtime guard for the broadcast payload; anything that is not a v1 tick is dropped. */
-export function isTelemetryTick(p: unknown): p is TelemetryTick {
-  if (!p || typeof p !== 'object') return false;
-  const t = p as Partial<TelemetryTick>;
-  return t.v === 1 && typeof t.t === 'number' && typeof t.seq === 'number' && Array.isArray(t.accel) && Array.isArray(t.gyro)
-    && !!t.metrics && Array.isArray(t.metrics.bands) && Array.isArray(t.incidents) && Array.isArray(t.events);
-}
-
 /**
- * Subscribe to one subject's telemetry. `onTick(tick, receivedAtMs)` for every valid tick, `onStatus` for every
- * connection change (SUBSCRIBED / CHANNEL_ERROR / TIMED_OUT / CLOSED, staleness, retry schedule). Resubscribes
- * with exponential backoff (1 s → 30 s). Returns an unsubscribe function.
+ * Subscribe to one subject's telemetry. `onTick(tick, receivedAtMs)` for every complete tick (v2 frames are merged
+ * with the latest state block first), `onStatus` for every connection change (SUBSCRIBED / CHANNEL_ERROR / TIMED_OUT /
+ * CLOSED, staleness, retry schedule). Resubscribes with exponential backoff (1 s → 30 s). Returns an unsubscribe function.
  */
 export function subscribeTelemetry(
   userId: string,
@@ -59,8 +56,9 @@ export function subscribeTelemetry(
   onStatus: (s: TelemetryConnection) => void,
 ): () => void {
   const topic = telemetryTopic(userId);
-  const status: TelemetryConnection = { state: 'connecting', subscribedAt: null, lastTickAt: null, latencyMs: null, ticksPerSec: 0, attempts: 0, nextRetryAt: null, error: null };
+  const status: TelemetryConnection = { state: 'connecting', subscribedAt: null, lastTickAt: null, latencyMs: null, rttMs: null, ticksPerSec: 0, attempts: 0, nextRetryAt: null, error: null };
   const arrivals: number[] = [];
+  const merger = new FrameMerger();
   let channel: RealtimeChannel | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
@@ -99,15 +97,18 @@ export function subscribeTelemetry(
     try { await pendingRemovals.get(topic); } catch {}
     try { await supabase.realtime.setAuth(); } catch {}
     if (stopped) return;
+    merger.reset();
     const ch = supabase.channel(topic, { config: { private: true, broadcast: { ack: false } } });
     channel = ch;
     ch.on('broadcast', { event: 'tick' }, (msg: { payload?: unknown }) => {
-      const tick = msg.payload;
-      if (stopped || ch !== channel || !isTelemetryTick(tick)) return;
+      if (stopped || ch !== channel) return;
+      const tick = merger.merge(msg.payload);
+      if (!tick) return;
       const now = Date.now();
       const raw = Math.max(0, now - tick.t);
       latency = latency == null ? raw : latency * 0.7 + raw * 0.3;
       status.latencyMs = Math.round(latency);
+      status.rttMs = tick.rttMs ?? status.rttMs;
       status.lastTickAt = now;
       arrivals.push(now);
       pruneArrivals(now);
@@ -160,6 +161,8 @@ export const SAMPLE_RING_CAPACITY = SAMPLE_RING_SECONDS * 100; // headroom up to
 export const TREND_SECONDS = 300;
 export const INCIDENT_TTL_MS = 8 * 3_600_000;
 export const EVENT_HISTORY = 50;
+/** Smallest display delay behind wall-clock (ms); the renderers add 1.5 frame intervals + the observed jitter. */
+export const MIN_DISPLAY_DELAY_MS = 120;
 
 export type TrendPoint = {
   t: number; // phone unix ms
@@ -174,20 +177,31 @@ export type TickDelta = { newIncidents: IncidentRecord[]; events: string[] };
 
 /**
  * Mutable history for one subject, read directly by the canvas renderers on every animation frame (no
- * React state in the hot path). accel/gyro magnitudes sit in fixed Float32 rings; trends are pruned by age.
+ * React state in the hot path). accel/gyro magnitudes sit in fixed Float32 rings with the phone-clock time of each
+ * sample beside them, so the waveform is drawn on sensor time (arrival jitter and batching cannot stretch or
+ * compress it); trends are pruned by age.
  */
 export class TelemetryBuffers {
   readonly accel = new Float32Array(SAMPLE_RING_CAPACITY);
   readonly gyro = new Float32Array(SAMPLE_RING_CAPACITY);
+  /** phone unix ms of each sample */
+  readonly times = new Float64Array(SAMPLE_RING_CAPACITY);
   /** next write index */
   head = 0;
   /** samples stored (≤ capacity) */
   count = 0;
   sampleHz = 50;
-  /** local ms when the newest sample arrived (the stream's right edge) */
+  /** local ms when the newest frame arrived */
   lastTickAt = 0;
-  /** EMA of the inter-tick interval, for the renderers' display delay */
-  tickIntervalMs = 250;
+  /** EMA of the inter-frame interval, for the renderers' display delay */
+  tickIntervalMs = 100;
+  /**
+   * local arrival − phone sample time, tracked as a fast-down / slow-up floor: ≈ clock skew + the quickest transport
+   * we have seen. Adding it to a phone timestamp gives the local time at which that sample could first be on screen.
+   */
+  skewMs: number | null = null;
+  /** EMA of how far above that floor frames arrive (ms); the display delay covers it so the trace never stalls. */
+  jitterMs = 0;
   tick: TelemetryTick | null = null;
   trend: TrendPoint[] = [];
   events: EngineEventEntry[] = [];
@@ -199,7 +213,7 @@ export class TelemetryBuffers {
   dropped = 0; // sequence gaps seen
 
   reset() {
-    this.head = 0; this.count = 0; this.lastTickAt = 0; this.tickIntervalMs = 250; this.tick = null;
+    this.head = 0; this.count = 0; this.lastTickAt = 0; this.tickIntervalMs = 100; this.skewMs = null; this.jitterMs = 0; this.tick = null;
     this.trend = []; this.events = []; this.incidents.clear(); this.incidentCountOnPhone = 0; this.ticks = 0; this.lastSeq = null; this.dropped = 0;
   }
 
@@ -212,13 +226,21 @@ export class TelemetryBuffers {
     this.ticks += 1;
     this.tick = tick;
     if (tick.sampleHz > 0) this.sampleHz = tick.sampleHz;
+
     const n = Math.min(tick.accel.length, SAMPLE_RING_CAPACITY);
-    for (let i = tick.accel.length - n; i < tick.accel.length; i++) {
-      this.accel[this.head] = tick.accel[i] ?? 0;
-      this.gyro[this.head] = tick.gyro[i] ?? 0;
-      this.head = (this.head + 1) % SAMPLE_RING_CAPACITY;
+    if (n > 0) {
+      const raw = receivedAt - tick.st;
+      if (this.skewMs == null || raw < this.skewMs) this.skewMs = raw;
+      else { this.skewMs = this.skewMs * 0.995 + raw * 0.005; this.jitterMs = this.jitterMs * 0.9 + (raw - this.skewMs) * 0.1; }
+      const ts = sampleTimes(n, tick.st, this.sampleHz);
+      for (let i = tick.accel.length - n, j = 0; i < tick.accel.length; i++, j++) {
+        this.accel[this.head] = tick.accel[i] ?? 0;
+        this.gyro[this.head] = tick.gyro[i] ?? 0;
+        this.times[this.head] = ts[j];
+        this.head = (this.head + 1) % SAMPLE_RING_CAPACITY;
+      }
+      this.count = Math.min(SAMPLE_RING_CAPACITY, this.count + n);
     }
-    this.count = Math.min(SAMPLE_RING_CAPACITY, this.count + n);
 
     const m = tick.metrics;
     const sd: Record<string, number> = {};
@@ -245,10 +267,21 @@ export class TelemetryBuffers {
     return { newIncidents, events: tick.events.slice() };
   }
 
+  private idx(k: number) { return (this.head - 1 - k + SAMPLE_RING_CAPACITY * 2) % SAMPLE_RING_CAPACITY; }
+
   /** k-th newest sample (k = 0 is the newest). Undefined behaviour for k ≥ count; callers clamp. */
   sample(which: 'accel' | 'gyro', k: number): number {
-    const arr = which === 'accel' ? this.accel : this.gyro;
-    return arr[(this.head - 1 - k + SAMPLE_RING_CAPACITY * 2) % SAMPLE_RING_CAPACITY];
+    return (which === 'accel' ? this.accel : this.gyro)[this.idx(k)];
+  }
+
+  /** Local-clock time at which the k-th newest sample belongs on screen (phone time + skew floor). */
+  sampleTimeLocal(k: number): number {
+    return this.times[this.idx(k)] + (this.skewMs ?? 0);
+  }
+
+  /** How far behind wall-clock the renderers draw: 1.5 frame intervals plus twice the observed jitter, never less than MIN_DISPLAY_DELAY_MS. */
+  displayDelayMs(): number {
+    return Math.max(MIN_DISPLAY_DELAY_MS, this.tickIntervalMs * 1.5 + this.jitterMs * 2);
   }
 
   /** Incident log, newest first. */

@@ -10,13 +10,17 @@ import org.json.JSONObject
 /** One home/dorm place. Stored on the device only; never uploaded. */
 data class HomePlace(val id: String, val label: String, val lat: Double, val lng: Double, val radiusM: Double)
 
-/** Backend + identity configuration passed from JS via `configure`. */
+/**
+ * Backend + identity configuration passed from JS via `configure` / `setSession`. `refreshToken` lets native keep the
+ * JWT alive itself ([SessionKeeper]) while the JS runtime is asleep; null = JS never handed one over (no refresh).
+ */
 data class ServerConfig(
   val supabaseUrl: String,
   val supabaseAnonKey: String,
   val accessToken: String,
   val userId: String,
   val deviceId: String,
+  val refreshToken: String? = null,
 )
 
 /**
@@ -49,13 +53,16 @@ class Prefs(context: Context) {
   var serverConfig: ServerConfig?
     get() = getString("server")?.let {
       val o = JSONObject(it)
-      ServerConfig(o.getString("url"), o.getString("anon"), o.getString("token"), o.getString("user"), o.getString("device"))
+      ServerConfig(
+        o.getString("url"), o.getString("anon"), o.getString("token"), o.getString("user"), o.getString("device"),
+        o.optString("refresh").ifBlank { null },
+      )
     }
     set(v) = putString(
       "server",
       v?.let {
         JSONObject().put("url", it.supabaseUrl).put("anon", it.supabaseAnonKey).put("token", it.accessToken)
-          .put("user", it.userId).put("device", it.deviceId).toString()
+          .put("user", it.userId).put("device", it.deviceId).put("refresh", it.refreshToken ?: "").toString()
       },
     )
 

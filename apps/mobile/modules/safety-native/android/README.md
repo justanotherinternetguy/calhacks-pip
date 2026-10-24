@@ -17,7 +17,9 @@ android/
     SafetyNativeModule.kt     JS facade (CONTRACTS §2 + §6 dashboard + §7 telemetry); forwards to SafetyRuntime
     SafetyRuntime.kt          process singleton: wiring, engine-event dispatch, incidents, status, dashboard streaming, telemetry switch
     SensingService.kt         foreground service + NightModeController, LOW/FULL motion sampling, location, 1 s / 60 s tick, |a|/|ω| rings
-    TelemetryPublisher.kt     live telemetry stream → Supabase Realtime broadcast (CONTRACTS §7), 4 Hz / 1 Hz / off
+    TelemetryPublisher.kt     live telemetry stream → Supabase Realtime broadcast over RealtimeSocket (CONTRACTS §7), 10 Hz / 1 Hz / off
+    RealtimeSocket.kt         one Phoenix channel over an OkHttp WebSocket: join, heartbeat, token push, reconnect
+    SessionKeeper.kt          native JWT refresh (CONTRACTS §8) so uploads + telemetry outlive a sleeping JS runtime
     EngineHolder.kt           SafetyEngine lifecycle, Keystore-encrypted baseline + incident log blob, 5-min autosave
     EngineMaps.kt             LiveMetrics / IncidentRecord / MetricBand → JS maps (camelCase, snake enums)
     TouchTracker.kt           last_touch_ms + PHONE_UNLOCKED: in-app Window.Callback hook, USER_PRESENT/SCREEN_ON, keyguard polling
@@ -147,9 +149,12 @@ context from `SafetyRuntime` so tracking works whenever the process is alive, no
 ## Telemetry stream (CONTRACTS.md §7)
 
 `TelemetryPublisher` streams the live engine state to the web monitor over **Supabase Realtime broadcast** — a private
-channel, no database rows. Every tick is one `POST {supabaseUrl}/realtime/v1/api/broadcast` (OkHttp, same pool and
-`apikey` / `Authorization: Bearer {userJwt}` headers as the PostgREST client, 5 s call timeout) with body
-`{"messages":[{"topic":"telemetry:{userId}","event":"tick","private":true,"payload":TelemetryTick}]}`. The subscriber is
+channel, no database rows — on **one persistent WebSocket** (`RealtimeSocket`: OkHttp, Phoenix serializer v2, the same frames
+`@supabase/realtime-js` sends). It connects to `wss://{host}/realtime/v1/websocket?apikey={anon}&vsn=2.0.0`, joins
+`realtime:telemetry:{userId}` with `{ config: { broadcast: { self, ack: false }, private: true, … }, access_token }`, heartbeats
+every 25 s, pushes `access_token` when the JWT rotates and reconnects with 1 / 2 / 5 / 10 s backoff — or immediately when
+`SafetyRuntime`'s default-network callback reports connectivity back. A frame is one text frame on the open socket, so the
+per-tick cost of the old `POST /realtime/v1/api/broadcast` is gone. The subscriber is unchanged:
 `supabase.channel('telemetry:'+uid, { config: { private: true, broadcast: { ack: false } } }).on('broadcast', { event: 'tick' }, cb)`;
 `realtime.messages` RLS decides who may publish (the subject) and read (subject + group-mates).
 
@@ -157,31 +162,41 @@ channel, no database rows. Every tick is one `POST {supabaseUrl}/realtime/v1/api
 
 | Condition | Rate | Notes |
 |---|---|---|
-| `telemetryOn` (explicit switch, `setTelemetry`) **or** `dashboardStreaming` | 4 Hz | both also force FULL sampling and the 1 s day ticker — the monitor wants real gait metrics |
-| else night mode active | 1 Hz | |
-| else | off | the loop idles (1 s poll), nothing is sent |
+| `telemetryOn` (explicit switch, `setTelemetry`) **or** `dashboardStreaming` | 10 Hz | both also force FULL sampling, **unbatched sensor delivery** (`maxReportLatency = 0`), a partial wake lock (`safe:stream`) and the 1 s day ticker; the channel is joined with `self = true` for the round-trip probe |
+| else night mode active | 1 Hz | batched sensors (1 s), no echo |
+| else | off | socket closed, the loop idles (1 s poll) |
 
 `telemetryOn` defaults to **true** as soon as `configure()` has run (persisted in `Prefs.telemetryOn`, so `setTelemetry(false)`
-sticks across restarts). The engine is still ticked once a second (day ticker / night loop); at 4 Hz the publisher only
-re-reads `engine.metrics()` + `snapshot()` (no I/O, no HMM step) and drains the rings that are filled per sample / per tick.
-The publisher starts with `SensingService.onCreate` and stops in `onDestroy`; `setTelemetry(true)` / `setDashboardStreaming(true)`
-also start it without a service (then it publishes whatever the engine holds).
+sticks across restarts). The engine is still ticked once a second (day ticker / night loop); a frame only drains the rings that
+`SensingService` fills per sample (timestamped |a| / |ω|, on its own `safe-sensors` thread) and per tick (engine events), and
+attaches the `state` block (`engine.metrics()` + `snapshot()`, no I/O) after each engine tick, at least once a second, and
+whenever events / incidents are present. The publisher starts with `SensingService.onCreate` and stops in `onDestroy`;
+`setTelemetry(true)` / `setDashboardStreaming(true)` also start it without a service (then it publishes whatever the engine holds).
 
-**Payload** (`v: 1`, camelCase, see §7 for the exact type): `t`, `seq`, `user`; `metrics` (§6 `LiveMetrics`, same serialisation as
-`getDashboard`); `hmm`, `escalation`, `riskBand`, `pDanger` from `snapshot()`; `nightMode`, `battery` (read at most every 10 s),
-`activity`, `placement`, `samplingFull`; `accel` / `gyro` = per-sample |a| (g) and |ω| (rad/s) since the previous tick, newest last,
-4 decimals, capped at 64 each (`SensingService` rings; gyro is all zeros in LOW mode), `sampleHz` = nominal rate of the registered
-mode (50 / 10 / 0); `incidents` = `IncidentRecord`s with `id > lastSentId` (the watermark only advances on a 2xx, so a failed tick
-re-sends them), `incidentCount` = live log size (the log is re-read once a second or immediately after a `signal_incident`);
-`events` = snake_case engine events dispatched since the previous tick (`check_requested`, `heads_up`, `unlock_location`,
-`snatch_detected`, `resolved`, `risk_band_changed`, `battery_dying`, `sampling_rate_changed`, `signal_incident`, `call_option`,
-plus `location_interval_changed`); `checkPhrase` / `checkDeadlineMs` only while the engine is in `check`.
+**Payload** (`v: 2`, camelCase, exact type in §7): every frame carries `t`, `seq`, `user`; `accel` / `gyro` = per-sample |a| (g)
+and |ω| (rad/s) since the previous frame, newest last, 4 decimals, capped at 128 (gyro all zeros in LOW mode); `st` = wall-clock
+ms of the newest sample; `sampleHz` = measured delivery rate (EMA of sensor-hub timestamps); `incidents` = `IncidentRecord`s with
+`id > lastSentId` (the watermark advances when the socket took the frame; every rejoin replays the whole live log once);
+`incidentCount`; `events` (snake_case engine events since the previous frame); `rttMs` once measured. `state` = `metrics`,
+`hmm`, `escalation`, `riskBand`, `pDanger`, `nightMode`, `battery` (read at most every 10 s), `activity`, `placement`,
+`samplingFull`, and `checkPhrase` / `checkDeadlineMs` only while the engine is in `check`.
 
-**Delivery rules.** One in-flight request at a time: a tick that fires while the previous POST is still out is dropped, never
-queued. Every non-2xx or I/O failure increments `failures` and arms an exponential backoff (1 s → 30 s) during which ticks are
-skipped; the first success resets it. Logcat tag `Telemetry` gets one line per rate change (`4 Hz (telemetry on)`, `idle …`) and
-per network state change (`ok`, `failing (http 401)`, …), never per tick. `getTelemetryStatus()` → `{ on, hz, lastSentMs, failures }`
-(`on` = the explicit switch, `hz` = what is actually being published right now).
+**Delivery rules.** A frame that fires while the channel is not joined is dropped (counted in `dropped`), never queued. Socket
+failures (join refused, `system` error, heartbeat timeout, I/O) increment `failures`, schedule a reconnect and count in
+`reconnects`. Logcat tag `Telemetry` gets one line per rate change (`10 Hz (telemetry on)`, `idle …`), per socket state change
+(`joined …`, `socket down (…)`, `ok`, `waiting for channel …`), the first echo, and **one summary line a minute**
+(`summary: 10 Hz joined=true rtt=61 ms seq=… dropped=… reconnects=… failures=…; token valid 629 s; refresh armed`) — never per
+frame. `getTelemetryStatus()` → `{ on, hz, lastSentMs, failures, connected, reconnects, dropped, rttMs, error }` (`on` = the
+explicit switch, `hz` = what is actually being published right now).
+
+**Measured on a Nothing A065 (Android 16) against the hosted project:** join 0.4–0.6 s after service start, 10.0 frames/s
+sustained, phone → Realtime → phone round trip 30–90 ms (first echo 125–160 ms while the TLS session warms up), stream
+unaffected by a forced deep-Doze / "unplugged" period, airplane-mode outage recovered on the first reconnect attempt after
+the network returned.
+
+**Session.** The JWT the channel (and every PostgREST call) uses is kept alive by `SessionKeeper` (see CONTRACTS §8): JS hands
+over the refresh token, native rotates the pair 5 min before `exp`, pushes the new JWT to the channel and tells JS via
+`sessionRefreshed`. Logcat tag `Session`.
 
 **Privacy.** Telemetry carries **no location** — no coordinates, no distance-from-home, no home places. Location stays on the
 escrow path (`location_blobs` + `released_keys`). What does go out: gait metrics vs. bands, state probabilities, raw acceleration /

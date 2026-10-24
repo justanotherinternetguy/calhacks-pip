@@ -17,7 +17,9 @@ export function TelemetryHeader({ groupName, now, subjects, subjectId, manual, o
   conn: TelemetryConnection | undefined; tick: TelemetryTick | null; soundOn: boolean; onToggleSound: () => void; onHome: () => void;
 }) {
   const stale = conn?.state === 'stale';
-  const rate = conn && conn.state === 'live' ? `${conn.ticksPerSec.toFixed(1)} ticks/s` : conn?.state === 'stale' ? 'no ticks' : '';
+  const rate = conn && conn.state === 'live' ? `${conn.ticksPerSec.toFixed(1)} frames/s` : conn?.state === 'stale' ? 'no frames' : '';
+  // Prefer the phone's own round trip (phone → Realtime → phone, one clock); the one-way figure includes clock skew.
+  const latency = conn ? (conn.rttMs != null ? `round trip ${conn.rttMs} ms` : `${latencyText(conn.latencyMs)} incl. clock skew`) : '';
   return (
     <View style={styles.bar}>
       <View style={styles.row}>
@@ -55,7 +57,7 @@ export function TelemetryHeader({ groupName, now, subjects, subjectId, manual, o
           <View style={[styles.dot, { backgroundColor: connColor(conn?.state) }]} />
           <Text style={[styles.connText, { color: connColor(conn?.state) }]}>{conn ? CONN_LABEL[conn.state] : 'no subject'}</Text>
           {conn && conn.state !== 'error' && conn.state !== 'closed' && conn.state !== 'connecting' && (
-            <Text style={styles.meta}>{latencyText(conn.latencyMs)}{rate ? ` · ${rate}` : ''}{stale && conn.lastTickAt ? ` · last ${Math.round((now - conn.lastTickAt) / 1000)} s ago` : ''}</Text>
+            <Text style={styles.meta}>{latency}{rate ? ` · ${rate}` : ''}{stale && conn.lastTickAt ? ` · last ${Math.round((now - conn.lastTickAt) / 1000)} s ago` : ''}</Text>
           )}
           {conn && (conn.state === 'error' || conn.state === 'closed') && (
             <Text style={styles.meta} numberOfLines={1}>{conn.error ?? ''}{conn.nextRetryAt ? ` · retry in ${Math.max(0, Math.ceil((conn.nextRetryAt - now) / 1000))} s` : ''}</Text>
@@ -65,7 +67,7 @@ export function TelemetryHeader({ groupName, now, subjects, subjectId, manual, o
         {tick ? (
           <View style={styles.pills}>
             <Pill text={tick.nightMode ? 'night mode' : 'day'} color={tick.nightMode ? colors.accent : colors.muted} />
-            <Pill text={tick.samplingFull ? `${tick.sampleHz} Hz + gyro` : `${tick.sampleHz} Hz accel`} color={tick.samplingFull ? colors.warn : colors.muted} />
+            <Pill text={tick.samplingFull ? `${Math.round(tick.sampleHz)} Hz + gyro` : `${Math.round(tick.sampleHz)} Hz accel`} color={tick.samplingFull ? colors.warn : colors.muted} />
             <Pill text={`battery ${Math.round(tick.battery)}%`} color={batteryColor(tick.battery)} />
             <Pill text={`risk ${tick.riskBand}`} color={[colors.ok, colors.accent, colors.warn, colors.danger][tick.riskBand] ?? colors.muted} />
             <Pill text={ESCALATION_LABEL[tick.escalation] ?? tick.escalation} color={levelColor(tick.escalation)} />

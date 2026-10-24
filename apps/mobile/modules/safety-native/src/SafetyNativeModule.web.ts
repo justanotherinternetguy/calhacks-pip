@@ -121,6 +121,9 @@ export class WebSafetyNative implements SafetyNativeModuleType {
     await this.mock.configure(opts);
   }
   setAccessToken(token: string) { return this.mock.setAccessToken(token); }
+  setSession(s: { accessToken: string; refreshToken: string }) { return this.mock.setSession(s); }
+  getSession() { return this.mock.getSession(); }
+  clearSession() { return this.mock.clearSession(); }
   requestPermission(kind: keyof Permissions) { return this.mock.requestPermission(kind); }
   setHomePlaces(places: HomePlace[]) { return this.mock.setHomePlaces(places); }
   setEveningWindow(startHour: number, endHour: number) { return this.mock.setEveningWindow(startHour, endHour); }

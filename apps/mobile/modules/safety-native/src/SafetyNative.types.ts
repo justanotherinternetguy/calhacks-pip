@@ -40,10 +40,14 @@ export type ConfigureOptions = {
   supabaseUrl: string;
   supabaseAnonKey: string;
   accessToken: string;
+  /** Lets native refresh the JWT itself while JS is asleep (Android SessionKeeper). Omit for demo / mock sessions. */
+  refreshToken?: string;
   userId: string;
   deviceId: string;
   modelConfigToml: string;
 };
+/** The session pair native holds (and refreshes on Android). `getSession()` returns null until JS handed a refresh token over. */
+export type NativeSession = { accessToken: string; refreshToken: string; userId: string };
 export type TypingRecord = {
   phrase: string;
   typed: string;
@@ -125,11 +129,8 @@ export type Dashboard = { metrics: LiveMetrics; incidents: IncidentRecord[] };
 export type TelemetryEventName =
   | 'check_requested' | 'heads_up' | 'unlock_location' | 'snatch_detected' | 'resolved' | 'risk_band_changed'
   | 'battery_dying' | 'sampling_rate_changed' | 'signal_incident' | 'call_option';
-export type TelemetryTick = {
-  v: 1;
-  t: number; // unix ms on the phone
-  seq: number;
-  user: string;
+/** The engine / mode part of a tick: sent by the phone at least once a second and after every engine tick (§7 v2 `state`). */
+export type TelemetryState = {
   metrics: LiveMetrics;
   hmm: HmmState;
   escalation: EscalationLevel;
@@ -140,16 +141,55 @@ export type TelemetryTick = {
   activity: Activity;
   placement: Placement;
   samplingFull: boolean;
-  accel: number[]; // |a| in g for the samples since the last tick (≤ 50), newest last
+  checkPhrase?: string; // while a check-in is pending
+  checkDeadlineMs?: number;
+};
+/**
+ * Wire frame (§7 v2), 10 Hz while streaming / 1 Hz in night mode: always the raw samples since the previous frame,
+ * engine events and incident deltas; `state` only when something changed or a second passed. `lib/telemetry.ts`
+ * merges frames into full `TelemetryTick`s for the UI.
+ */
+export type TelemetryFrame = {
+  v: 2;
+  t: number; // unix ms on the phone when the frame was built
+  seq: number;
+  user: string;
+  accel: number[]; // |a| in g, newest last
   gyro: number[]; // |ω| rad/s, same length (zeros in low-rate mode)
+  st: number; // phone unix ms of the newest sample (0 when the frame carries none)
+  sampleHz: number; // measured accelerometer delivery rate
+  incidents: IncidentRecord[]; // deltas: records with id > lastSentId (the whole live log again after a rejoin)
+  incidentCount: number;
+  events: (TelemetryEventName | string)[];
+  rttMs?: number; // phone → Realtime → phone round trip (self-echo), smoothed
+  state?: TelemetryState;
+};
+/** What the monitor consumes: a v1 tick as published by older phones, or a v2 frame merged with the latest `state`. */
+export type TelemetryTick = TelemetryState & {
+  v: 1 | 2;
+  t: number; // unix ms on the phone
+  seq: number;
+  user: string;
+  accel: number[]; // |a| in g for the samples since the last tick, newest last
+  gyro: number[]; // |ω| rad/s, same length (zeros in low-rate mode)
+  st: number; // phone unix ms of the newest sample (v1: = t)
   sampleHz: number;
   incidents: IncidentRecord[]; // deltas: records with id > lastSentId
   incidentCount: number; // total live log size on the phone (gap detection)
   events: (TelemetryEventName | string)[];
-  checkPhrase?: string; // while a check-in is pending
-  checkDeadlineMs?: number;
+  rttMs?: number;
 };
-export type TelemetryStatus = { on: boolean; hz: number; lastSentMs: number; failures: number };
+export type TelemetryStatus = {
+  on: boolean; // the explicit switch
+  hz: number; // what is being published right now (0 = idle)
+  lastSentMs: number;
+  failures: number; // socket failures since process start
+  connected: boolean; // channel joined
+  reconnects: number;
+  dropped: number; // frames dropped while the channel was down
+  rttMs: number | null; // phone → Realtime → phone round trip (self-echo), null until measured
+  error: string | null; // last socket failure reason
+};
 
 export type SafetyNativeEvents = {
   statusChanged: Status;
@@ -160,6 +200,7 @@ export type SafetyNativeEvents = {
   dashboard: Dashboard; // every 1 s while setDashboardStreaming(true)
   signalIncident: IncidentRecord;
   callOption: { summary: string }; // 10 min with no response: friends get the one-tap call option
+  sessionRefreshed: NativeSession; // native rotated the JWT pair; JS must adopt it (supabase.auth.setSession)
 };
 export type SafetyNativeEventName = keyof SafetyNativeEvents;
 export type Subscription = { remove(): void };
@@ -167,6 +208,12 @@ export type Subscription = { remove(): void };
 export interface SafetyNativeModuleType {
   configure(opts: ConfigureOptions): Promise<void>;
   setAccessToken(token: string): Promise<void>;
+  /** New JWT pair from supabase-js (sign-in, TOKEN_REFRESHED). Idempotent. */
+  setSession(s: { accessToken: string; refreshToken: string }): Promise<void>;
+  /** The pair native holds, for JS to adopt at startup (native may have rotated it while JS slept). */
+  getSession(): Promise<NativeSession | null>;
+  /** Sign-out: native forgets the tokens and stops uploading / streaming as that user. */
+  clearSession(): Promise<void>;
   requestPermission(kind: keyof Permissions): Promise<PermissionState>;
   setHomePlaces(places: HomePlace[]): Promise<void>; // device-only storage
   setEveningWindow(startHour: number, endHour: number): Promise<void>;
@@ -192,7 +239,7 @@ export interface SafetyNativeModuleType {
   // §6 personal dashboard
   getDashboard(): Promise<Dashboard>;
   setDashboardStreaming(on: boolean): Promise<void>; // while on, emit 'dashboard' every 1 s
-  // §7 telemetry publisher (Android). 4 Hz while on (default on once configured) or while the dashboard streams; 1 Hz in night mode otherwise.
+  // §7 telemetry publisher (Android). 10 Hz while on (default on once configured) or while the dashboard streams; 1 Hz in night mode otherwise.
   setTelemetry(on: boolean): Promise<void>;
   getTelemetryStatus(): Promise<TelemetryStatus>;
   /**
