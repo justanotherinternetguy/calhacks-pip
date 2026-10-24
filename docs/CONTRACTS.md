@@ -158,6 +158,6 @@ Edge functions (Deno, `supabase/functions/<name>/index.ts`): `push`, `watchdog`,
 - `unlock_approvals.sealed_share` = `seal_to(requester_pub, approver_ed25519_secret, [share_index as u8] ++ share.data, aad)` with `aad = "approval|{subjectUserId}|{epochId}"`.
 - `location_blobs.seq` = upload wall-clock unix ms (monotonic enough); AAD inside `encrypt_location` is `"{user_id}|{epoch_id}|{seq}"` as in §1.
 - Group proximity key (v1, accepted weakness: server can brute-force cells) = `SHA-256("safe/proximity|{groupId}|{YYYY-MM-DD UTC}")`.
-- Shamir parameters: n = active members excluding self; k = clamp(max(2, groups.threshold_k), 2, n); n < 2 → no shares, fallback unlock disabled.
+- Shamir parameters: n = active members excluding self; k = clamp(max(2, groups.threshold_k), 2, n); n < 2 → k = 0, no shares, fallback unlock disabled. An epoch row is still created (group_id may be null) so location blobs have an epoch.
 - Heartbeat = `PATCH /rest/v1/devices?id=eq.{deviceId}` with `{last_heartbeat: now, night_mode, battery_pct, risk_band, status_level}` (the `heartbeat` RPC is an equivalent alternative).
 - `incidents` row is first created at `heads_up` (first friend-visible level); `check` is device-local only.

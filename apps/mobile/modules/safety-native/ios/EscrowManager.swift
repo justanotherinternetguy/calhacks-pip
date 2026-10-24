@@ -91,9 +91,9 @@ final class EscrowManager {
         let others = group?.members.filter { $0.userId != cfg.userId } ?? []
         let n = others.count
         // CONTRACTS §5: k = clamp(max(2, threshold_k), 2, n); n < 2 → no shares, fallback unlock disabled.
-        // (For n < 2 the clamp is empty; k is then recorded as 2 and never used.)
+        // n < 2 → k = 0 (no shares; DB check: (k = 0 and n < 2) or (k >= 2 and n >= k)).
         let sharesEnabled = n >= 2
-        let k = min(max(2, group?.thresholdK ?? 2), max(2, n))
+        let k = sharesEnabled ? min(max(2, group?.thresholdK ?? 2), n) : 0
 
         var row: [String: Any] = ["user_id": cfg.userId, "day": today, "k": k, "n": n, "active": true]
         row["group_id"] = group?.groupId.map { $0 as Any } ?? NSNull()
