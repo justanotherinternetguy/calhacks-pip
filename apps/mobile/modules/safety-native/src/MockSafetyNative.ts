@@ -14,6 +14,7 @@ import type {
   SafetyNativeModuleType,
   Status,
   Subscription,
+  TelemetryStatus,
 } from './SafetyNative.types';
 
 type Listener = (e: never) => void;
@@ -67,6 +68,8 @@ export class MockSafetyNative implements SafetyNativeModuleType {
   private nextIncidentId = 1;
   private nextSequenceId = 1;
   private lastMetrics: LiveMetrics | null = null;
+  // §7 telemetry: the mock never publishes (no sensing here); it only remembers the preference (default on, like native).
+  private telemetryOn = true;
   private status: Status = {
     nightMode: { active: false, reason: 'off' },
     engine: {
@@ -210,6 +213,13 @@ export class MockSafetyNative implements SafetyNativeModuleType {
       clearInterval(this.dashTimer);
       this.dashTimer = null;
     }
+  }
+  // ---- §7 telemetry publisher: no-op on the mock. Only an Android phone broadcasts; the web client subscribes (lib/telemetry.ts).
+  async setTelemetry(on: boolean) {
+    this.telemetryOn = on;
+  }
+  async getTelemetryStatus(): Promise<TelemetryStatus> {
+    return { on: this.telemetryOn, hz: this.telemetryOn ? (this.dashTimer ? 4 : this.status.nightMode.active ? 1 : 4) : 0, lastSentMs: 0, failures: 0 };
   }
   private liveIncidents() {
     const cutoff = Date.now() - INCIDENT_TTL_MS;

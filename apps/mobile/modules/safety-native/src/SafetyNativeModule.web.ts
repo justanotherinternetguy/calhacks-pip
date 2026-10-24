@@ -137,6 +137,9 @@ export class WebSafetyNative implements SafetyNativeModuleType {
   // §6 personal dashboard: no sensing on web, so the live metrics/incident log are the mock's.
   getDashboard() { return this.mock.getDashboard(); }
   setDashboardStreaming(on: boolean) { return this.mock.setDashboardStreaming(on); }
+  // §7 telemetry: a browser never publishes; the web monitor subscribes via lib/telemetry.ts. Preference only.
+  setTelemetry(on: boolean) { return this.mock.setTelemetry(on); }
+  getTelemetryStatus() { return this.mock.getTelemetryStatus(); }
 
   // ---- real crypto -------------------------------------------------------------------------------
   async getIdentity(): Promise<Identity> {

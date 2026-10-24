@@ -120,6 +120,37 @@ export type IncidentRecord = {
 };
 export type Dashboard = { metrics: LiveMetrics; incidents: IncidentRecord[] };
 
+// ---- §7 live telemetry stream (Android → web monitor). Supabase Realtime broadcast, topic `telemetry:{userId}`, event `tick`.
+/** Engine events since the last tick, snake_case (CONTRACTS §7). Unknown names are tolerated by the UI. */
+export type TelemetryEventName =
+  | 'check_requested' | 'heads_up' | 'unlock_location' | 'snatch_detected' | 'resolved' | 'risk_band_changed'
+  | 'battery_dying' | 'sampling_rate_changed' | 'signal_incident' | 'call_option';
+export type TelemetryTick = {
+  v: 1;
+  t: number; // unix ms on the phone
+  seq: number;
+  user: string;
+  metrics: LiveMetrics;
+  hmm: HmmState;
+  escalation: EscalationLevel;
+  riskBand: 0 | 1 | 2 | 3;
+  pDanger: number;
+  nightMode: boolean;
+  battery: number;
+  activity: Activity;
+  placement: Placement;
+  samplingFull: boolean;
+  accel: number[]; // |a| in g for the samples since the last tick (≤ 50), newest last
+  gyro: number[]; // |ω| rad/s, same length (zeros in low-rate mode)
+  sampleHz: number;
+  incidents: IncidentRecord[]; // deltas: records with id > lastSentId
+  incidentCount: number; // total live log size on the phone (gap detection)
+  events: (TelemetryEventName | string)[];
+  checkPhrase?: string; // while a check-in is pending
+  checkDeadlineMs?: number;
+};
+export type TelemetryStatus = { on: boolean; hz: number; lastSentMs: number; failures: number };
+
 export type SafetyNativeEvents = {
   statusChanged: Status;
   checkRequested: { phrase: string; deadlineMs: number };
@@ -161,6 +192,9 @@ export interface SafetyNativeModuleType {
   // §6 personal dashboard
   getDashboard(): Promise<Dashboard>;
   setDashboardStreaming(on: boolean): Promise<void>; // while on, emit 'dashboard' every 1 s
+  // §7 telemetry publisher (Android). 4 Hz while on (default on once configured) or while the dashboard streams; 1 Hz in night mode otherwise.
+  setTelemetry(on: boolean): Promise<void>;
+  getTelemetryStatus(): Promise<TelemetryStatus>;
   addListener<K extends SafetyNativeEventName>(
     name: K,
     cb: (event: SafetyNativeEvents[K]) => void,

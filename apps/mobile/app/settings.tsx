@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Alert, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Button, Card, H2, Input, P, Row, Screen, Toggle } from '@/components/ui';
-import { SafetyNative } from '@/modules/safety-native';
+import { SafetyNative, type TelemetryStatus } from '@/modules/safety-native';
 import { signOut } from '@/lib/native';
 import { useStore, writeDashboardEnabled } from '@/lib/store';
 
@@ -16,6 +16,32 @@ export default function Settings() {
   const [learning, setLearning] = useState(true);
   const [start, setStart] = useState('20');
   const [end, setEnd] = useState('6');
+
+  // §7 telemetry publisher: default on (native starts it once configured); poll the status while this screen is open.
+  const [telemetry, setTelemetry] = useState(true);
+  const [telemetryStatus, setTelemetryStatus] = useState<TelemetryStatus | null>(null);
+  const [telemetryError, setTelemetryError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => SafetyNative.getTelemetryStatus()
+      .then((s) => { if (alive) { setTelemetryStatus(s); setTelemetry(s.on); setTelemetryError(null); } })
+      .catch((e: unknown) => { if (alive) setTelemetryError(e instanceof Error ? e.message : 'not supported by this build'); });
+    load();
+    const t = setInterval(load, 5_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  const toggleTelemetry = async (v: boolean) => {
+    setTelemetry(v);
+    try { await SafetyNative.setTelemetry(v); } catch (e: unknown) {
+      setTelemetry(!v);
+      Alert.alert('Telemetry', e instanceof Error ? e.message : 'This build cannot stream telemetry.');
+    }
+  };
+  const telemetryHint = telemetryError
+    ? `Unavailable: ${telemetryError}`
+    : telemetryStatus
+      ? `${telemetryStatus.on ? `${telemetryStatus.hz} Hz` : 'off'} · last sent ${telemetryStatus.lastSentMs ? new Date(telemetryStatus.lastSentMs).toLocaleTimeString() : '—'}${telemetryStatus.failures ? ` · ${telemetryStatus.failures} failed` : ''}`
+      : 'Checking…';
 
   const saveWindow = () => SafetyNative.setEveningWindow(Number(start) || 20, Number(end) || 6).then(() => Alert.alert('Saved'));
   const inject = async () => {
@@ -58,6 +84,11 @@ export default function Settings() {
         <H2>Personal dashboard</H2>
         <Toggle label="Personal dashboard" hint="Live metrics vs your baseline, state probabilities and the engine's incident log. Only you can see it; friends get a one-line summary at most." value={dashboardEnabled} onChange={(v) => void writeDashboardEnabled(v)} />
         {dashboardEnabled && <Button title="Open dashboard" onPress={() => router.push('/dashboard')} />}
+      </Card>
+      <Card>
+        <H2>Live telemetry</H2>
+        <Toggle label="Stream telemetry to monitor" hint="Motion metrics, state probabilities and engine events go to your group's web monitor in real time (4 Hz). Location is never included." value={telemetry} onChange={(v) => void toggleTelemetry(v)} />
+        <P muted style={{ fontSize: 13 }}>{telemetryHint}</P>
       </Card>
       <Card>
         <H2>Debug</H2>
