@@ -2,5 +2,23 @@
 name = "safety-crypto"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+description = "Escrow, sealed-share and proximity crypto for the safe night-out app"
 
 [dependencies]
+x25519-dalek = { version = "3.0", features = ["static_secrets", "zeroize", "getrandom"] }
+ed25519-dalek = { version = "3.0", features = ["rand_core", "zeroize"] }
+hkdf = "0.13"
+sha2 = "0.11"
+hmac = "0.13"
+chacha20poly1305 = "0.11"
+hpke = { version = "0.14", default-features = false, features = ["alloc", "getrandom", "x25519", "chacha"] }
+getrandom = { version = "0.4", features = ["sys_rng"] }
+zeroize = { version = "1.9", features = ["zeroize_derive"] }
+subtle = "2.6"
+thiserror = "2"
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]
