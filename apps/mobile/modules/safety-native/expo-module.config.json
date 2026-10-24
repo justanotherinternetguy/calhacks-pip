@@ -1,16 +1,7 @@
 {
   "platforms": [
-    "ios",
     "android"
   ],
-  "ios": {
-    "modules": [
-      "SafetyNativeModule"
-    ],
-    "appDelegateSubscribers": [
-      "SafetyNativeAppDelegate"
-    ]
-  },
   "android": {
     "modules": [
       "expo.modules.safetynative.SafetyNativeModule"

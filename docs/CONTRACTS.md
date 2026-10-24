@@ -200,3 +200,30 @@ Default n = 4 friends, k = 2; fallback unlock requires ≥ 3 active members (enf
 
 ### Display
 `/dashboard` (personal, off by default, opened from Settings) shows live metrics vs bands, the four state probabilities, and the incident log. Friends get only the one-line triggering-sequence summary on unlock; never another user's dashboard.
+
+## 7. Live telemetry stream (Android → web monitor). iOS is out of scope (module removed).
+
+Transport: Supabase Realtime **broadcast** on a private channel, no DB rows.
+- Topic `telemetry:{subjectUserId}`, event `tick`. Private channel (`realtime.messages` RLS: subject may insert; subject + group-mates may select).
+- Publisher (Android native, OkHttp): `POST {supabaseUrl}/realtime/v1/api/broadcast` with headers `apikey`, `Authorization: Bearer {userJwt}`, `Content-Type: application/json`, body `{"messages":[{"topic":"telemetry:{uid}","event":"tick","private":true,"payload":{...}}]}`.
+- Rate: 4 Hz while telemetry is explicitly enabled (`setTelemetry(true)`, default ON when the app is configured) or the dashboard streams; 1 Hz in night mode otherwise; off when neither. One in-flight request at a time; drop (don't queue) if the previous POST hasn't returned.
+- Subscriber (web): `supabase.channel('telemetry:'+uid, { config: { private: true, broadcast: { ack: false } } }).on('broadcast', { event: 'tick' }, cb).subscribe()`.
+
+Payload (`v: 1`), all keys camelCase:
+```ts
+type TelemetryTick = {
+  v: 1; t: number /* unix ms */; seq: number; user: string;
+  metrics: LiveMetrics;                     // §6 shape (bands[], p*, placement, samplingFull, evidence, …)
+  hmm: HmmState; escalation: EscalationLevel; riskBand: 0|1|2|3; pDanger: number;
+  nightMode: boolean; battery: number; activity: Activity; placement: Placement; samplingFull: boolean;
+  accel: number[];                          // |a| in g for the samples since the last tick (≤ 50), newest last
+  gyro: number[];                           // |ω| rad/s, same length (zeros in low-rate mode)
+  sampleHz: number;
+  incidents: IncidentRecord[];              // records with id > lastSentId (deltas); first tick after (re)subscribe may be empty
+  incidentCount: number;                    // total live log size, lets the UI detect gaps and call getDashboard-equivalent REST refresh
+  events: string[];                         // engine events since last tick, snake_case: check_requested, heads_up, unlock_location, snatch_detected, resolved, risk_band_changed, battery_dying, sampling_rate_changed, signal_incident, call_option
+  checkPhrase?: string; checkDeadlineMs?: number;   // while a check-in is pending
+};
+```
+Native facade: `setTelemetry(on: boolean): Promise<void>`, `getTelemetryStatus(): Promise<{ on: boolean; hz: number; lastSentMs: number; failures: number }>`.
+Location is NOT in telemetry; it stays on the escrow path (location_blobs + released_keys).
