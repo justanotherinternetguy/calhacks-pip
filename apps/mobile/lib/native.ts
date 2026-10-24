@@ -17,14 +17,17 @@ let configuredFor: string | null = null;
 let subs: { remove(): void }[] = [];
 let channels: { unsubscribe(): unknown }[] = [];
 
-async function deviceId(): Promise<string> {
+async function deviceId(userId: string): Promise<string> {
+  // Per-user key: devices.user_id is unique and RLS only lets a user update their own row, so a device id
+  // left behind by a previous (e.g. anonymous) user on this phone must not be reused.
+  const key = `safe.deviceId.${userId}`;
   if (Platform.OS === 'web') {
-    let id = globalThis.localStorage?.getItem('safe.deviceId');
-    if (!id) { id = uuidv4(); globalThis.localStorage?.setItem('safe.deviceId', id); }
+    let id = globalThis.localStorage?.getItem(key);
+    if (!id) { id = uuidv4(); globalThis.localStorage?.setItem(key, id); }
     return id;
   }
-  let id = await SecureStore.getItemAsync('safe.deviceId');
-  if (!id) { id = uuidv4(); await SecureStore.setItemAsync('safe.deviceId', id); }
+  let id = await SecureStore.getItemAsync(key);
+  if (!id) { id = uuidv4(); await SecureStore.setItemAsync(key, id); }
   return id;
 }
 
@@ -47,7 +50,7 @@ export async function onAuthSession(session: Session | null) {
     return;
   }
   configuredFor = session.user.id;
-  const devId = await deviceId();
+  const devId = await deviceId(session.user.id);
   await SafetyNative.configure({
     supabaseUrl: SUPABASE_URL, supabaseAnonKey: SUPABASE_ANON_KEY, accessToken: session.access_token,
     userId: session.user.id, deviceId: devId, modelConfigToml: await modelConfigToml(),

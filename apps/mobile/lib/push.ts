@@ -58,6 +58,7 @@ export async function registerPushToken(userId: string, deviceId: string): Promi
     const token = typeof t.data === 'string' ? t.data : null;
     if (!token) { console.warn('push: unexpected token payload', t); return null; }
     await saveToken(userId, deviceId, token, kind);
+    console.log(`push: ${kind} token registered for device ${deviceId.slice(0, 8)}`);
 
     tokenSub?.remove();
     tokenSub = Notifications.addPushTokenListener((next) => {
