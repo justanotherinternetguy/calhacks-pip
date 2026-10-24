@@ -149,3 +149,15 @@ Edge functions (Deno, `supabase/functions/<name>/index.ts`): `push`, `watchdog`,
 | apps/mobile/modules/safety-native/ios | iOS agent |
 | apps/mobile/modules/safety-native/android | Android agent |
 | README.md, docs/ (except this file), .github/, e2e/, tools/, core/build-mobile.sh | docs/CI agent |
+
+## 5. Cross-platform escrow conventions (iOS and Android MUST match; friends on different platforms decrypt each other's data)
+- `hour_index` (u32) = `floor(unix_ms / 3_600_000)` — UTC-absolute hour number, NOT local hour of day. Used for `derive_hour_key`, `location_blobs.hour_index`, `released_keys.hour_index`.
+- `epoch_id` = the `epochs.id` uuid string (lowercase).
+- `key_shares.sealed` = `seal_to(recipient_x25519_pub, my_ed25519_secret, share.data, aad)` with `aad = "share|{epochId}|{recipientUserId}"`; `share_index` column carries the Shamir index.
+- `released_keys.sealed` = `seal_to(recipient_pub, my_ed25519_secret, hour_key, aad)` with `aad = "hour|{epochId}|{hourIndex}"`. Release current and next hour as two rows.
+- `unlock_approvals.sealed_share` = `seal_to(requester_pub, approver_ed25519_secret, [share_index as u8] ++ share.data, aad)` with `aad = "approval|{subjectUserId}|{epochId}"`.
+- `location_blobs.seq` = upload wall-clock unix ms (monotonic enough); AAD inside `encrypt_location` is `"{user_id}|{epoch_id}|{seq}"` as in §1.
+- Group proximity key (v1, accepted weakness: server can brute-force cells) = `SHA-256("safe/proximity|{groupId}|{YYYY-MM-DD UTC}")`.
+- Shamir parameters: n = active members excluding self; k = clamp(max(2, groups.threshold_k), 2, n); n < 2 → no shares, fallback unlock disabled.
+- Heartbeat = `PATCH /rest/v1/devices?id=eq.{deviceId}` with `{last_heartbeat: now, night_mode, battery_pct, risk_band, status_level}` (the `heartbeat` RPC is an equivalent alternative).
+- `incidents` row is first created at `heads_up` (first friend-visible level); `check` is device-local only.

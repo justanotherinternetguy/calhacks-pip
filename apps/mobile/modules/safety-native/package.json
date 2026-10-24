@@ -1,0 +1,8 @@
+{
+  "name": "safety-native",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Expo module facade over the native sensing service + Rust safety-core",
+  "main": "index.ts",
+  "types": "index.ts"
+}
