@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- The Expo config plugin also adds these to the app manifest; merging here is harmless. -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="merge" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="merge" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" tools:node="merge" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" tools:node="merge" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" tools:node="merge" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="merge" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" tools:node="merge" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" tools:node="merge" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="merge" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" tools:node="merge" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" tools:node="merge" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" tools:node="merge" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="merge" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" tools:node="merge" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="merge" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" tools:node="merge" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" tools:node="merge" />
+    <uses-permission android:name="android.permission.VIBRATE" tools:node="merge" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" tools:node="merge" />
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" tools:node="merge" />
+
+    <application>
+
+        <service
+            android:name=".SensingService"
+            android:exported="false"
+            android:foregroundServiceType="location|microphone|specialUse"
+            android:stopWithTask="false">
+            <!-- specialUse is only used before location permission is granted (Android 14+ refuses a location-type FGS without it). -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Passive personal-safety monitoring until the location permission is granted" />
+        </service>
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver android:name=".GeofenceReceiver" android:exported="false" />
+        <receiver android:name=".ActivityTransitionReceiver" android:exported="false" />
+        <receiver android:name=".AlarmReceiver" android:exported="false" />
+
+        <service
+            android:name=".SosTileService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_dialog_alert"
+            android:label="@string/safety_sos_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="false" />
+        </service>
+
+        <receiver
+            android:name=".SosWidget"
+            android:exported="true"
+            android:label="@string/safety_sos_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="expo.modules.safetynative.WIDGET_SOS" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/sos_widget_info" />
+        </receiver>
+
+        <activity
+            android:name=".CheckInActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.AppCompat.DayNight.NoActionBar" />
+
+    </application>
+</manifest>

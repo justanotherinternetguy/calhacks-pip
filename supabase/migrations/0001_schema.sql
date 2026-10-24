@@ -118,7 +118,7 @@ create table public.location_blobs (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null references auth.users(id) on delete cascade,
   epoch_id    uuid not null references public.epochs(id) on delete cascade,
-  hour_index  int not null check (hour_index between 0 and 23),
+  hour_index  int not null check (hour_index >= 0), -- floor(unix_ms / 3_600_000), UTC-absolute (CONTRACTS §5)
   seq         bigint not null,
   ciphertext  text not null,
   created_at  timestamptz not null default now(),
@@ -180,7 +180,7 @@ create table public.released_keys (
   subject_user_id     uuid not null references auth.users(id) on delete cascade,
   recipient_user_id   uuid not null references auth.users(id) on delete cascade,
   epoch_id            uuid not null references public.epochs(id) on delete cascade,
-  hour_index          int not null check (hour_index between 0 and 23),
+  hour_index          int not null check (hour_index >= 0), -- UTC-absolute hour number (CONTRACTS §5)
   sealed              text not null,
   sender_ed25519_pub  text not null,
   created_at          timestamptz not null default now()

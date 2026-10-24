@@ -1,0 +1,74 @@
+// Expo module: SafetyNative (Android). Built by the app's Gradle via expo-modules autolinking.
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+group = 'expo.modules.safetynative'
+version = '0.1.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useExpoPublishing()
+useDefaultAndroidSdkVersions()   // compileSdk/targetSdk from the app (35)
+
+android {
+  namespace "expo.modules.safetynative"
+
+  defaultConfig {
+    minSdkVersion 26
+    targetSdkVersion 35
+    versionCode 1
+    versionName "0.1.0"
+    // Rust core (cargo-ndk) ships arm64 + x86_64 only.
+    ndk { abiFilters "arm64-v8a", "x86_64" }
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+  kotlinOptions { jvmTarget = "17" }
+
+  sourceSets {
+    main {
+      // libsafety_ffi.so per ABI, produced by `cargo ndk` (see README.md)
+      jniLibs.srcDirs = ['src/main/jniLibs']
+      // model-v1.toml, yamnet.tflite, yamnet_class_map.csv
+      assets.srcDirs = ['src/main/assets']
+    }
+  }
+
+  androidResources { noCompress 'tflite' }
+  buildFeatures { buildConfig false }
+  lintOptions { abortOnError false }
+}
+
+// Keep assets/model-v1.toml in sync with core/config (EngineHolder falls back to it when `configure` passes no TOML).
+def modelToml = file("${rootProject.projectDir}/../../core/config/model-v1.toml")
+tasks.register("copyModelConfig", Copy) {
+  onlyIf { modelToml.exists() }
+  from modelToml
+  into file("src/main/assets")
+}
+preBuild.dependsOn "copyModelConfig"
+
+dependencies {
+  // uniffi-generated Kotlin bindings (uniffi/safety/safety.kt) load libsafety_ffi.so through JNA.
+  implementation "net.java.dev.jna:jna:5.14.0@aar"
+
+  implementation "androidx.core:core-ktx:1.13.1"
+  implementation "androidx.appcompat:appcompat:1.7.0"
+  implementation "androidx.biometric:biometric:1.2.0-alpha05"
+  implementation "androidx.security:security-crypto:1.1.0-alpha06"
+  implementation "androidx.work:work-runtime-ktx:2.9.1"
+
+  implementation "com.google.android.gms:play-services-location:21.3.0"
+
+  implementation "org.tensorflow:tensorflow-lite:2.16.1"
+  implementation "org.tensorflow:tensorflow-lite-support:0.4.4"
+
+  implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
+  implementation "com.squareup.okhttp3:okhttp:4.12.0"
+  // org.json ships with the platform; no extra JSON dependency.
+}
