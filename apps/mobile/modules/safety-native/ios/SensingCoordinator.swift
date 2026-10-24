@@ -45,6 +45,32 @@ extension Placement {
     }
 }
 
+extension Activity {
+    var key: String {
+        switch self {
+        case .unknown: return "unknown"
+        case .stationary: return "stationary"
+        case .walking: return "walking"
+        case .running: return "running"
+        case .vehicle: return "vehicle"
+        }
+    }
+}
+
+extension IncidentKind {
+    /// lowercase snake, as the JS dashboard expects (CONTRACTS §6).
+    var key: String {
+        switch self {
+        case .gaitDrift: return "gait_drift"
+        case .impact: return "impact"
+        case .grab: return "grab"
+        case .stillness: return "stillness"
+        case .separated: return "separated"
+        case .typingOff: return "typing_off"
+        }
+    }
+}
+
 /// Process-wide singleton that owns the Rust `SafetyEngine` and wires sensors → engine → actions.
 /// All mutable state is touched on `q`; components call back onto `q`.
 final class SensingCoordinator {
@@ -73,7 +99,14 @@ final class SensingCoordinator {
     private(set) var lastLocation: CLLocation?
     private(set) var currentIncidentId: String?
     private var tickTimer: DispatchSourceTimer?
+    private var tickInterval: TimeInterval = 0
     private var tickCount = 0
+    private var dashboardTimer: DispatchSourceTimer?
+    /// Last `SamplingRateChanged` request from the engine; LOW until it asks for more (CONTRACTS §6).
+    private var requestedMode: MotionSampler.Mode = .low
+    /// Native-side ring of the last 64 `SignalIncident` records (dedupes re-emits; the engine owns the real log).
+    private(set) var signalRing: [IncidentRecord] = []
+    private var lastBaselineSaveMs: UInt64 = 0
     private var pendingCheck: (phrase: String, deadlineMs: UInt64)?
     private var baselineWalkStart: Date?
     private var booted = false
@@ -98,6 +131,8 @@ final class SensingCoordinator {
             }
             self.alerts.install(coordinator: self)
             self.device.start { [weak self] in self?.q.async { self?.emitStatus() } }
+            TouchTracker.shared.onUnlock = { [weak self] in self?.phoneUnlocked() }
+            TouchTracker.shared.install()
             self.audio.onScores = { [weak self] s in self?.engine?.pushAudio(s: s) }
             self.nightMode.onChange = { [weak self] active, _ in self?.q.async { self?.nightModeChanged(active) } }
             self.nightMode.onLocation = { [weak self] loc in self?.q.async { self?.lastLocation = loc; self?.locations.onLocation(loc) } }
@@ -110,11 +145,39 @@ final class SensingCoordinator {
         let e = try SafetyEngine(configToml: c.modelConfigToml, baselineBlob: blob, nowMs: nowMs())
         e.setLearning(enabled: UserDefaults.standard.object(forKey: "safe.learning") as? Bool ?? true)
         engine = e
+        lastBaselineSaveMs = SafeClock.nowMs()
+        startMotion()
     }
 
+    /// Engine blob (baselines + incident log, CONTRACTS §6). Written every 5 min from the tick and at session stop.
     private func saveBaseline() {
         guard let engine else { return }
         Store.write(engine.exportBaseline(), "baseline.bin")
+        lastBaselineSaveMs = SafeClock.nowMs()
+    }
+
+    // MARK: motion sampling (runs whenever an engine exists, not only in night sessions)
+
+    /// FULL during a baseline walk, otherwise whatever the engine last asked for.
+    private var effectiveMode: MotionSampler.Mode { baselineWalkStart != nil ? .full : requestedMode }
+
+    /// Starts (or re-modes) the sampler and makes sure the ticker runs. Outside the continuous-location session
+    /// iOS suspends the process shortly after backgrounding, so idle sampling only covers foreground use and
+    /// resumes with the app; the pedometer / activity manager are left alone until Motion & Fitness is granted.
+    private func startMotion() {
+        guard engine != nil else { return }
+        motion.start(mode: effectiveMode) { [weak self] batch in self?.engine?.pushMotion(samples: batch) }
+        if ActivityTracker.authorization == "granted" { activity.start() }
+        scheduleTicker()
+    }
+
+    /// Owner unlocked / foregrounded the phone (TouchTracker): clears a grab inside its 2-minute window.
+    private func phoneUnlocked() {
+        q.async {
+            guard let engine = self.engine else { return }
+            engine.pushAction(a: .phoneUnlocked, nowMs: self.nowMs())
+            if self.sessionActive { self.tick() }
+        }
     }
 
     // MARK: configuration (called from the Expo module)
@@ -193,26 +256,28 @@ final class SensingCoordinator {
         sessionActive = true
         engine.setNightMode(active: true, nowMs: nowMs())
         nightMode.startContinuousLocation()
-        motion.start { [weak self] batch in self?.engine?.pushMotion(samples: batch) }
-        activity.start()
+        startMotion()
+        activity.start()   // may prompt for Motion & Fitness if onboarding never did
         heartbeat.start()
         proximity.start()
         startAudio()
         if let c = config { Task { await self.escrow.ensureEpoch(cfg: c, group: self.group, rest: self.rest) } }
-        startTicker()
+        scheduleTicker()
         emitStatus()
     }
 
     private func stopSession() {
         guard sessionActive else { return }
         sessionActive = false
-        if baselineWalkStart == nil { stopTicker(); motion.stop(); activity.stop() }
         audio.stop()
         heartbeat.stop()
         proximity.stop()
         nightMode.stopContinuousLocation()
         engine?.setNightMode(active: false, nowMs: nowMs())
         saveBaseline()
+        // Motion keeps sampling in the engine-requested mode; the ticker drops to the idle cadence.
+        if baselineWalkStart == nil, ActivityTracker.authorization != "granted" { activity.stop() }
+        scheduleTicker()
         emitStatus()
     }
 
@@ -228,23 +293,32 @@ final class SensingCoordinator {
 
     func retryAudio() { q.async { if self.sessionActive { self.startAudio() } } }
 
-    private func startTicker() {
-        guard tickTimer == nil else { return }
+    private var wantsFastTick: Bool { sessionActive || baselineWalkStart != nil }
+
+    /// 1 s during a night session / baseline walk; 5 s idle, so the engine still sees `Context` (and can ask for
+    /// FULL sampling or learn from daytime walks) while only the low-rate sampler runs. Reschedules in place
+    /// when the cadence changes; stops when there is nothing to feed.
+    private func scheduleTicker() {
+        let interval: TimeInterval = wantsFastTick ? 1 : 5
+        guard engine != nil, wantsFastTick || motion.running else { stopTicker(); return }
+        guard tickTimer == nil || interval != tickInterval else { return }
+        stopTicker()
+        tickInterval = interval
         let t = DispatchSource.makeTimerSource(queue: q)
-        t.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(100))
+        t.schedule(deadline: .now() + interval, repeating: interval, leeway: .milliseconds(100))
         t.setEventHandler { [weak self] in self?.tick() }
         t.resume()
         tickTimer = t
     }
 
-    private func stopTicker() { tickTimer?.cancel(); tickTimer = nil }
+    private func stopTicker() { tickTimer?.cancel(); tickTimer = nil; tickInterval = 0 }
 
-    // MARK: 1 s tick
+    // MARK: tick (1 s in session, 5 s idle)
 
     func tickNow(onQueue: Bool = false) { onQueue ? tick() : q.async { self.tick() } }
 
     private func tick() {
-        guard let engine, sessionActive || baselineWalkStart != nil else { return }
+        guard let engine else { return }
         let now = nowMs()
         tickCount += 1
         if virtualNowMs == nil { engine.pushContext(ctx: currentContext(now)) }   // trace replay supplies its own
@@ -253,13 +327,13 @@ final class SensingCoordinator {
             pendingCheck = nil
             engine.pushAction(a: .checkTimeout, nowMs: now)
         }
+        if SafeClock.nowMs() &- lastBaselineSaveMs >= 300_000 { saveBaseline() }   // every 5 min, idle or not
         guard sessionActive else { return }
         let snap = engine.snapshot()
         if snap.riskBand > 0 || snap.hmmState != .normal { audio.boost(seconds: 120) }
         audio.schedule()
-        if tickCount % 60 == 0 {
-            saveBaseline()
-            if let c = config { Task { await self.escrow.ensureEpoch(cfg: c, group: self.group, rest: self.rest) } }   // midnight rotation
+        if tickCount % 60 == 0, let c = config {
+            Task { await self.escrow.ensureEpoch(cfg: c, group: self.group, rest: self.rest) }   // midnight rotation
         }
         if tickCount % 5 == 0 { emitStatus(snap) }
     }
@@ -267,10 +341,13 @@ final class SensingCoordinator {
     private func currentContext(_ now: UInt64) -> Context {
         var act = activity.current
         if act == .unknown, let t = motion.lastStepAt, Date().timeIntervalSince(t) < 10 { act = .walking }
-        let speed: Float = lastLocation.map { $0.speed >= 0 ? Float($0.speed) : -1 } ?? -1
+        let loc = lastLocation ?? nightMode.lastKnownLocation
+        let speed: Float = loc.map { $0.speed >= 0 ? Float($0.speed) : -1 } ?? -1
+        let distanceHome: Float = loc.flatMap { nightMode.distanceToNearestHome(from: $0) }.map { Float($0) } ?? -1
         return Context(tMs: now, awayFromHome: nightMode.awayFromHome, separated: proximity.separated,
                        hourLocal: SafeClock.hourLocal(), screenOn: device.screenOn, activity: act,
-                       batteryPct: device.batteryPct, speedMps: speed)
+                       batteryPct: device.batteryPct, speedMps: speed,
+                       lastTouchMs: TouchTracker.shared.lastTouchMs, distanceHomeM: distanceHome, samplingFull: motion.isFull)
     }
 
     private func handle(_ ev: EngineEvent) {
@@ -281,6 +358,8 @@ final class SensingCoordinator {
             emit?("checkRequested", ["phrase": phrase, "deadlineMs": deadlineMs])
             audio.boost(seconds: 120)
         case .headsUp(let summary):
+            // Also emitted immediately on a grab (CONTRACTS §6): friends are told, but no keys are released
+            // until `.unlockLocation` follows (2 min later unless the owner unlocks / biometric-dismisses).
             escalate(level: "heads_up", summary: summary, eventKind: "heads_up", title: "Your friend might not be okay", critical: false, releaseKeys: false)
         case .unlockLocation(let summary):
             escalate(level: sos.active ? "sos" : "unlocked", summary: summary, eventKind: "release",
@@ -309,6 +388,18 @@ final class SensingCoordinator {
                      title: "Your friend's phone is about to die", critical: false, releaseKeys: false)
         case .locationIntervalChanged(let seconds):
             locations.interval = TimeInterval(seconds)
+        case .samplingRateChanged(let hz, let gyro):
+            requestedMode = MotionSampler.modeFor(hz: hz, gyro: gyro)
+            if motion.running { motion.setMode(effectiveMode) } else { startMotion() }
+        case .signalIncident(let record):
+            guard !signalRing.contains(where: { $0.id == record.id }) else { return }
+            signalRing.append(record)
+            if signalRing.count > 64 { signalRing.removeFirst(signalRing.count - 64) }
+            if sessionActive { audio.boost(seconds: 120) }   // listen harder for 2 min after any motion signal
+            emit?("signalIncident", incidentDict(record))
+        case .callOptionAvailable(let summary):
+            emit?("callOption", ["summary": summary])
+            postCallOption(summary)
         }
     }
 
@@ -337,6 +428,18 @@ final class SensingCoordinator {
             }
             try? await self.rest.insert("incident_events", ["incident_id": incidentId, "actor_id": c.userId, "kind": eventKind, "payload": payload])
             try? await self.rest.function("push", ["incidentId": incidentId, "kind": level, "title": title, "body": summary, "critical": critical])
+        }
+    }
+
+    /// 10 min with no response (CONTRACTS §6): friends get the one-tap campus-safety / 911 option. The engine
+    /// only emits this after an unlock, so the `incidents` row already exists; without one we just emit to JS.
+    private func postCallOption(_ summary: String) {
+        guard let c = config, rest.isConfigured, let incidentId = currentIncidentId else { return }
+        Task { [rest = self.rest] in
+            try? await rest.insert("incident_events", ["incident_id": incidentId, "actor_id": c.userId, "kind": "call_option",
+                                                       "payload": ["summary": summary]])
+            try? await rest.function("push", ["incidentId": incidentId, "kind": "call_option", "title": "Your friend still hasn't responded",
+                                              "body": summary, "critical": true])
         }
     }
 
@@ -397,9 +500,9 @@ final class SensingCoordinator {
             engine.setLearning(enabled: true)
             UserDefaults.standard.set(true, forKey: "safe.learning")
             self.baselineWalkStart = Date()
-            self.motion.start { [weak self] batch in self?.engine?.pushMotion(samples: batch) }
+            self.startMotion()   // effectiveMode is FULL for the walk
             self.activity.start()
-            self.startTicker()
+            self.scheduleTicker()
         }
     }
 
@@ -407,7 +510,9 @@ final class SensingCoordinator {
         q.sync {
             let seconds = baselineWalkStart.map { Int(Date().timeIntervalSince($0)) } ?? 0
             baselineWalkStart = nil
-            if !sessionActive { stopTicker(); motion.stop(); activity.stop() }
+            motion.setMode(effectiveMode)   // back to the engine-requested mode
+            if !sessionActive, ActivityTracker.authorization != "granted" { activity.stop() }
+            scheduleTicker()
             saveBaseline()
             return seconds
         }
@@ -453,5 +558,60 @@ final class SensingCoordinator {
         }
         return ["pDanger": s.pDanger, "hmmState": s.hmmState.key, "escalation": s.escalation.key, "riskBand": Int(s.riskBand),
                 "evidence": s.evidence, "baselineSeconds": Int(s.baselineSeconds), "placement": s.placement.key, "nightMode": s.nightMode]
+    }
+
+    // MARK: dashboard (CONTRACTS §6)
+
+    func dashboard() -> [String: Any] { q.sync { dashboardLocked() } }
+
+    /// While on, emits `dashboard` every 1 s (metrics + the engine's incident log). Idempotent.
+    func setDashboardStreaming(_ on: Bool) {
+        q.async {
+            if on {
+                guard self.dashboardTimer == nil else { return }
+                let t = DispatchSource.makeTimerSource(queue: self.q)
+                t.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(100))
+                t.setEventHandler { [weak self] in
+                    guard let self, let emit = self.emit else { return }
+                    emit("dashboard", self.dashboardLocked())
+                }
+                t.resume()
+                self.dashboardTimer = t
+            } else {
+                self.dashboardTimer?.cancel()
+                self.dashboardTimer = nil
+            }
+        }
+    }
+
+    private func dashboardLocked() -> [String: Any] {
+        guard let engine else { return ["metrics": metricsDict(nil), "incidents": [[String: Any]]()] }
+        return ["metrics": metricsDict(engine.metrics()), "incidents": engine.incidentLog().map(incidentDict)]
+    }
+
+    /// Floats as JS numbers; NaN / ±inf (possible before a baseline exists) become 0 so JSON encoding never throws.
+    private func num(_ f: Float) -> Double { f.isFinite ? Double(f) : 0 }
+
+    private func metricsDict(_ m: LiveMetrics?) -> [String: Any] {
+        guard let m else {
+            return ["tMs": 0, "placement": "unknown", "samplingFull": motion.isFull, "activity": "unknown", "bands": [[String: Any]](),
+                    "pNormal": 1, "pImpaired": 0, "pIncident": 0, "pUnresponsive": 0,
+                    "baselineTrusted": false, "baselineWalkDays": 0, "evidence": ""]
+        }
+        return ["tMs": m.tMs, "placement": m.placement.key, "samplingFull": m.samplingFull, "activity": m.activity.key,
+                "bands": m.bands.map(bandDict),
+                "pNormal": num(m.pNormal), "pImpaired": num(m.pImpaired), "pIncident": num(m.pIncident), "pUnresponsive": num(m.pUnresponsive),
+                "baselineTrusted": m.baselineTrusted, "baselineWalkDays": num(m.baselineWalkDays), "evidence": m.evidence]
+    }
+
+    private func bandDict(_ b: MetricBand) -> [String: Any] {
+        ["name": b.name, "value": num(b.value), "mean": num(b.mean), "sd": num(b.sd), "sdDistance": num(b.sdDistance), "inBand": b.inBand]
+    }
+
+    private func incidentDict(_ r: IncidentRecord) -> [String: Any] {
+        ["id": Int(r.id), "tMs": r.tMs, "kind": r.kind.key, "summary": r.summary, "sdDistance": num(r.sdDistance),
+         "placement": r.placement.key, "rawJson": r.rawJson,
+         "pNormal": num(r.pNormal), "pImpaired": num(r.pImpaired), "pIncident": num(r.pIncident), "pUnresponsive": num(r.pUnresponsive),
+         "sequenceId": Int(r.sequenceId), "watched": r.watched]
     }
 }

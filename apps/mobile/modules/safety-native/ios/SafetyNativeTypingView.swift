@@ -53,6 +53,7 @@ final class SafetyNativeTypingView: ExpoView, UITextFieldDelegate {
     // MARK: recording
 
     @objc private func editingChanged() {
+        TouchTracker.shared.recordTouch()   // system keyboard touches are invisible to TouchTracker's window recognisers
         let now = Date()
         if startedAt == nil { startedAt = now }
         let t = now.timeIntervalSince(startedAt ?? now) * 1000

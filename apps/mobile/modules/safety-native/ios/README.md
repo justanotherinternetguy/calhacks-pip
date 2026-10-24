@@ -1,15 +1,17 @@
 # SafetyNative — iOS
 
-Swift side of the `SafetyNative` Expo module (CONTRACTS §2). Owns everything that must keep running while
-JS is asleep: night-mode controller, 50 Hz motion, location, YAMNet audio, the Rust engine tick, heartbeats,
-encrypted location + proximity uploads, key escrow, notifications, alarm and manual SOS.
+Swift side of the `SafetyNative` Expo module (CONTRACTS §2 + §6). Owns everything that must keep running while
+JS is asleep: night-mode controller, motion (10 Hz idle / 50 Hz + gyro on demand), location, YAMNet audio, the
+Rust engine tick, heartbeats, encrypted location + proximity uploads, key escrow, notifications, alarm, manual
+SOS, touch / unlock tracking and the live dashboard feed.
 
 | File | What |
 |---|---|
 | `SafetyNativeModule.swift` | Expo `Module` facade (every method/event from CONTRACTS §2) + `SafetyNativeAppDelegate` subscriber |
-| `SensingCoordinator.swift` | Singleton owning the `SafetyEngine`; 1 s tick; `EngineEvent` → notifications / rows / push / JS events |
+| `SensingCoordinator.swift` | Singleton owning the `SafetyEngine`; 1 s tick (5 s idle); `EngineEvent` → notifications / rows / push / JS events; dashboard feed |
 | `NightModeController.swift` | Home geofences + significant-change relaunch, evening window, modes, continuous location in night mode |
-| `Sensors.swift` | `MotionSampler` (CMDeviceMotion 50 Hz → 1 s batches), `ActivityTracker`, `DeviceState` (screen/unlock/battery) |
+| `Sensors.swift` | `MotionSampler` (LOW 10 Hz accel / FULL 50 Hz + gyro → 1 s batches), `ActivityTracker`, `DeviceState` (screen/unlock/battery) |
+| `TouchTracker.swift` | `Context.lastTouchMs` from in-app touches + unlock notifications; owner unlock → `UserAction.phoneUnlocked` |
 | `Uploaders.swift` | `HeartbeatUploader` (2 min), `LocationUploader` (engine-adaptive, `encryptLocation` under `K_h`), `ProximityUploader` (2 min) |
 | `EscrowManager.swift` | Identity in Keychain, K_day rotation + Shamir shares sealed to friends, K_h derivation, release on unlock, friend-side caches |
 | `AudioMonitor.swift` | `AVAudioEngine` kept alive all night; `YamnetClassifier` (TFLite) on 0.975 s @ 16 kHz windows, 5 s / 30 s duty, 2 min boost |
@@ -66,11 +68,18 @@ API facts the Swift side relies on (verified against `Generated/safety.swift`, 2
   `UserAction.{dismissOk,dismissWrongPhrase,needHelp,manualSos,biometricDismiss,friendMarkedSafe,checkTimeout}`,
   `EngineEvent.{checkRequested(phrase:deadlineMs:), headsUp(summary:), unlockLocation(summary:),
   snatchDetected(summary:), resolved, riskBandChanged(band:), batteryDying, locationIntervalChanged(seconds:)}`.
-- Records are structs with labelled memberwise inits, e.g. `MotionSample(tMs:ax:ay:az:gx:gy:gz:)`,
-  `Context(tMs:awayFromHome:separated:hourLocal:screenOn:activity:batteryPct:speedMps:)`,
+- Records are structs with labelled memberwise inits, e.g. `MotionSample(tMs:ax:ay:az:gx:gy:gz:rx:ry:rz:)`,
+  `Context(tMs:awayFromHome:separated:hourLocal:screenOn:activity:batteryPct:speedMps:lastTouchMs:distanceHomeM:samplingFull:)`,
   `AudioScores(tMs:scream:shout:glass:)`, `TypingSample(phrase:typed:keyTimesMs:backspaces:durationMs:)`,
   `Location(lat:lng:accuracyM:tMs:)`, `Share(index:data:)`; `Snapshot` has
   `pDanger, hmmState, escalation, riskBand, evidence, baselineSeconds, placement, nightMode`.
+- **v1.1 (CONTRACTS §6; bindings regenerate after the Rust change)** — the Swift side already codes against:
+  `EngineEvent.{samplingRateChanged(hz: UInt32, gyro: Bool), signalIncident(record: IncidentRecord),
+  callOptionAvailable(summary:)}`, `UserAction.phoneUnlocked`,
+  `IncidentKind.{gaitDrift,impact,grab,stillness,separated,typingOff}`, `MetricBand`, `LiveMetrics`,
+  `IncidentRecord` (`id`/`sequenceId` are `UInt32`), `SafetyEngine.metrics() -> LiveMetrics` and
+  `incidentLog() -> [IncidentRecord]`. New record fields are appended in the order §6 lists them, which is the
+  order uniffi's memberwise init uses.
 
 ## Module registration (app agent: `expo-module.config.json`)
 
@@ -112,7 +121,47 @@ intent (App Intents inside static libraries need Xcode 15.3+), move `AppIntents.
   `paused_tonight` reverts to `auto` at the next window end. With no home places saved, `auto` never
   activates (there is no "away" to detect).
 - **Session:** continuous location (100 m, no auto-pause) keeps the process alive; motion batches of
-  50 samples go to `pushMotion`; the 1 s tick pushes `Context`, calls `tick`, dispatches events.
+  ~1 s go to `pushMotion`; the 1 s tick pushes `Context`, calls `tick`, dispatches events, and writes the
+  engine blob (`baseline.bin`: baselines + incident log) every 5 min and again at session stop.
+- **Sampling modes (CONTRACTS §6):** `MotionSampler` starts in **LOW** — raw accelerometer at ~10 Hz
+  (`accelerometerUpdateInterval = 0.1`), gravity from a first-order low-pass (τ ≈ 1 s), user acceleration =
+  raw − gravity, `rx..rz = 0`, 10-sample batches. `EngineEvent.samplingRateChanged(hz:gyro:)` switches to
+  **FULL** when `gyro` or `hz ≥ 25` — `CMDeviceMotion` at 50 Hz (fused gravity / user acceleration) plus
+  `rotationRate` as `rx..rz` (rad/s, device frame), 50-sample batches — and back to LOW otherwise. Baseline
+  walks force FULL for their duration. `Context.samplingFull` reports what is actually being delivered (a
+  gyro-less device stays LOW). Low-rate sampling runs **whenever an engine exists**, not only in night
+  sessions, with a 5 s idle tick so the engine keeps receiving `Context` (and can ask for FULL / learn from
+  daytime walks). Caveat: without the continuous-location session iOS suspends the process a few seconds after
+  it leaves the foreground, so idle sampling only covers foreground use plus the background grace period, and
+  resumes when the app comes back; nothing is lost at night because the session's location updates keep the
+  process alive. The pedometer / activity manager are only started idle once Motion & Fitness is granted
+  (starting them is what triggers the permission prompt).
+- **Context (v1.1 fields):** `lastTouchMs` from `TouchTracker`; `distanceHomeM` = metres from the latest
+  location (continuous updates, else the manager's cached fix) to the centre of the nearest saved home,
+  `-1` with no homes or no fix; `samplingFull` = `MotionSampler.isFull`.
+- **Touch tracking (`TouchTracker`):** a transparent `UIGestureRecognizer` (`cancelsTouchesInView = false`,
+  recognises simultaneously, fails on `touchesBegan`) is attached to every window of every connected scene
+  (RN root, modals, alerts), re-checked on `didBecomeActive` and `UIWindow.didBecomeKey/Visible`.
+  `protectedDataDidBecomeAvailable` (device unlocked while we are alive) and `didBecomeActive` also count as a
+  touch and, coalesced to once per 2 s, call `pushAction(.phoneUnlocked)` so a grab clears inside its 2-minute
+  window. `SafetyNativeTypingView` records a touch per key. **Limits:** the system keyboard, notification
+  banners, Control Centre, the lock screen and other apps are outside our windows, so touches there are
+  invisible — only the unlock notifications see "the owner is using the phone"; `lastTouchMs` is in-memory
+  (0 after a relaunch until the first touch / unlock); while suspended nothing is recorded. No `sendEvent`
+  swizzle is used (RN owns `UIWindow`), which is why keyboard touches are reported from the typing view.
+- **Dashboard (CONTRACTS §6):** `getDashboard()` → `{ metrics: LiveMetrics, incidents: IncidentRecord[] }`
+  straight from `engine.metrics()` / `engine.incidentLog()`; `setDashboardStreaming(true)` runs a 1 s timer on
+  the coordinator queue emitting `dashboard` with the same payload (idempotent; `false` or module teardown
+  stops it). Field names are the Rust names in camelCase; enums are lowercase snake strings (`kind`:
+  `gait_drift | impact | grab | stillness | separated | typing_off`; `placement`, `activity` likewise);
+  non-finite floats are sent as 0. With no engine yet, `metrics` is a neutral record (`pNormal = 1`,
+  empty `bands`) and `incidents` is `[]`.
+- **v1.1 events:** `signalIncident` (the `IncidentRecord` dict; deduped by `id` through a 64-entry native ring
+  buffer; also boosts the audio classifier for 2 min in session), `callOption` (`{ summary }`; additionally
+  inserts `incident_events.kind='call_option'` on the open incident and calls `functions/v1/push` with
+  `kind: 'call_option'`). `samplingRateChanged` never reaches JS; it reconfigures `MotionSampler`. A grab's
+  immediate `headsUp` goes through the normal `heads_up` path (row + push, **no** key release); keys are released
+  only by the `unlockLocation` that follows unless the owner unlocked.
 - **Incidents:** first friend-visible level (`heads_up` / `unlocked` / `snatch` / `sos`) inserts the
   `incidents` row; later levels PATCH it; each step adds an `incident_events` row and calls
   `functions/v1/push`. `UnlockLocation` and `SnatchDetected` also seal the current + next `K_h` to each
@@ -147,3 +196,9 @@ match CONTRACTS §5 (see "Behaviour notes").
 3. **Notification permission** is reported from a cached value refreshed asynchronously (API is async).
 4. `approveUnlock` does not insert the `unlock_approvals` row (JS does); `decryptLocations` needs
    `openReleasedKey` or `recoverFromShares` first (keys are cached in memory only).
+5. **Touch coverage** (§6 "root view touch listener"): only touches inside the app's own windows are seen; the
+   system keyboard is covered via `SafetyNativeTypingView`, not generically. Lock-screen unlock is inferred from
+   `protectedDataDidBecomeAvailable` / `didBecomeActive`, which fire only while the process is alive.
+6. `callOptionAvailable` with no open incident (should not happen: it follows an unlock) only emits the JS
+   event; no row or push is written.
+7. `signalIncident` posts no local notification; the dashboard is opt-in and the engine keeps the log.

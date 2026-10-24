@@ -172,6 +172,12 @@ final class NightModeController: NSObject, CLLocationManagerDelegate {
         evaluate()
     }
 
+    /// Metres from `loc` to the centre of the nearest saved home (edge of the radius is *not* subtracted);
+    /// nil when no homes are configured. Feeds `Context.distanceHomeM` (CONTRACTS §6, -1 = unknown).
+    func distanceToNearestHome(from loc: CLLocation) -> Double? {
+        homes.map { loc.distance(from: CLLocation(latitude: $0.lat, longitude: $0.lng)) }.min()
+    }
+
     private func updateAway(from loc: CLLocation) {
         guard !homes.isEmpty else { return }   // no homes configured → never "away"; auto mode stays idle
         let atHome = homes.contains { h in

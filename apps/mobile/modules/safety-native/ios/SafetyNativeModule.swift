@@ -82,14 +82,17 @@ public class SafetyNativeModule: Module {
     public func definition() -> ModuleDefinition {
         Name("SafetyNative")
 
-        Events("statusChanged", "checkRequested", "escalation", "snatch", "sos")
+        Events("statusChanged", "checkRequested", "escalation", "snatch", "sos", "dashboard", "signalIncident", "callOption")
 
         OnCreate {
             SensingCoordinator.shared.emit = { [weak self] name, body in self?.sendEvent(name, body) }
             SensingCoordinator.shared.bootstrap()
         }
 
-        OnDestroy { SensingCoordinator.shared.emit = nil }
+        OnDestroy {
+            SensingCoordinator.shared.setDashboardStreaming(false)
+            SensingCoordinator.shared.emit = nil
+        }
 
         // Setup
 
@@ -114,6 +117,11 @@ public class SafetyNativeModule: Module {
         }
 
         AsyncFunction("getStatus") { () -> [String: Any] in self.c.status() }
+
+        // Dashboard (CONTRACTS §6)
+
+        AsyncFunction("getDashboard") { () -> [String: Any] in self.c.dashboard() }
+        AsyncFunction("setDashboardStreaming") { (on: Bool) in self.c.setDashboardStreaming(on) }
 
         // Check-in / SOS
 
