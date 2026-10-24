@@ -108,13 +108,13 @@ and the whole group. Accepted risks and adversary table: [docs/THREAT_MODEL.md](
 
 | Milestone | Status | Notes |
 |---|---|---|
-| M0 spikes (locked-phone 50 Hz, iOS bg mic, battery, EAS build, Critical Alerts) | todo | hardware spikes not run; Apple entitlement deliberately out of hackathon scope |
-| M1 foundation (monorepo, CI, schema + RLS, auth, onboarding, QR friends, groups) | partial | workspaces, CI, contracts, `0001_schema.sql` done; auth/onboarding/QR in progress |
-| M2 sensing (native services, night-mode controller, Rust features, baselines, trace recorder) | partial | native modules + `safety-core` signal/baseline in progress |
-| M3 reasoning (HMM, escalation, typing check-in, replayed traces) | partial | engine contract fixed; `sim batch` + golden stories in progress |
-| M4 escrow (epochs, Shamir, HPKE, blobs, normal + fallback unlock, proximity, push, watchdog) | partial | `safety-crypto` + FFI in progress; functions scaffolded |
-| M5 friend response (incident screens, ring/call/en-route/resolve, escalate card, audit log) | partial | screens in progress |
-| M6 extra paths (audio classifier, snatch, manual SOS / intents / widgets / QS tile) | partial | snatch + in-app SOS targeted; YAMNet, App Intents, widgets, QS tile todo |
+| M0 spikes (locked-phone 50 Hz, iOS bg mic, battery, EAS build, Critical Alerts) | todo | hardware spikes need real phones; Apple entitlement deliberately out of hackathon scope |
+| M1 foundation (monorepo, CI, schema + RLS, auth, onboarding, QR friends, groups) | done (unverified on device) | workspaces, CI, contracts, 4 migrations (pgTAP 25/25 on Postgres 17), OTP/OAuth sign-in, onboarding, QR add, groups screens; typecheck passes |
+| M2 sensing (native services, night-mode controller, Rust features, baselines, trace recorder) | code complete, uncompiled natively | Swift + Kotlin services written against generated uniffi bindings (no Xcode/SDK here); `safety-core` signal/baseline tested |
+| M3 reasoning (HMM, escalation, typing check-in, replayed traces) | done | HMM + escalation engine, 23 Rust tests, `sim batch` 6/6 (story A unlocks at fall+5 min, story B quiet) |
+| M4 escrow (epochs, Shamir, HPKE, blobs, normal + fallback unlock, proximity, push, watchdog) | done (push unverified live) | `safety-crypto` 19 tests; shared conventions in CONTRACTS §5; APNs/FCM builders unit-tested, no live credentials |
+| M5 friend response (incident screens, ring/call/en-route/resolve, escalate card, audit log) | done (web mock verified only) | incident timeline, map after unlock, fallback-unlock approval flow, history + audit screens |
+| M6 extra paths (audio classifier, snatch, manual SOS / intents / widgets / QS tile) | code complete | snatch detector tested in Rust; YAMNet wrappers, App Intent, widget, QS tile written; `yamnet.tflite` asset not bundled |
 | M7 data + tuning (collection study, threshold tuning in sim) | partial | `tools/collect` + sim gate + protocol/consent written; no study data yet |
 | M8 hardening + launch (crypto review, threat model, store compliance, privacy/terms, a11y, beta) | partial | THREAT_MODEL / PRIVACY / STORE_COMPLIANCE drafted; external review, a11y, beta todo |
 
