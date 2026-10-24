@@ -1,0 +1,11 @@
+{
+  "name": "safe",
+  "private": true,
+  "scripts": {
+    "mobile": "pnpm --filter mobile start",
+    "typecheck": "pnpm -r typecheck",
+    "test:rust": "cargo test --workspace --manifest-path core/Cargo.toml",
+    "test:functions": "cd supabase && deno test --allow-all functions",
+    "sim": "cargo run --manifest-path core/Cargo.toml -p sim --"
+  }
+}
