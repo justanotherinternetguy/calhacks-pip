@@ -3,7 +3,7 @@
 // - iOS: background modes + usage strings, prebuilt safety xcframework
 const fs = require('fs');
 const path = require('path');
-const { withAndroidManifest, withInfoPlist, withDangerousMod, withXcodeProject, AndroidConfig } = require('expo/config-plugins');
+const { withAndroidManifest, withInfoPlist, withDangerousMod, withXcodeProject, withGradleProperties, AndroidConfig } = require('expo/config-plugins');
 
 const PKG = 'expo.modules.safetynative';
 const CORE_OUT = path.join(__dirname, '..', '..', '..', '..', '..', 'core', 'target', 'mobile');
@@ -46,40 +46,9 @@ const withAndroidComponents = (config) =>
       if (!manifest['uses-permission'].some((u) => u.$['android:name'] === p)) manifest['uses-permission'].push({ $: { 'android:name': p } });
     }
 
-    app.service = ensureOnce(app.service, 'android:name', {
-      $: {
-        'android:name': `${PKG}.SensingService`,
-        'android:foregroundServiceType': 'location|microphone',
-        'android:exported': 'false',
-      },
-    });
-    app.service = ensureOnce(app.service, 'android:name', {
-      $: {
-        'android:name': `${PKG}.SosTileService`,
-        'android:exported': 'true',
-        'android:icon': '@mipmap/ic_launcher',
-        'android:label': 'SOS',
-        'android:permission': 'android.permission.BIND_QUICK_SETTINGS_TILE',
-      },
-      'intent-filter': [{ action: [{ $: { 'android:name': 'android.service.quicksettings.action.QS_TILE' } }] }],
-    });
-
-    app.receiver = ensureOnce(app.receiver, 'android:name', {
-      $: { 'android:name': `${PKG}.BootReceiver`, 'android:exported': 'false' },
-      'intent-filter': [
-        {
-          action: [
-            { $: { 'android:name': 'android.intent.action.BOOT_COMPLETED' } },
-            { $: { 'android:name': 'android.intent.action.MY_PACKAGE_REPLACED' } },
-          ],
-        },
-      ],
-    });
-    app.receiver = ensureOnce(app.receiver, 'android:name', {
-      $: { 'android:name': `${PKG}.SosWidget`, 'android:exported': 'true' },
-      'intent-filter': [{ action: [{ $: { 'android:name': 'android.appwidget.action.APPWIDGET_UPDATE' } }] }],
-      'meta-data': [{ $: { 'android:name': 'android.appwidget.provider', 'android:resource': '@xml/sos_widget_info' } }],
-    });
+    // Components (SensingService, receivers, tile, widget, CheckInActivity) are declared in the
+    // library's own AndroidManifest.xml and merged automatically; only permissions live here.
+    void app;
     return c;
   });
 
@@ -113,8 +82,16 @@ const withIosFramework = (config) =>
     return c;
   });
 
+const withMinSdk26 = (config) =>
+  withGradleProperties(config, (c) => {
+    c.modResults = c.modResults.filter((i) => !(i.type === 'property' && i.key === 'android.minSdkVersion'));
+    c.modResults.push({ type: 'property', key: 'android.minSdkVersion', value: '26' });
+    return c;
+  });
+
 module.exports = function withSafetyNative(config) {
   config = withAndroidComponents(config);
+  config = withMinSdk26(config);
   config = withAndroidJniLibs(config);
   config = withIosPlist(config);
   config = withIosFramework(config);

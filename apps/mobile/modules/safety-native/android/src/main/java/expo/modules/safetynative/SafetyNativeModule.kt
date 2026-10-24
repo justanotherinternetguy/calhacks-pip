@@ -8,6 +8,7 @@ import android.provider.Settings
 import androidx.fragment.app.FragmentActivity
 import expo.modules.interfaces.permissions.PermissionsResponse
 import expo.modules.interfaces.permissions.PermissionsStatus
+import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -149,7 +150,7 @@ class SafetyNativeModule : Module() {
     AsyncFunction("submitCheckIn") { r: TypingRecord -> rt.submitCheckIn(r.toSample()) }
     AsyncFunction("needHelp") { rt.needHelp() }
     AsyncFunction("triggerSos") { rt.sos.trigger() }
-    AsyncFunction("cancelSos").Coroutine { -> rt.sos.cancel(appContext.currentActivity as? FragmentActivity) }
+    AsyncFunction("cancelSos") Coroutine { -> rt.sos.cancel(appContext.currentActivity as? FragmentActivity) }
 
     // ---- baselines -----------------------------------------------------------
 
@@ -175,7 +176,7 @@ class SafetyNativeModule : Module() {
     // ---- escrow (subject side) -----------------------------------------------
 
     AsyncFunction("getIdentity") { rt.escrow.identityMap() }
-    AsyncFunction("setGroup").Coroutine { g: GroupRecord ->
+    AsyncFunction("setGroup") Coroutine { g: GroupRecord ->
       val members = JSONArray().also { arr ->
         g.members.forEach {
           arr.put(JSONObject().put("userId", it.userId).put("deviceId", it.deviceId).put("x25519Pub", it.x25519Pub).put("ed25519Pub", it.ed25519Pub))
@@ -196,7 +197,7 @@ class SafetyNativeModule : Module() {
       val arr = JSONArray().also { a -> blobs.forEach { a.put(JSONObject(it)) } }
       rt.escrow.decryptLocations(subjectUserId, arr)
     }
-    AsyncFunction("approveUnlock").Coroutine { r: Map<String, Any?> ->
+    AsyncFunction("approveUnlock") Coroutine { r: Map<String, Any?> ->
       val sealed = rt.escrow.approveUnlock(r["requestId"] as String, r["subjectUserId"] as String, r["epochId"] as String, r["requesterX25519Pub"] as String)
       mapOf("sealedShareB64" to sealed)
     }

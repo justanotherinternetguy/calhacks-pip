@@ -19,7 +19,7 @@ import expo.modules.kotlin.views.ExpoView
  * Records per-key timestamps and backspaces on an EditText. Works with soft keyboards (TextWatcher),
  * since hardware KeyEvents are not delivered for IME input.
  */
-class TypingTracker(private val phrase: () -> String, private val onKey: (Map<String, Any?>) -> Unit) : TextWatcher {
+class TypingTracker(private val phrase: () -> String, private val onKey: (Map<String, Any>) -> Unit) : TextWatcher {
   val keyTimesMs = ArrayList<Long>()
   var backspaces = 0
   private var startMs = 0L
@@ -40,7 +40,7 @@ class TypingTracker(private val phrase: () -> String, private val onKey: (Map<St
     onKey(payload())
   }
 
-  fun payload(): Map<String, Any?> = mapOf(
+  fun payload(): Map<String, Any> = mapOf(
     "typed" to typed, "keyTimesMs" to keyTimesMs.toList(), "backspaces" to backspaces,
     "durationMs" to if (startMs == 0L) 0L else (keyTimesMs.lastOrNull() ?: startMs) - startMs, "phrase" to phrase(),
   )
