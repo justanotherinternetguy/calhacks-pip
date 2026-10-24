@@ -132,6 +132,8 @@ pub struct SignalCfg {
     pub drift_persist_s: f32,
     pub drift_refire_s: f32,
     pub drift_gap_s: f32,
+    /// dashboard peak-hold for the spike metrics (jerk, rotation, peak_g), seconds
+    pub spike_hold_s: f32,
     pub stillness_s: f32,
     pub stillness_after_impact_min: f32,
     pub separated_min: f32,
@@ -255,6 +257,8 @@ mod tests {
         assert_eq!(c.thresholds.unlock_no_response_s, 120);
         assert_eq!(c.thresholds.call_option_s, 600);
         assert_eq!(c.baseline.trusted_days, 7);
+        assert!((c.gait.hop_s - 1.0).abs() < 1e-6, "live metrics hop every second");
+        assert!((c.signals.spike_hold_s - 8.0).abs() < 1e-6);
     }
     #[test]
     fn bad_config_is_error() {

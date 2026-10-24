@@ -272,6 +272,40 @@ fn grab_heads_up_immediately_then_unlock_at_120s_unless_phone_unlocked() {
     assert!(matches!(e.snapshot().escalation, EscalationLevel::Idle | EscalationLevel::Resolved));
 }
 
+/// A 0.4 s jerk + rotation spike (not the 120 ms snatch fixture) followed by running is a Grab within
+/// arm_window_s: the detector works on instantaneous per-sample values, never on held / persisted ones.
+#[test]
+fn grab_from_a_400ms_spike_then_running_fires_within_arm_window() {
+    let cfg = Config::default_v1();
+    let mut g = Gen::new(0, 141);
+    g.walk(30.0, G_HAND);
+    let spike_t = g.t_ms;
+    g.grab_spike(0.4, 40.0);
+    let mut tr = motion_trace(g.out, 141);
+    tr.context = vec![
+        Context { t_ms: 0, screen_on: true, last_touch_ms: 0, ..night_ctx(0) },
+        Context { t_ms: spike_t + 3_000, activity: Activity::Running, speed_mps: 4.5, screen_on: true, ..night_ctx(spike_t + 3_000) },
+    ];
+    let mut e = engine();
+    let mut jerk_seen_at = None;
+    let evs = synth::replay_with(&mut e, &tr, &mut |t, e| {
+        let m = e.metrics();
+        let j = m.bands.iter().find(|b| b.name == "jerk").unwrap();
+        let r = m.bands.iter().find(|b| b.name == "rotation").unwrap();
+        if jerk_seen_at.is_none() && !j.in_band && !r.in_band {
+            jerk_seen_at = Some(t);
+        }
+    });
+    let grabs = incidents(&evs, IncidentKind::Grab);
+    assert_eq!(grabs.len(), 1, "{evs:?}");
+    let delay = grabs[0].1.t_ms.saturating_sub(spike_t);
+    assert!(delay <= cfg.grab.arm_window_s as u64 * 1000, "grab confirmed {delay} ms after the spike");
+    assert!(grabs[0].1.raw_json.contains("\"running\":true"), "{}", grabs[0].1.raw_json);
+    assert_eq!(first(&evs, |e| matches!(e, EngineEvent::SnatchDetected { .. })), Some(grabs[0].0));
+    // ... and the dashboard showed the spike out of band on the very tick that contained it
+    assert_eq!(jerk_seen_at, Some(spike_t / 1000 * 1000 + 1000), "spike at {spike_t}");
+}
+
 // ---------------- v1.1: gait drift ----------------
 
 #[test]
@@ -344,7 +378,16 @@ fn low_rate_mode_ignores_gait_but_keeps_activity_stillness_and_coarse_impact() {
     assert!(!f.full && !f.is_walking && (f.fs - 10.0).abs() < 0.5 && f.energy_rms > 0.1, "{f:?}");
     let m = e.metrics();
     assert!(!m.sampling_full);
-    assert!(m.bands.iter().all(|b| b.in_band && b.sd_distance == 0.0), "{:?}", m.bands);
+    // gait + gyro bands are unavailable (value 0, in band, baseline mean/sd); peak_g is rate-independent
+    // and stays live (the coarse impact path relies on it at 10 Hz too)
+    for b in &m.bands {
+        if b.name == "peak_g" {
+            assert!(b.value > 1.0 && b.in_band, "{b:?}");
+        } else {
+            assert!(b.in_band && b.sd_distance == 0.0 && b.value == 0.0 && b.sd > 0.0, "{b:?}");
+        }
+    }
+    assert!(m.evidence.contains("low-rate sampling: gait metrics paused"), "{}", m.evidence);
     assert_eq!(m.activity, Activity::Walking, "falls back to the OS activity");
     assert!(incidents(&evs, IncidentKind::GaitDrift).is_empty());
     assert!(e.snapshot().baseline_seconds == 0, "nothing is learned at 10 Hz");
@@ -756,4 +799,167 @@ fn typing_far_off_baseline_logs_typing_off_incident() {
     let log = e.incident_log();
     let off = log.iter().find(|r| r.kind == IncidentKind::TypingOff).expect("typing off logged");
     assert!(off.sd_distance > 2.5 && off.raw_json.contains("\"z\""), "{off:?}");
+}
+
+// ---------------- live metrics (dashboard) ----------------
+
+#[test]
+fn live_metrics_update_every_second_and_are_never_stale() {
+    let cfg = Config::default_v1();
+    assert!((cfg.gait.hop_s - 1.0).abs() < 1e-6);
+    // walk 20 s, stand still 20 s, walk again: cadence / activity follow within a tick of each window
+    let mut g = Gen::new(0, 151);
+    g.walk(20.0, G_POCKET);
+    g.still(20.0, G_POCKET, 0.006);
+    g.walk(20.0, G_POCKET);
+    let tr = motion_trace(g.out, 151);
+    let mut e = engine();
+    let mut cad = Vec::new();
+    synth::replay_with(&mut e, &tr, &mut |t, e| {
+        let m = e.metrics();
+        assert_eq!(m.t_ms, t);
+        let c = m.bands.iter().find(|b| b.name == "cadence").unwrap().value;
+        cad.push((t, c, m.activity));
+    });
+    let at = |t: u64| cad.iter().find(|(x, _, _)| *x == t).unwrap();
+    // the first full window closes at 6 s; before that activity still comes from the fresh 1 s block / OS
+    assert!(at(2_000).1 == 0.0 && at(2_000).2 == Activity::Walking, "{:?}", at(2_000));
+    assert!(at(10_000).1 > 100.0 && at(10_000).2 == Activity::Walking, "{:?}", at(10_000));
+    // standing still: cadence 0 and stationary once the 6 s window has emptied of steps
+    assert!(at(28_000).1 == 0.0 && at(28_000).2 == Activity::Stationary, "{:?}", at(28_000));
+    // the window refills with walking: walking again by 47 s
+    assert!(at(48_000).1 > 100.0 && at(48_000).2 == Activity::Walking, "{:?}", at(48_000));
+    // 1 s hop: cadence value changes (or is re-evaluated) at consecutive ticks, never held for 2 s pairs only
+    let walking: Vec<f32> = cad.iter().filter(|(t, _, _)| *t >= 8_000 && *t <= 18_000).map(|(_, c, _)| *c).collect();
+    assert!(walking.windows(2).filter(|w| w[0] != w[1]).count() >= walking.len() / 2, "{walking:?}");
+    // a fresh engine with no window yet still reports all eight bands with baseline mean/sd
+    let e = engine();
+    let m = e.metrics();
+    assert_eq!(m.bands.len(), 8);
+    assert!(m.bands.iter().all(|b| b.in_band && b.sd > 0.0 && b.value == 0.0));
+}
+
+#[test]
+fn spike_metrics_show_within_a_second_and_hold_for_spike_hold_s() {
+    let cfg = Config::default_v1();
+    let hold = cfg.signals.spike_hold_s as u64;
+    // standing still, one 0.3 s jerk + spin burst at 10 s, still again
+    let mut g = Gen::new(0, 161);
+    g.still(10.0, G_HAND, 0.006);
+    let spike_t = g.t_ms;
+    g.grab_spike(0.3, 0.0);
+    g.still(20.0, G_HAND, 0.006);
+    let mut tr = motion_trace(g.out, 161);
+    tr.context = vec![Context { t_ms: 0, activity: Activity::Stationary, speed_mps: 0.0, ..night_ctx(0) }];
+    let mut e = engine();
+    let mut out: Vec<(u64, Vec<MetricBand>)> = Vec::new();
+    let evs = synth::replay_with(&mut e, &tr, &mut |t, e| out.push((t, e.metrics().bands.clone())));
+    let band = |t: u64, name: &str| out.iter().find(|(x, _)| *x == t).unwrap().1.iter().find(|b| b.name == name).unwrap().clone();
+    let first_tick = spike_t / 1000 * 1000 + 1000;
+    // before: quiet, in band
+    for n in ["jerk", "rotation", "peak_g"] {
+        assert!(band(first_tick - 1000, n).in_band, "{:?}", band(first_tick - 1000, n));
+    }
+    // the tick containing the spike: all three spike metrics out of band, values are the spike's
+    let j = band(first_tick, "jerk");
+    let r = band(first_tick, "rotation");
+    let p = band(first_tick, "peak_g");
+    assert!(!j.in_band && j.value > cfg.grab.jerk_g_per_s && j.sd_distance > cfg.signals.band_sd_untrusted, "{j:?}");
+    assert!(!r.in_band && r.value > cfg.grab.rotation_deg_per_s, "{r:?}");
+    assert!(!p.in_band && p.value > 2.5, "{p:?}");
+    // held (same value, still out of band) until spike_hold_s after the spike block, then released
+    let last_spike_sample = spike_t + 280;
+    for t in (first_tick + 1000..first_tick + 12_000).step_by(1000) {
+        let j = band(t, "jerk");
+        if t <= last_spike_sample + hold * 1000 {
+            assert!(!j.in_band && (j.value - band(first_tick, "jerk").value).abs() < 1e-3, "held at {t}: {j:?}");
+        } else {
+            assert!(j.in_band && j.value < 5.0, "released at {t}: {j:?}");
+            assert!(band(t, "peak_g").in_band && band(t, "rotation").in_band);
+        }
+    }
+    // detection is untouched by the hold: not in hand (no touch, screen off) and no running => no grab,
+    // no impact (orientation change without a hard enough peak pattern is not a fall)
+    assert!(incidents(&evs, IncidentKind::Grab).is_empty(), "{evs:?}");
+}
+
+#[test]
+fn gait_drift_builds_visibly_in_metrics_before_the_incident_fires() {
+    let mut g = Gen::new(0, 171);
+    g.walk(30.0, G_POCKET);
+    let drunk_t = g.t_ms;
+    g.drunk_walk(60.0, G_POCKET);
+    let tr = motion_trace(g.out, 171);
+    let mut e = engine();
+    let mut seen: Vec<(u64, String, bool, f32)> = Vec::new();
+    let evs = synth::replay_with(&mut e, &tr, &mut |t, e| {
+        let m = e.metrics();
+        let oob = m.bands.iter().filter(|b| !b.in_band).map(|b| b.name.clone()).collect::<Vec<_>>().join(",");
+        seen.push((t, m.evidence.clone(), !oob.is_empty(), m.p_impaired));
+    });
+    let drift = incidents(&evs, IncidentKind::GaitDrift);
+    assert_eq!(drift.len(), 1, "{evs:?}");
+    let fire_t = drift[0].0;
+    assert!(fire_t >= drunk_t + 30_000 && fire_t <= drunk_t + 45_000, "fired at {fire_t}, drunk from {drunk_t}");
+    // long before the 30 s persistence is met, the bands are already out and the evidence counts up
+    let building: Vec<&(u64, String, bool, f32)> = seen.iter().filter(|(t, _, _, _)| *t > drunk_t + 10_000 && *t < fire_t).collect();
+    assert!(building.iter().filter(|(_, _, oob, _)| *oob).count() >= building.len() * 2 / 3, "{building:?}");
+    let with_text: Vec<&&(u64, String, bool, f32)> = building.iter().filter(|(_, ev, _, _)| ev.contains("out of band for")).collect();
+    assert!(with_text.len() >= building.len() / 2, "{building:?}");
+    // the counter is in seconds of walking and grows between ticks
+    let secs = |ev: &str| ev.split("out of band for ").nth(1).and_then(|r| r.split(' ').next()).and_then(|n| n.parse::<f32>().ok());
+    let a = secs(&with_text[0].1).unwrap();
+    let b = secs(&with_text[with_text.len() - 1].1).unwrap();
+    assert!(b > a + 5.0 && b < 45.0, "{a} -> {b}");
+    // the HMM reacts on the incident tick itself, not at the next 60 s step
+    let before = seen.iter().find(|(t, _, _, _)| *t == fire_t - 1000).unwrap().3;
+    let after = seen.iter().find(|(t, _, _, _)| *t == fire_t).unwrap().3;
+    assert!(after > before + 0.05, "p_impaired {before} -> {after} on the GaitDrift tick");
+    assert!(drift[0].1.summary.contains("for 30 s") || drift[0].1.summary.contains("for 31 s"), "{}", drift[0].1.summary);
+}
+
+#[test]
+fn hmm_steps_immediately_on_grab_separated_and_stillness_incidents() {
+    // grab: the snatch trace; the HMM steps on the tick the Grab is logged and the posterior moves
+    // (the grab sequence boost raises the forward transitions)
+    let tr = synth::trace(Scenario::Snatch, 3, 181);
+    let mut e = engine();
+    let mut p: Vec<(u64, [f32; 4], u64)> = Vec::new();
+    let evs = synth::replay_with(&mut e, &tr, &mut |t, e| p.push((t, e.posterior(), e.last_hmm_step_ms())));
+    let grab_t = incidents(&evs, IncidentKind::Grab)[0].0;
+    let at = |t: u64| p.iter().find(|(x, _, _)| *x == t).unwrap();
+    let (b, a) = (at(grab_t - 1000), at(grab_t));
+    assert_ne!(grab_t % 60_000, 0, "test needs an off-schedule grab tick");
+    assert_eq!(a.2, grab_t, "HMM stepped on the grab tick (previous step {})", b.2);
+    assert!(a.1[0] < b.1[0] - 0.005, "P(Normal) {:?} -> {:?} on the grab tick", b.1, a.1);
+
+    // separated (context only): the step runs on the incident tick even though an isolated separation
+    // carries no sequence boost, so the posterior itself barely moves
+    let mut e = engine();
+    e.set_night_mode(true, 0);
+    let mut stepped_on_incident = None;
+    for s in 1..=11 * 60u64 {
+        let t = s * 1000;
+        e.push_context(Context { t_ms: t, separated: true, distance_home_m: 900.0, ..night_ctx(t) });
+        let before = e.last_hmm_step_ms();
+        let evs = e.tick(t);
+        if evs.iter().any(|e| matches!(e, EngineEvent::SignalIncident { record } if record.kind == IncidentKind::Separated)) {
+            assert_ne!(t % 60_000, 0);
+            assert!(before < t && e.last_hmm_step_ms() == t, "separated at {t}: steps {before} -> {}", e.last_hmm_step_ms());
+            stepped_on_incident = Some(t);
+        }
+    }
+    assert!(stepped_on_incident.is_some());
+
+    // stillness after a fall: the Stillness incident tick is an HMM step (the posterior is already saturated
+    // by the fall + the earlier stillness buckets, so only the timing is asserted)
+    let tr = synth::trace(Scenario::Fall, 8, 182);
+    let mut e = engine();
+    let mut p: Vec<(u64, [f32; 4], u64)> = Vec::new();
+    let evs = synth::replay_with(&mut e, &tr, &mut |t, e| p.push((t, e.posterior(), e.last_hmm_step_ms())));
+    let still_t = incidents(&evs, IncidentKind::Stillness)[0].0;
+    let at = |t: u64| p.iter().find(|(x, _, _)| *x == t).unwrap();
+    let (b, a) = (at(still_t - 1000), at(still_t));
+    assert_eq!(a.2, still_t, "stepped on the stillness tick (previous {})", b.2);
+    assert!(b.2 < still_t && a.1[2] + a.1[3] > 0.9, "{:?} -> {:?}", b.1, a.1);
 }

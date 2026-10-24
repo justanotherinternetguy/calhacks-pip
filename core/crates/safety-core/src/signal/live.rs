@@ -10,6 +10,9 @@ pub const METRIC_NAMES: [&str; 8] = ["cadence", "stride_cv", "regularity", "sway
 /// Index into `Baseline` feature arrays for each dashboard metric.
 pub const METRIC_FEATURE: [usize; 8] = [0, 1, 2, 4, 5, 6, 7, 8];
 
+/// Index of the first spike metric in `METRIC_NAMES` (jerk, rotation, peak_g follow).
+pub const SPIKE_FIRST: usize = 5;
+
 /// Which side of the band counts as "out" for GaitDrift: -1 below, +1 above, 0 either side, 2 = not a drift metric.
 pub const DRIFT_SIDE: [i8; 8] = [0, 1, -1, 1, 1, 2, 2, 2];
 
@@ -22,6 +25,8 @@ pub struct Bands {
 impl Bands {
     /// Compute bands for a full-rate gait window. For non-walking windows the gait metrics are reported
     /// but marked in band (they are only meaningful while walking); without gyro, wobble/rotation are in band.
+    /// The spike metrics (jerk, rotation, peak_g) are one-sided: only a value above mean + k·SD is out of
+    /// band (a quiet phone is not "out of band" for being calmer than the walking baseline).
     pub fn compute(b: &Baseline, bcfg: &BaselineCfg, scfg: &SignalCfg, placement: Placement, f: &GaitFeatures) -> Bands {
         let trusted = b.trusted(bcfg, placement);
         let k = if trusted { scfg.band_sd } else { scfg.band_sd_untrusted };
@@ -34,10 +39,15 @@ impl Bands {
             let value = vals[fi];
             let sd_distance = if f.full { (value - mean) / sd.max(1e-6) } else { 0.0 };
             let evaluable = f.full && (f.is_walking || mi >= 5) && (f.has_gyro || (mi != 4 && mi != 6));
-            let in_band = !evaluable || sd_distance.abs() <= k;
+            let in_band = !evaluable || Self::within(mi, sd_distance, k);
             out.push(MetricBand { name: (*name).to_string(), value, mean, sd, sd_distance, in_band });
         }
         Bands { bands: out, trusted }
+    }
+
+    /// Band test for metric `mi`: two-sided for the gait metrics, upper-only for the spike metrics.
+    pub fn within(mi: usize, sd_distance: f32, k: f32) -> bool {
+        if mi >= SPIKE_FIRST { sd_distance <= k } else { sd_distance.abs() <= k }
     }
 
     pub fn get(&self, name: &str) -> Option<&MetricBand> {

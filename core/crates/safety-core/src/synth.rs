@@ -206,6 +206,18 @@ impl Gen {
             self.push(a, g);
         }
     }
+    /// Grab with an explicit spike length: `spike_secs` of jerk + ~700 deg/s spin out of the hand, then a
+    /// thief running for `run_secs`. (`snatch` is the fixed 120 ms variant the traces were built with.)
+    pub fn grab_spike(&mut self, spike_secs: f32, run_secs: f32) {
+        let n = ((spike_secs * FS) as usize).max(2);
+        let mut g = unit(G_HAND);
+        for i in 0..n {
+            let k = if i % 2 == 0 { 2.5 } else { 0.8 }; // alternating yank: every sample is a jerk
+            g = unit([g[0] + 0.25 / n as f32 * 6.0, g[1] + 0.2 / n as f32 * 6.0, g[2] - 0.3 / n as f32 * 6.0]);
+            self.push_w([k, k * 0.5, -k * 0.6], g, [0.0, 12.0, 0.0]);
+        }
+        self.run(run_secs, G_POCKET);
+    }
     /// Snatch: jerk + rotation out of the hand, then a thief running.
     pub fn snatch(&mut self, run_secs: f32) {
         let mut g = unit(G_HAND);

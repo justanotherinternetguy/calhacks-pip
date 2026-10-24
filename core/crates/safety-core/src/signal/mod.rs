@@ -6,6 +6,7 @@ pub mod grab;
 pub mod impact;
 pub mod live;
 pub mod placement;
+pub mod spike;
 
 pub use drift::DriftTracker;
 pub use gait::{GaitAnalyzer, GaitFeatures};
@@ -13,6 +14,7 @@ pub use grab::{GrabDetector, GrabEvent};
 pub use impact::{ImpactDetector, ImpactEvent, ImpactKind};
 pub use live::{Bands, METRIC_NAMES};
 pub use placement::infer_placement;
+pub use spike::{SpikeBlock, SpikeTracker};
 
 use crate::types::MotionSample;
 

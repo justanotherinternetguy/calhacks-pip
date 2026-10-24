@@ -5,7 +5,8 @@ use crate::escalation::Escalation;
 use crate::hmm::{ContextFlags, Hmm, Observation};
 use crate::log::IncidentLog;
 use crate::signal::placement::PlacementVoter;
-use crate::signal::{infer_placement, Bands, DriftTracker, GaitAnalyzer, GaitFeatures, GrabDetector, ImpactDetector, ImpactEvent, ImpactKind};
+use crate::signal::live::SPIKE_FIRST;
+use crate::signal::{infer_placement, Bands, DriftTracker, GaitAnalyzer, GaitFeatures, GrabDetector, ImpactDetector, ImpactEvent, ImpactKind, SpikeTracker};
 use crate::types::*;
 use crate::typing;
 use std::collections::VecDeque;
@@ -16,6 +17,8 @@ pub struct Engine {
     impact: ImpactDetector,
     grab: GrabDetector,
     drift: DriftTracker,
+    /// per-tick spike blocks (jerk / rotation / peak_g) for the live-metrics peak-hold
+    spikes: SpikeTracker,
     voter: PlacementVoter,
     baseline: Baseline,
     hmm: Hmm,
@@ -61,6 +64,7 @@ impl Engine {
             impact: ImpactDetector::new(&cfg.impact),
             grab: GrabDetector::new(&cfg.grab),
             drift: DriftTracker::new(),
+            spikes: SpikeTracker::new(cfg.signals.spike_hold_s),
             voter: PlacementVoter::new(),
             baseline,
             hmm: Hmm::new(&cfg.hmm, &cfg.emissions),
@@ -169,7 +173,6 @@ impl Engine {
                     verdict.z_score,
                     raw,
                 );
-                self.hmm_step_partial(now_ms);
                 let ev = self.esc.typing_impaired(now_ms, self.hmm.p_danger(), &self.hmm.evidence());
                 self.events.extend(ev);
             }
@@ -219,6 +222,7 @@ impl Engine {
         self.esc.reset();
         self.grab.reset();
         self.drift.reset();
+        self.spikes.reset();
         self.obs = Observation::default();
         self.drift_samples.clear();
         self.last_step_ms = now_ms;
@@ -242,6 +246,7 @@ impl Engine {
         let pending = std::mem::take(&mut self.pending);
         let full = self.ctx.sampling_full;
         for s in pending {
+            self.spikes.push(&s);
             if let Some(ev) = self.impact.push(&s) {
                 self.on_impact(ev);
             }
@@ -253,6 +258,8 @@ impl Engine {
                 self.on_features(f);
             }
         }
+        // the live-metrics spike block closes every tick, whether or not a gait window completed
+        self.spikes.close_block(now_ms);
         if self.night_mode {
             self.check_stillness(now_ms);
             self.check_separated(now_ms);
@@ -307,6 +314,12 @@ impl Engine {
         self.sequence_boost = self.log.analyze(t_ms.max(self.now_ms));
         let rec = self.log.records().iter().find(|r| r.id == rec.id).cloned().unwrap_or(rec);
         self.events.push(EngineEvent::SignalIncident { record: rec });
+        // the state probabilities react within the tick: an immediate (elapsed-fraction) HMM step with the
+        // evidence gathered so far and the sequence boost just computed. Impacts run their own step in
+        // `on_impact` (a fall-like impact takes a full step after its post window).
+        if kind != IncidentKind::Impact {
+            self.hmm_step_partial(t_ms.max(self.now_ms));
+        }
     }
 
     fn on_impact(&mut self, ev: ImpactEvent) {
@@ -331,6 +344,10 @@ impl Engine {
             );
             let sd = self.bands.get("peak_g").map(|b| (ev.peak_g - b.mean) / b.sd.max(1e-6)).unwrap_or(0.0);
             self.record_incident(IncidentKind::Impact, ev.t_ms, summary, sd, raw);
+            if ev.fall_likelihood < 0.5 {
+                // hard impact without a fall pattern: no full step below, so react now
+                self.hmm_step_partial(ev.t_ms.max(self.now_ms));
+            }
         }
         if self.night_mode && ev.fall_likelihood >= 0.5 {
             // immediate HMM update on impact; the walking/agitation seen *before* the fall belongs
@@ -527,31 +544,93 @@ impl Engine {
         }
     }
 
+    /// Activity from the freshest motion evidence: the last gait window if it is at most one hop old,
+    /// otherwise the last 1 s spike block (stillness), otherwise the OS activity.
     fn activity(&self) -> Activity {
+        let still = self.cfg.gait.still_rms_g;
+        let fresh = |t: u64| self.now_ms.saturating_sub(t) <= (self.cfg.gait.hop_s * 1000.0) as u64 + 1000;
         match self.last_features {
-            Some(f) if f.is_running => Activity::Running,
-            Some(f) if f.is_walking => Activity::Walking,
-            Some(f) if f.energy_rms < self.cfg.gait.still_rms_g => Activity::Stationary,
-            _ => self.ctx.activity,
+            Some(f) if fresh(f.t_ms) && f.is_running => Activity::Running,
+            Some(f) if fresh(f.t_ms) && f.is_walking => Activity::Walking,
+            Some(f) if fresh(f.t_ms) && f.energy_rms < still => Activity::Stationary,
+            _ => match self.spikes.latest() {
+                Some(b) if fresh(b.t_ms) && b.energy_rms < still => Activity::Stationary,
+                _ => self.ctx.activity,
+            },
         }
     }
 
     /// Live metrics vs. bands, the four state probabilities and baseline trust (dashboard).
+    ///
+    /// Never more than one tick stale: the gait metrics (cadence, stride_cv, regularity, sway, wobble)
+    /// are the latest 1 s-hop window with their instantaneous band status (the 30 s persistence only
+    /// gates the GaitDrift *incident*; a building run is spelled out in `evidence`), and the spike
+    /// metrics (jerk, rotation, peak_g) are a peak-hold over the last `signals.spike_hold_s` seconds
+    /// of per-tick blocks with the band evaluated against the held peak. In low-rate mode the gait and
+    /// gyro bands are unavailable (value 0, in band, baseline mean/sd) and `evidence` says so.
     pub fn metrics(&self) -> LiveMetrics {
+        let now = self.now_ms;
+        let full = self.ctx.sampling_full;
+        let bcfg = &self.cfg.baseline;
+        let scfg = &self.cfg.signals;
+        let trusted = self.baseline.trusted(bcfg, self.placement);
+        let k = if trusted { scfg.band_sd } else { scfg.band_sd_untrusted };
+        let mut bands = if self.bands.bands.is_empty() {
+            // no gait window yet: baseline bands with empty values so the dashboard shows the targets
+            Bands::compute(&self.baseline, bcfg, scfg, self.placement, &GaitFeatures::default()).bands
+        } else {
+            self.bands.bands.clone()
+        };
+        let held = self.spikes.held(now);
+        for (mi, b) in bands.iter_mut().enumerate() {
+            if mi >= SPIKE_FIRST {
+                let (value, evaluable) = match held {
+                    Some(h) => match mi - SPIKE_FIRST {
+                        0 => (h.jerk_peak, full),
+                        1 => (h.rot_peak_dps, full && h.has_gyro),
+                        _ => (h.peak_g, true),
+                    },
+                    None => (0.0, false),
+                };
+                b.value = if evaluable { value } else { 0.0 };
+                b.sd_distance = if evaluable { (value - b.mean) / b.sd.max(1e-6) } else { 0.0 };
+                b.in_band = !evaluable || Bands::within(mi, b.sd_distance, k);
+            } else if !full {
+                b.value = 0.0;
+                b.sd_distance = 0.0;
+                b.in_band = true;
+            }
+        }
+        let mut evidence = self.hmm.evidence();
+        let mut note = |s: String| {
+            if !evidence.is_empty() {
+                evidence.push_str("; ");
+            }
+            evidence.push_str(&s);
+        };
+        if full {
+            if let Some((names, persist)) = self.drift.building(scfg, self.cfg.gait.hop_s, now) {
+                if !names.is_empty() {
+                    note(format!("{} out of band for {:.0} s", names.join(", "), persist));
+                }
+            }
+        } else {
+            note("low-rate sampling: gait metrics paused".to_string());
+        }
         let p = self.hmm.posterior();
         LiveMetrics {
-            t_ms: self.now_ms,
+            t_ms: now,
             placement: self.placement,
-            sampling_full: self.ctx.sampling_full,
+            sampling_full: full,
             activity: self.activity(),
-            bands: self.bands.bands.clone(),
+            bands,
             p_normal: p[0],
             p_impaired: p[1],
             p_incident: p[2],
             p_unresponsive: p[3],
-            baseline_trusted: self.baseline.trusted(&self.cfg.baseline, self.placement),
+            baseline_trusted: trusted,
             baseline_walk_days: self.baseline.walk_days(self.placement) as f32,
-            evidence: self.hmm.evidence(),
+            evidence,
         }
     }
 
@@ -591,6 +670,10 @@ impl Engine {
     }
     pub fn sampling_full_desired(&self) -> Option<bool> {
         self.sampling_full_desired
+    }
+    /// Time of the last HMM forward step (scheduled or immediate).
+    pub fn last_hmm_step_ms(&self) -> u64 {
+        self.last_step_ms
     }
     pub fn baseline(&self) -> &Baseline {
         &self.baseline

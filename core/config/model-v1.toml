@@ -112,7 +112,11 @@ sample_hz = 50
 # no cadence, stride, sway, wobble, jerk or rotation metrics.
 min_sample_hz = 20
 window_s = 6.0
-hop_s = 2.0
+# Feature hop: a new gait window (and therefore new live metrics / bands) every hop_s seconds over the
+# sliding window_s window. 1 s keeps the dashboard current; the GaitDrift persistence clock counts
+# seconds of walking, not windows, so drift_persist_s is unaffected, and baseline learning weights each
+# window by hop_s so overlapping windows do not inflate the baseline.
+hop_s = 1.0
 band_low_hz = 0.5
 band_high_hz = 3.0
 # Peak threshold on band-passed vertical accel (g)
@@ -168,6 +172,11 @@ drift_persist_s = 30
 drift_refire_s = 300
 # A gap of more than this between walking windows (stopped, stood still) restarts the persistence clock.
 drift_gap_s = 6
+# Spike metrics (jerk, rotation, peak_g) are computed per 1 s block from the raw sample stream and the
+# dashboard (Engine::metrics) reports the peak over the last spike_hold_s seconds, with the band evaluated
+# against that held peak, so a 300 ms grab / impact flash stays visible for a few seconds. Grab and impact
+# detection use the instantaneous per-sample values and are not affected by this hold.
+spike_hold_s = 8
 # Stillness: still (no body motion) ≥ stillness_s AND no touch ≥ stillness_s, after an impact
 # within the last stillness_after_impact_min minutes.
 stillness_s = 180

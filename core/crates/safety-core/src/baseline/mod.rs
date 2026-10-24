@@ -61,24 +61,39 @@ pub fn median_of(v: &mut Vec<f32>) -> f32 {
 /// cadence, step_cv, regularity, harmonic_ratio, sway_rms, wobble, jerk, rotation, peak_g
 pub const GAIT_FEATURES: usize = 9;
 
-/// Sufficient statistics for one local day of walking windows.
+/// Sufficient statistics for one local day of walking windows. Each window is weighted by the hop it
+/// covers (`seconds`), so `sum` / `sumsq` are time-weighted and the statistics do not depend on how
+/// densely overlapping windows are emitted (1 s hop vs 2 s hop); `n` only counts windows.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct DayStats {
     pub day: i64,
     pub n: u32,
     pub sum: [f32; GAIT_FEATURES],
     pub sumsq: [f32; GAIT_FEATURES],
+    /// total weight = seconds of walking covered
     pub seconds: f32,
 }
 
 impl DayStats {
     fn add(&mut self, v: &[f32; GAIT_FEATURES], seconds: f32) {
+        let w = seconds.max(1e-3);
         for i in 0..GAIT_FEATURES {
-            self.sum[i] += v[i];
-            self.sumsq[i] += v[i] * v[i];
+            self.sum[i] += w * v[i];
+            self.sumsq[i] += w * v[i] * v[i];
         }
         self.n += 1;
-        self.seconds += seconds;
+        self.seconds += w;
+    }
+    /// Blob versions < 3 stored unit-weighted sums: rescale them to the per-window seconds.
+    fn migrate_unweighted(&mut self) {
+        if self.n == 0 || self.seconds <= 0.0 {
+            return;
+        }
+        let w = self.seconds / self.n as f32;
+        for i in 0..GAIT_FEATURES {
+            self.sum[i] *= w;
+            self.sumsq[i] *= w;
+        }
     }
     fn merge(&mut self, o: &DayStats) {
         for i in 0..GAIT_FEATURES {
@@ -119,16 +134,17 @@ impl PlacementStats {
     pub fn n(&self) -> u32 {
         self.days.iter().map(|d| d.n).sum()
     }
-    /// Pooled mean / sd of one feature over the window.
+    /// Pooled (time-weighted) mean / sd of one feature over the window.
     pub fn mean_sd(&self, i: usize) -> Option<(f32, f32)> {
-        let n: f32 = self.days.iter().map(|d| d.n as f32).sum();
-        if n < 2.0 {
+        let n: u32 = self.days.iter().map(|d| d.n).sum();
+        let w: f32 = self.days.iter().map(|d| d.seconds).sum();
+        if n < 2 || w <= 0.0 {
             return None;
         }
         let sum: f32 = self.days.iter().map(|d| d.sum[i]).sum();
         let sumsq: f32 = self.days.iter().map(|d| d.sumsq[i]).sum();
-        let mean = sum / n;
-        let var = (sumsq / n - mean * mean).max(0.0);
+        let mean = sum / w;
+        let var = (sumsq / w - mean * mean).max(0.0);
         Some((mean, var.sqrt()))
     }
 }
@@ -180,15 +196,25 @@ pub fn local_day(t_ms: u64, hour_local: u8) -> i64 {
 }
 
 impl Baseline {
+    /// Blob format version: 3 = hop-weighted day statistics.
+    pub const VERSION: u32 = 3;
+
     pub fn new() -> Self {
-        Baseline { version: 2, ..Default::default() }
+        Baseline { version: Self::VERSION, ..Default::default() }
     }
     pub fn to_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(self).unwrap_or_default()
     }
     pub fn from_bytes(b: &[u8]) -> Result<Self, EngineError> {
         let mut bl: Baseline = serde_json::from_slice(b).map_err(|e| EngineError::Baseline { msg: e.to_string() })?;
-        bl.version = 2;
+        if bl.version < Self::VERSION {
+            for p in bl.gait_days.iter_mut().chain(bl.pending.iter_mut()) {
+                for d in &mut p.days {
+                    d.migrate_unweighted();
+                }
+            }
+        }
+        bl.version = Self::VERSION;
         Ok(bl)
     }
     pub fn walking_seconds(&self) -> f32 {
@@ -212,7 +238,8 @@ impl Baseline {
         [p.cadence, p.step_cv, p.regularity, p.harmonic_ratio, p.sway_rms, p.wobble, p.jerk, p.rotation, p.peak_g]
     }
 
-    /// Learn one walking window. `session` = buffer into the pending night session instead of committing.
+    /// Learn one walking window, weighted by `hop_s` (the seconds of walking it stands for). `session` =
+    /// buffer into the pending night session instead of committing.
     pub fn learn(&mut self, cfg: &BaselineCfg, placement: Placement, f: &GaitFeatures, hop_s: f32, day: i64, session: bool) {
         let v = Self::values(f);
         let target = if session { &mut self.pending } else { &mut self.gait_days };
@@ -339,6 +366,38 @@ mod tests {
         let (m, sd) = b.band_stats(&cfg, Placement::Pocket, 0);
         assert!((m - 110.0).abs() < 1e-3 && sd >= cfg.priors.cadence[1] * cfg.sd_floor_frac);
     }
+    /// Learning the same walk with a 1 s hop (twice the windows) must give the same statistics and the same
+    /// walking seconds as with a 2 s hop, and an old unit-weighted blob must load to the same mean.
+    #[test]
+    fn learning_is_hop_invariant_and_old_blobs_migrate() {
+        let cfg = crate::config::Config::default_v1().baseline;
+        let feats: Vec<GaitFeatures> = (0..40)
+            .map(|i| GaitFeatures { cadence_spm: 100.0 + (i % 5) as f32 * 5.0, step_cv: 0.03 + (i % 3) as f32 * 0.01, ..Default::default() })
+            .collect();
+        let mut b1 = Baseline::new();
+        let mut b2 = Baseline::new();
+        for (i, f) in feats.iter().enumerate() {
+            b1.learn(&cfg, Placement::Pocket, f, 1.0, 100 + (i / 20) as i64, false);
+            if i % 2 == 0 {
+                b2.learn(&cfg, Placement::Pocket, f, 2.0, 100 + (i / 20) as i64, false);
+            }
+        }
+        assert!((b1.walking_seconds() - 40.0).abs() < 1e-3 && (b2.walking_seconds() - 40.0).abs() < 1e-3);
+        for i in 0..2 {
+            let (m1, s1) = b1.gait_days[1].mean_sd(i).unwrap();
+            let (m2, s2) = b2.gait_days[1].mean_sd(i).unwrap();
+            // b2 sees every other window, so means agree up to the sampling of the pattern
+            assert!((m1 - m2).abs() < 0.05 * m1.abs().max(0.01) && (s1 - s2).abs() < 0.5 * s1.max(0.005), "feature {i}: {m1}/{s1} vs {m2}/{s2}");
+        }
+        // version-2 blob: unit-weighted sums, seconds = 2 per window
+        let v2 = r#"{"version":2,"gait_days":[{"days":[]},{"days":[{"day":100,"n":2,"sum":[220,0,0,0,0,0,0,0,0],"sumsq":[24200,0,0,0,0,0,0,0,0],"seconds":4}]},{"days":[]},{"days":[]}],"pending":[{"days":[]},{"days":[]},{"days":[]},{"days":[]}]}"#;
+        let b = Baseline::from_bytes(v2.as_bytes()).unwrap();
+        assert_eq!(b.version, Baseline::VERSION);
+        let (m, sd) = b.gait_days[1].mean_sd(0).unwrap();
+        assert!((m - 110.0).abs() < 1e-3 && sd < 1e-2, "{m} {sd}");
+        assert!((b.walking_seconds() - 4.0).abs() < 1e-3);
+    }
+
     #[test]
     fn session_commit_and_discard() {
         let cfg = crate::config::Config::default_v1().baseline;

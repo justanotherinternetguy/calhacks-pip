@@ -26,6 +26,17 @@ impl DriftTracker {
         }
     }
 
+    /// A drift run that is building (or persisting) right now: the out-of-band metric names and the
+    /// seconds of walking covered so far. `None` once the run has been reset or the last out-of-band
+    /// walking window is older than the gap tolerance (the person stopped walking).
+    pub fn building(&self, cfg: &SignalCfg, hop_s: f32, now_ms: u64) -> Option<(&[String], f32)> {
+        let l = self.last_oob_ms?;
+        if now_ms.saturating_sub(l) as f32 / 1000.0 > cfg.drift_gap_s + hop_s {
+            return None;
+        }
+        Some((&self.metrics, self.persist_s(hop_s)))
+    }
+
     /// Feed one walking gait window. `oob` = names of metrics out of band (empty = in band).
     /// Returns true when a `GaitDrift` incident should fire now.
     pub fn push_walking(&mut self, cfg: &SignalCfg, hop_s: f32, t_ms: u64, oob: &[&str], worst_sd: f32) -> bool {
@@ -74,5 +85,40 @@ impl DriftTracker {
         self.last_oob_ms = None;
         self.metrics.clear();
         self.worst_sd = 0.0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    /// `drift_persist_s` means seconds of walking regardless of the hop: 30 s of out-of-band walking
+    /// fires at the same wall-clock time with 1 s and 2 s hops, and `persist_s` reads the same.
+    #[test]
+    fn persistence_is_hop_invariant() {
+        let cfg = Config::default_v1().signals;
+        let mut fired = Vec::new();
+        for hop in [1.0f32, 2.0, 0.5] {
+            let mut tr = DriftTracker::new();
+            let hop_ms = (hop * 1000.0) as u64;
+            let mut t = hop_ms;
+            loop {
+                if tr.push_walking(&cfg, hop, t, &["cadence"], -3.0) {
+                    fired.push(t);
+                    break;
+                }
+                assert!(t < 60_000, "never fired with hop {hop}");
+                t += hop_ms;
+            }
+            // persist_s is exactly the walking time covered at the moment of firing
+            assert!((tr.persist_s(hop) - cfg.drift_persist_s).abs() < 1e-3, "hop {hop}: {}", tr.persist_s(hop));
+            let (names, p) = tr.building(&cfg, hop, t).expect("building right after the fire");
+            assert_eq!(names, &["cadence".to_string()]);
+            assert!((p - cfg.drift_persist_s).abs() < 1e-3);
+            // building() expires once the walker has stopped for longer than the gap tolerance
+            assert!(tr.building(&cfg, hop, t + ((cfg.drift_gap_s + hop) * 1000.0) as u64 + 1).is_none());
+        }
+        assert!(fired.iter().all(|t| *t == 30_000), "{fired:?}");
     }
 }
