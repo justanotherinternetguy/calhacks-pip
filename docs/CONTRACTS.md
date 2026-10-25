@@ -34,6 +34,7 @@ Generated bindings expose module `safety` (Swift: `import safety`; Kotlin: `unif
   pub fn push_motion(&self, samples: Vec<MotionSample>);
   pub fn push_context(&self, ctx: Context);
   pub fn push_audio(&self, s: AudioScores);
+  pub fn words_wanted(&self, now_ms: u64) -> bool;    // run the distress-word spotter now? (listening + a fall within distress_after_s)
   pub fn push_typing(&self, s: TypingSample, now_ms: u64) -> TypingVerdict;
   pub fn push_action(&self, a: UserAction, now_ms: u64);
   pub fn set_night_mode(&self, active: bool, now_ms: u64);
@@ -259,11 +260,12 @@ incidents; the incident log decides when to ask "You okay?". Parameters: `core/c
   PhoneLeftBehind, Grab,                                                  // phone
   Separated, StoppedOnWayHome, InVehicle,                                 // location
   BatteryCritical, CheckInMissed, TypingOff,                              // device, check-in
-  ScreamShout, SnoringWhileDown }                                         // audio
+  ScreamShout, SnoringWhileDown, DistressWords }                          // audio
 #[derive(uniffi::Enum)] pub enum IncidentTier { Context, Watch, Danger }
 #[derive(uniffi::Record)] pub struct IncidentRecord { pub id: u32, pub t_ms: u64, pub kind: IncidentKind, pub tier: IncidentTier, pub summary: String, pub sd_distance: f32, pub placement: Placement, pub raw_json: String, pub cleared_ms: u64 /* 0 = active */, pub acknowledged: bool, pub sequence_id: u32 /* episode, 0 = none */, pub watched: bool }
 #[derive(uniffi::Record)] pub struct LiveMetrics { pub t_ms: u64, pub placement: Placement, pub sampling_full: bool, pub activity: Activity, pub bands: Vec<MetricBand>, pub listening: bool, pub context: Vec<String>, pub baseline_trusted: bool, pub baseline_walk_days: f32, pub evidence: String }
-// Context gains `charging: bool`. AudioScores is { t_ms, scream, shout, snore, level_db } (glass removed).
+// Context gains `charging: bool`. AudioScores is { t_ms, scream, shout, snore, level_db, distress } (glass removed;
+// `distress` = distress-phrase confidence 0..1 from the on-device keyword spotter, 0 when it is off, see §12).
 // EngineEvent gains AudioListening { on: bool } and IncidentCleared { record: IncidentRecord }.
 ```
 - **`thresholds.auto_escalate`** (bundled default `false`): incident logging only. Incidents open, clear, log and
@@ -362,3 +364,17 @@ under action labels ("normal walking", "stumbling", …), to measure and retune 
 - **Storage:** the server only relays frames. The page keeps recordings in the browser (IndexedDB) and exports
   `tools/collect` Recording JSON (`motion` with `rx..rz`, `context`, `labels`, `meta`, plus `metrics`, `incidents`,
   `gaps`), which `tools/collect export --split` turns into `core/traces/<label>/` for `sim batch`.
+
+
+## 12. Distress words (model config v7, migration 0018)
+
+- **Native.** `DistressWordSpotter` (Vosk `vosk-model-small-en-us-0.15`, grammar limited to a fixed phrase list + `[unk]`)
+  scores the same ~0.975 s, 16 kHz frames as YAMNet, but only while `SafetyEngine.words_wanted(now)` is true: the
+  listening window is open and a fall or hard impact (not a drop, and not the wrench of a grab) was within
+  `distress_after_s` (600). Output: `AudioScores.distress`, the lowest word confidence of the best whole phrase heard in
+  an utterance that ended in this frame, else 0. Recognised text and audio never leave the class.
+- **Engine.** `IncidentKind::DistressWords` (`distress_words`), Watch, family Audio, not in `check_alone`: ≥ `distress_frames`
+  (1) frames with `distress ≥ distress_min` (0.6) within `distress_window_s` (30), or `distress_frames_loud` (2) in a loud
+  venue, within `distress_after_s` of the fall. Once per fall; clears after `distress_clear_min` (10). Summary phrase:
+  "words like “help”".
+

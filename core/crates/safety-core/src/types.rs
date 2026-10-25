@@ -113,6 +113,10 @@ pub struct AudioScores {
     /// estimated sound level, dB SPL (from dBFS with the Android CDD voice-recognition calibration)
     #[serde(default)]
     pub level_db: f32,
+    /// confidence (0..1) that a distress word or phrase ("help", "get off me", …) was spoken in this frame, from the
+    /// on-device keyword spotter; 0 when nothing was heard or the spotter was not running. The words never reach here.
+    #[serde(default)]
+    pub distress: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -196,6 +200,7 @@ pub enum IncidentKind {
     // audio
     ScreamShout,
     SnoringWhileDown,
+    DistressWords,
 }
 
 /// How much an incident counts. Context is logged only; Watch turns on full sensing and counts toward a check-in;
@@ -222,7 +227,7 @@ pub enum IncidentFamily {
 }
 
 impl IncidentKind {
-    pub const ALL: [IncidentKind; 19] = [
+    pub const ALL: [IncidentKind; 20] = [
         IncidentKind::PhoneDrop,
         IncidentKind::PossibleFall,
         IncidentKind::FallRecovered,
@@ -242,6 +247,7 @@ impl IncidentKind {
         IncidentKind::TypingOff,
         IncidentKind::ScreamShout,
         IncidentKind::SnoringWhileDown,
+        IncidentKind::DistressWords,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -264,6 +270,7 @@ impl IncidentKind {
             IncidentKind::TypingOff => "typing_off",
             IncidentKind::ScreamShout => "scream_shout",
             IncidentKind::SnoringWhileDown => "snoring_while_down",
+            IncidentKind::DistressWords => "distress_words",
         }
     }
     pub fn tier(self) -> IncidentTier {
@@ -272,7 +279,7 @@ impl IncidentKind {
             FallRecovered | Stumble | InVehicle | BatteryCritical => IncidentTier::Context,
             DownAfterFall | Grab | CheckInMissed | SnoringWhileDown => IncidentTier::Danger,
             PhoneDrop | PossibleFall | HardImpact | UnsteadyGait | RepeatedStumbles | SlowedWalk | PhoneLeftBehind | Separated
-            | StoppedOnWayHome | TypingOff | ScreamShout => IncidentTier::Watch,
+            | StoppedOnWayHome | TypingOff | ScreamShout | DistressWords => IncidentTier::Watch,
         }
     }
     pub fn family(self) -> IncidentFamily {
@@ -285,7 +292,7 @@ impl IncidentKind {
             Separated | StoppedOnWayHome | InVehicle => IncidentFamily::Location,
             BatteryCritical => IncidentFamily::Device,
             CheckInMissed | TypingOff => IncidentFamily::CheckIn,
-            ScreamShout | SnoringWhileDown => IncidentFamily::Audio,
+            ScreamShout | SnoringWhileDown | DistressWords => IncidentFamily::Audio,
         }
     }
     /// A moment rather than a condition: logged already cleared (a stumble, getting up after a fall).

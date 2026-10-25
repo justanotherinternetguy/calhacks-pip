@@ -15,6 +15,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicReference
 import uniffi.safety.AudioScores
 import kotlin.math.log10
 import kotlin.math.sqrt
@@ -22,7 +23,9 @@ import kotlin.math.sqrt
 /**
  * Microphone while the engine's listening window is open (`EngineEvent.AudioListening`, see SensingService.setListening):
  * continuous capture between [start] and [stop], one [AudioScores] (YAMNet scream / shout / snore + estimated dB SPL) per
- * ~0.975 s frame. PCM stays in one in-memory frame buffer that is zeroed after use; it is never written anywhere.
+ * ~0.975 s frame. While the engine wants words (`wordsWanted`: within distress_after_s of a fall) the same frame also
+ * goes through [DistressWordSpotter], and only its confidence is passed on. PCM stays in one in-memory frame buffer
+ * that is zeroed after use; it is never written anywhere.
  * Requires RECORD_AUDIO and a foreground service that currently holds the microphone type.
  */
 class AudioMonitor(private val ctx: Context, private val rt: SafetyRuntime) {
@@ -43,14 +46,20 @@ class AudioMonitor(private val ctx: Context, private val rt: SafetyRuntime) {
       Log.w(TAG, "RECORD_AUDIO not granted; audio disabled"); return
     }
     val cls = try { YamnetClassifier(ctx) } catch (e: Throwable) { Log.w(TAG, "yamnet.tflite unavailable; audio disabled", e); return }
-    // The classifier is owned by the job and closed when it ends, so stop() never closes it mid-inference.
+    // The classifier and spotter are owned by the job and closed when it ends, so stop() never closes them mid-inference.
     job = rt.scope.launch(Dispatchers.IO) {
+      // The word spotter loads beside the capture (its first install copies ~68 MB), so screams are scored at once.
+      val words = AtomicReference<DistressWordSpotter?>(null)
+      launch {
+        val s = try { DistressWordSpotter(ctx) } catch (e: Throwable) { Log.w(TAG, "distress words unavailable", e); null }
+        if (s != null) { words.set(s); if (!isActive) words.getAndSet(null)?.close() }
+      }
       try {
         while (isActive) {
-          runCatching { capture(cls) }.onFailure { if (isActive) Log.w(TAG, "capture failed", it) }
+          runCatching { capture(cls, words) }.onFailure { if (isActive) Log.w(TAG, "capture failed", it) }
           if (isActive) delay(RETRY_MS)
         }
-      } finally { cls.close() }
+      } finally { cls.close(); words.getAndSet(null)?.close() }
     }
   }
 
@@ -60,7 +69,7 @@ class AudioMonitor(private val ctx: Context, private val rt: SafetyRuntime) {
 
   /** Records until cancelled (or the mic fails), pushing one AudioScores per frame. */
   @SuppressLint("MissingPermission")
-  private suspend fun capture(cls: YamnetClassifier) {
+  private suspend fun capture(cls: YamnetClassifier, words: AtomicReference<DistressWordSpotter?>) {
     val minBuf = AudioRecord.getMinBufferSize(YamnetClassifier.SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
     val rec = AudioRecord(
       MediaRecorder.AudioSource.VOICE_RECOGNITION, YamnetClassifier.SAMPLE_RATE,
@@ -68,6 +77,8 @@ class AudioMonitor(private val ctx: Context, private val rt: SafetyRuntime) {
     )
     if (rec.state != AudioRecord.STATE_INITIALIZED) { rec.release(); throw IllegalStateException("AudioRecord init failed (mic FGS type missing?)") }
     val frame = ShortArray(YamnetClassifier.FRAME_SAMPLES)
+    var spotting = false
+    words.get()?.reset() // a new recording: no utterance carries over
     try {
       rec.startRecording()
       if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) throw IllegalStateException("mic busy or blocked")
@@ -78,7 +89,14 @@ class AudioMonitor(private val ctx: Context, private val rt: SafetyRuntime) {
           if (n <= 0) throw IllegalStateException("read=$n"); off += n
         }
         val s = cls.classify(frame)
-        rt.engine.get().pushAudio(AudioScores(System.currentTimeMillis().toULong(), s.scream, s.shout, s.snore, levelDb(frame)))
+        val now = System.currentTimeMillis().toULong()
+        val engine = rt.engine.get()
+        val spotter = words.get()
+        val want = spotter != null && engine.wordsWanted(now)
+        if (spotting && !want) spotter?.reset()
+        spotting = want
+        val distress = if (want) spotter!!.score(frame) else 0f
+        engine.pushAudio(AudioScores(now, s.scream, s.shout, s.snore, levelDb(frame), distress))
       }
     } finally {
       runCatching { rec.stop() }; rec.release(); frame.fill(0)

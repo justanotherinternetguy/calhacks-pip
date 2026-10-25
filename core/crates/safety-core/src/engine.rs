@@ -88,6 +88,8 @@ pub struct Engine {
     home_hist: VecDeque<(u64, f32)>,
     /// newest fall / drop / hard impact / grab (screams count within scream_after_s of it)
     last_fall_or_grab_ms: Option<u64>,
+    /// newest fall or hard impact, not a drop or grab (distress words count, and are listened for, after it)
+    last_fall_ms: Option<u64>,
     /// newest moment a listening-trigger incident was active
     last_listen_ms: Option<u64>,
 }
@@ -149,6 +151,7 @@ impl Engine {
             separated_fired: false,
             home_hist: VecDeque::new(),
             last_fall_or_grab_ms: None,
+            last_fall_ms: None,
             last_listen_ms: None,
         })
     }
@@ -291,6 +294,7 @@ impl Engine {
         self.stopped_fired_for = None;
         self.last_moving_ms = now_ms;
         self.last_fall_or_grab_ms = None;
+        self.last_fall_ms = None;
         self.last_listen_ms = None;
         if active {
             self.events.push(EngineEvent::LocationIntervalChanged { seconds: self.esc.location_interval_s() });
@@ -321,6 +325,7 @@ impl Engine {
         self.stopped_fired_for = None;
         self.last_moving_ms = now_ms;
         self.last_fall_or_grab_ms = None;
+        self.last_fall_ms = None;
         self.last_listen_ms = None;
         self.last_incident_ms = None;
         self.events.push(EngineEvent::IncidentLogCleared);
@@ -397,6 +402,8 @@ impl Engine {
             self.check_set_down(now_ms);
             self.check_location(now_ms);
             self.check_device(now_ms);
+            // words before screams: a scream incident empties the audio buffer
+            self.check_distress(now_ms);
             self.check_audio(now_ms);
         }
         self.log.maintain(now_ms);
@@ -555,6 +562,7 @@ impl Engine {
             return;
         }
         self.last_fall_or_grab_ms = Some(ev.t_ms);
+        self.last_fall_ms = Some(ev.t_ms);
         if ev.kind == ImpactKind::Fall {
             let answered = onset.and_then(|id| self.log.get(id)).map(|r| r.acknowledged).unwrap_or(false);
             if let Some(id) = onset {
@@ -615,6 +623,7 @@ impl Engine {
         if now_ms.saturating_sub(ev.t_ms) as f32 >= self.cfg.incidents.walk_impact_hold_s * 1000.0 {
             self.walk_impact = None;
             self.last_fall_or_grab_ms = Some(ev.t_ms);
+            self.last_fall_ms = Some(ev.t_ms);
             self.log_impact(ev);
             self.watch_fall(now_ms.saturating_sub(self.cfg.impact.impact_window_ms + self.cfg.impact.post_window_ms));
         }
@@ -684,6 +693,9 @@ impl Engine {
                     }
                     if self.fall.map(|f| f.t_ms >= since).unwrap_or(false) {
                         self.fall = None;
+                    }
+                    if self.last_fall_ms.map(|t| t >= since).unwrap_or(false) {
+                        self.last_fall_ms = None; // nor does it open the window for distress words
                     }
                     self.onset_impact = None;
                     self.last_fall_or_grab_ms = Some(gr.t_ms);
@@ -957,6 +969,43 @@ impl Engine {
         let summary = format!("Screaming or shouting {:.0} s after a fall or grab", (newest - anchor) as f32 / 1000.0);
         self.open(IncidentKind::ScreamShout, newest, summary, 0.0, raw);
         self.audio.clear(); // one incident per burst
+    }
+
+    /// Distress words ("help", "get off me", …) within distress_after_s of a fall: a Watch clue in the audio family.
+    /// One incident per fall (the window after the fall is over before it clears).
+    fn check_distress(&mut self, now_ms: u64) {
+        let ic = self.cfg.incidents.clone();
+        if let Some(r) = self.log.active_of(IncidentKind::DistressWords) {
+            if now_ms.saturating_sub(r.t_ms) as f32 >= ic.distress_clear_min * 60_000.0 {
+                self.clear_kind(IncidentKind::DistressWords, now_ms);
+            }
+            return;
+        }
+        let (Some(anchor), Some(newest)) = (self.last_fall_ms, self.audio.newest_ms()) else { return };
+        if newest < anchor || (newest - anchor) as f32 > ic.distress_after_s * 1000.0 {
+            return;
+        }
+        if self.log.records().iter().any(|r| r.kind == IncidentKind::DistressWords && r.t_ms >= anchor) {
+            return; // already heard after this fall
+        }
+        let since = newest.saturating_sub((ic.distress_window_s * 1000.0) as u64).max(anchor);
+        let heard = |a: &AudioScores| a.distress >= ic.distress_min;
+        let n = self.audio.count(since, heard) as u32;
+        let loud = self.audio.loud(ic.loud_venue_frames as usize, ic.loud_venue_db);
+        if n < if loud { ic.distress_frames_loud } else { ic.distress_frames } {
+            return;
+        }
+        let peak = self.audio.peak(since, |a| a.distress);
+        let after_s = (newest - anchor) as f32 / 1000.0;
+        let raw = format!("{{\"frames\":{n},\"peak\":{},\"loud\":{loud},\"after_s\":{after_s:.0}}}", json_num(peak));
+        let summary = format!("Words like “help” heard {after_s:.0} s after a fall");
+        self.open(IncidentKind::DistressWords, newest, summary, 0.0, raw);
+    }
+
+    /// Whether native should run the word spotter now: the mic is open and a fall was within distress_after_s.
+    pub fn words_wanted(&self, now_ms: u64) -> bool {
+        self.listening == Some(true)
+            && self.last_fall_ms.map(|t| now_ms.saturating_sub(t) as f32 <= self.cfg.incidents.distress_after_s * 1000.0).unwrap_or(false)
     }
 
     // ---- sensing control ----

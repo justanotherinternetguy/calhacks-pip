@@ -9,7 +9,7 @@ export type ContextSample = {
   screen_on: boolean; activity: Activity; battery_pct: number; speed_mps: number;
 };
 /** One ~1 s listening-window frame: YAMNet scores + estimated level (dB SPL). Older files may carry `glass` instead. */
-export type AudioSample = { t_ms: number; scream: number; shout: number; snore?: number; level_db?: number };
+export type AudioSample = { t_ms: number; scream: number; shout: number; snore?: number; level_db?: number; distress?: number };
 export type UserAction =
   | 'DismissOk' | 'DismissWrongPhrase' | 'NeedHelp' | 'ManualSos'
   | 'BiometricDismiss' | 'FriendMarkedSafe' | 'CheckTimeout';

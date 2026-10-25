@@ -49,7 +49,7 @@ const TIER: Record<IncidentKind, IncidentTier> = {
   fall_recovered: 'context', stumble: 'context', in_vehicle: 'context', battery_critical: 'context',
   down_after_fall: 'danger', grab: 'danger', check_in_missed: 'danger', snoring_while_down: 'danger',
   phone_drop: 'watch', possible_fall: 'watch', hard_impact: 'watch', unsteady_gait: 'watch', repeated_stumbles: 'watch', slowed_walk: 'watch',
-  phone_left_behind: 'watch', separated: 'watch', stopped_on_way_home: 'watch', typing_off: 'watch', scream_shout: 'watch',
+  phone_left_behind: 'watch', separated: 'watch', stopped_on_way_home: 'watch', typing_off: 'watch', scream_shout: 'watch', distress_words: 'watch',
 };
 /** Kinds that open the engine's microphone listening window. */
 const OPENS_LISTENING = new Set<IncidentKind>(['phone_drop', 'possible_fall', 'down_after_fall', 'hard_impact', 'grab', 'check_in_missed', 'unsteady_gait', 'repeated_stumbles']);

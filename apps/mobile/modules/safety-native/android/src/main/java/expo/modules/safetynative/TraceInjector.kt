@@ -68,7 +68,7 @@ class TraceInjector(private val rt: SafetyRuntime) {
           engine.pushAudio(
             AudioScores(
               (a.getLong("tMs") - t0 + base).toULong(), a.optDouble("scream", 0.0).toFloat(), a.optDouble("shout", 0.0).toFloat(),
-              a.optDouble("snore", 0.0).toFloat(), a.optDouble("levelDb", 50.0).toFloat(),
+              a.optDouble("snore", 0.0).toFloat(), a.optDouble("levelDb", 50.0).toFloat(), a.optDouble("distress", 0.0).toFloat(),
             ),
           )
         }

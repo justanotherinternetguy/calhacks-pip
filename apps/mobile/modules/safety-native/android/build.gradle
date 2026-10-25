@@ -34,7 +34,7 @@ android {
     main {
       // libsafety_ffi.so per ABI, produced by `cargo ndk` (see README.md)
       jniLibs.srcDirs = ['src/main/jniLibs']
-      // model-v1.toml, yamnet.tflite, yamnet_class_map.csv
+      // model-v1.toml, yamnet.tflite, yamnet_class_map.csv, vosk-model-small-en-us/ (fetched by fetchVoskModel)
       assets.srcDirs = ['src/main/assets']
     }
   }
@@ -53,6 +53,32 @@ tasks.register("copyModelConfig", Copy) {
 }
 preBuild.dependsOn "copyModelConfig"
 
+// Vosk speech model for DistressWordSpotter (Apache 2.0, ~40 MB zipped / 68 MB unpacked), not committed: fetched once
+// into assets/vosk-model-small-en-us/ and checked against its SHA-256. VERSION (the model name) tells the app when
+// its unpacked copy in filesDir is stale.
+def voskModel = "vosk-model-small-en-us-0.15"
+def voskSha256 = "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498"
+def voskDir = file("src/main/assets/vosk-model-small-en-us")
+tasks.register("fetchVoskModel") {
+  def marker = new File(voskDir, "VERSION")
+  onlyIf { !(marker.isFile() && marker.text.trim() == voskModel) }
+  doLast {
+    def zip = new File(temporaryDir, "${voskModel}.zip")
+    new URL("https://alphacephei.com/vosk/models/${voskModel}.zip").withInputStream { i -> zip.withOutputStream { it << i } }
+    def md = java.security.MessageDigest.getInstance("SHA-256")
+    zip.eachByte(1 << 16) { buf, n -> md.update(buf, 0, n) }
+    def got = md.digest().encodeHex().toString()
+    if (got != voskSha256) throw new GradleException("${voskModel}.zip: SHA-256 ${got}, expected ${voskSha256}")
+    def unz = new File(temporaryDir, "unzipped")
+    project.delete(unz, voskDir)
+    ant.unzip(src: zip, dest: unz)
+    project.copy { from new File(unz, voskModel); into voskDir }
+    marker.text = voskModel
+    project.delete(unz, zip)
+  }
+}
+preBuild.dependsOn "fetchVoskModel"
+
 dependencies {
   // uniffi-generated Kotlin bindings (uniffi/safety/safety.kt) load libsafety_ffi.so through JNA.
   implementation "net.java.dev.jna:jna:5.14.0@aar"
@@ -66,6 +92,8 @@ dependencies {
   implementation "com.google.android.gms:play-services-location:21.3.0"
 
   implementation "org.tensorflow:tensorflow-lite:2.16.1"
+  // Offline keyword recognition (DistressWordSpotter). @aar: no transitive JNA, the one above is shared.
+  implementation "com.alphacephei:vosk-android:0.3.75@aar"
 
   implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
   implementation "com.squareup.okhttp3:okhttp:4.12.0"

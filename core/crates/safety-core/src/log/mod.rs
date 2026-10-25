@@ -66,6 +66,7 @@ pub fn phrase(rec: &IncidentRecord) -> String {
         TypingOff => "impaired typing at a check-in".into(),
         ScreamShout => "screaming or shouting".into(),
         SnoringWhileDown => "snoring sounds while down".into(),
+        DistressWords => "words like “help”".into(),
     }
 }
 

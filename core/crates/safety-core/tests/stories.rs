@@ -881,7 +881,7 @@ fn listening_window_opens_on_a_fall_and_closes_10_min_later() {
 
 fn frames(e: &mut Engine, from_ms: u64, secs: u64, scream: f32, snore: f32, level_db: f32) {
     for i in 0..secs {
-        e.push_audio(AudioScores { t_ms: from_ms + i * 1000, scream, shout: 0.0, snore, level_db });
+        e.push_audio(AudioScores { t_ms: from_ms + i * 1000, scream, shout: 0.0, snore, level_db, distress: 0.0 });
     }
 }
 
@@ -917,6 +917,84 @@ fn scream_after_a_fall_unless_in_a_loud_venue() {
     e.tick(1000);
     frames(&mut e, 1000, 5, 0.9, 0.0, 60.0);
     assert!(!e.tick(7000).iter().any(|e| matches!(e, EngineEvent::SignalIncident { .. })));
+}
+
+fn words(e: &mut Engine, from_ms: u64, secs: u64, distress: f32, level_db: f32) {
+    for i in 0..secs {
+        e.push_audio(AudioScores { t_ms: from_ms + i * 1000, scream: 0.0, shout: 0.0, snore: 0.0, level_db, distress });
+    }
+}
+
+#[test]
+fn distress_words_after_a_fall_are_a_watch_clue() {
+    let mut g = Gen::new(0, 81);
+    g.walk(30.0, G_POCKET);
+    g.fall(G_POCKET, 60.0);
+    let tr = motion_trace(g.out, 81);
+    let mut e = engine();
+    synth::replay(&mut e, &tr);
+    let t = 70_000;
+    assert!(e.listening() && e.words_wanted(t), "the spotter runs after a fall");
+    words(&mut e, t, 5, 0.0, 60.0);
+    words(&mut e, t + 5_000, 1, 0.9, 65.0);
+    let evs: Vec<(u64, EngineEvent)> = e.tick(t + 6_000).into_iter().map(|ev| (t + 6_000, ev)).collect();
+    let w = incidents(&evs, IncidentKind::DistressWords);
+    assert_eq!(w.len(), 1, "{evs:?}");
+    let r = &w[0].1;
+    assert_eq!(r.tier, IncidentTier::Watch);
+    assert_eq!(IncidentKind::DistressWords.family(), IncidentFamily::Audio);
+    assert!(r.summary.contains("help") && r.raw_json.contains("\"frames\":1"), "{r:?}");
+    assert!(e.sequence_summary().unwrap_or_default().contains("words like “help”"), "{:?}", e.sequence_summary());
+    // one incident per fall
+    words(&mut e, t + 7_000, 3, 0.9, 65.0);
+    assert!(incidents(&e.tick(t + 10_000).into_iter().map(|ev| (0, ev)).collect::<Vec<_>>(), IncidentKind::DistressWords).is_empty());
+
+    // below the confidence floor: nothing
+    let mut e = engine();
+    synth::replay(&mut e, &tr);
+    words(&mut e, t, 3, 0.4, 60.0);
+    assert!(!e.tick(t + 4_000).iter().any(|e| matches!(e, EngineEvent::SignalIncident { record } if record.kind == IncidentKind::DistressWords)));
+
+    // a loud venue needs two hits
+    let mut e = engine();
+    synth::replay(&mut e, &tr);
+    words(&mut e, t, 15, 0.0, 92.0);
+    words(&mut e, t + 15_000, 1, 0.9, 92.0);
+    assert!(!e.tick(t + 16_000).iter().any(|e| matches!(e, EngineEvent::SignalIncident { record } if record.kind == IncidentKind::DistressWords)));
+    words(&mut e, t + 20_000, 1, 0.9, 92.0);
+    assert!(e.tick(t + 21_000).iter().any(|e| matches!(e, EngineEvent::SignalIncident { record } if record.kind == IncidentKind::DistressWords)));
+
+    // more than distress_after_s after the fall: the spotter is off and words do not count
+    let mut e = engine();
+    let evs = synth::replay(&mut e, &tr);
+    let fall = incidents(&evs, IncidentKind::PossibleFall)[0].1.t_ms;
+    let late = fall + 601_000;
+    assert!(e.words_wanted(fall + 599_000) && !e.words_wanted(late));
+    words(&mut e, late, 1, 0.9, 60.0);
+    assert!(!e.tick(late + 1_000).iter().any(|e| matches!(e, EngineEvent::SignalIncident { record } if record.kind == IncidentKind::DistressWords)));
+}
+
+#[test]
+fn distress_words_are_not_listened_for_after_a_grab_or_drop_and_never_ask_alone() {
+    // a grab opens the mic, but words are only for falls
+    let tr = synth::trace(Scenario::Snatch, 5, 31);
+    let mut e = engine();
+    synth::replay(&mut e, &tr);
+    let t = tr.motion.last().unwrap().t_ms;
+    assert!(e.listening() && !e.words_wanted(t));
+    words(&mut e, t, 2, 0.95, 60.0);
+    assert!(!e.tick(t + 3_000).iter().any(|e| matches!(e, EngineEvent::SignalIncident { record } if record.kind == IncidentKind::DistressWords)));
+    // a dropped phone left on the floor opens the mic too, still no words
+    let mut e = engine();
+    e.set_night_mode(true, 0);
+    let mut g = Gen::new(0, 82);
+    g.walk(10.0, G_HAND);
+    g.drop(70.0);
+    let evs = synth::replay(&mut e, &motion_trace(g.out, 82));
+    assert_eq!(incidents(&evs, IncidentKind::PhoneDrop).len(), 1, "{:?}", kinds(&evs));
+    assert!(e.listening() && !e.words_wanted(e.last_features().map(|f| f.t_ms).unwrap_or(80_000)));
+    // a clue, not a trigger
+    assert!(!Config::default_v1().incidents.check_alone_kinds().contains(&IncidentKind::DistressWords));
 }
 
 #[test]

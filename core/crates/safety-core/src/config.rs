@@ -145,6 +145,15 @@ pub struct IncidentCfg {
     pub snore_min: f32,
     pub snore_frames: u32,
     pub snore_window_s: f32,
+    /// distress words ("help", "get off me", …): spotter confidence that counts as heard
+    pub distress_min: f32,
+    /// frames heard within distress_window_s needed to open the incident (distress_frames_loud in a loud venue)
+    pub distress_frames: u32,
+    pub distress_frames_loud: u32,
+    pub distress_window_s: f32,
+    /// words count only this long after a fall (and the spotter runs only then)
+    pub distress_after_s: f32,
+    pub distress_clear_min: f32,
     pub listen_hold_min: f32,
     /// Kinds that ask "You okay?" on their own (snake_case names), once active for `check_alone_after_s`.
     #[serde(default)]
@@ -282,7 +291,13 @@ impl Config {
             return err("gait window/hop/sample rate must be positive");
         }
         let i = &self.incidents;
-        if i.repeated_stumbles_n < 2 || i.scream_frames == 0 || i.snore_frames == 0 || i.loud_venue_frames == 0 {
+        if i.repeated_stumbles_n < 2
+            || i.scream_frames == 0
+            || i.snore_frames == 0
+            || i.loud_venue_frames == 0
+            || i.distress_frames == 0
+            || i.distress_frames_loud == 0
+        {
             return err("incidents: repeated_stumbles_n >= 2 and frame counts >= 1");
         }
         if let Some(bad) = i.check_alone.iter().find(|n| !IncidentKind::ALL.iter().any(|k| k.name() == n.as_str())) {

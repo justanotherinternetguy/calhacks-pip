@@ -12,9 +12,10 @@ pub struct Context {
     pub t_ms: u64, pub away_from_home: bool, pub separated: bool, pub hour_local: u8, pub screen_on: bool, pub activity: Activity, pub battery_pct: u8, pub speed_mps: f32,
     pub last_touch_ms: u64, pub distance_home_m: f32, pub sampling_full: bool, pub charging: bool,
 }
-/// One ~1 s microphone frame: YAMNet scores + estimated level (dB SPL). Labels only, never audio.
+/// One ~1 s microphone frame: YAMNet scores + estimated level (dB SPL) + distress-word confidence (0 when nothing was
+/// heard or the spotter is off). Labels only, never audio or words.
 #[derive(uniffi::Record, Clone, Debug)]
-pub struct AudioScores { pub t_ms: u64, pub scream: f32, pub shout: f32, pub snore: f32, pub level_db: f32 }
+pub struct AudioScores { pub t_ms: u64, pub scream: f32, pub shout: f32, pub snore: f32, pub level_db: f32, pub distress: f32 }
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct TypingSample { pub phrase: String, pub typed: String, pub key_times_ms: Vec<u64>, pub backspaces: u32, pub duration_ms: u64 }
 #[derive(uniffi::Record, Clone, Debug)]
@@ -36,7 +37,7 @@ pub enum IncidentKind {
     Separated, StoppedOnWayHome, InVehicle,
     BatteryCritical,
     CheckInMissed, TypingOff,
-    ScreamShout, SnoringWhileDown,
+    ScreamShout, SnoringWhileDown, DistressWords,
 }
 /// Context: logged only · Watch: full sensing, counts toward a check-in · Danger: asks "You okay?" on its own
 #[derive(uniffi::Enum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,7 +122,7 @@ impl From<Context> for core::Context {
     }
 }
 impl From<AudioScores> for core::AudioScores {
-    fn from(a: AudioScores) -> Self { core::AudioScores { t_ms: a.t_ms, scream: a.scream, shout: a.shout, snore: a.snore, level_db: a.level_db } }
+    fn from(a: AudioScores) -> Self { core::AudioScores { t_ms: a.t_ms, scream: a.scream, shout: a.shout, snore: a.snore, level_db: a.level_db, distress: a.distress } }
 }
 impl From<TypingSample> for core::TypingSample {
     fn from(s: TypingSample) -> Self { core::TypingSample { phrase: s.phrase, typed: s.typed, key_times_ms: s.key_times_ms, backspaces: s.backspaces, duration_ms: s.duration_ms } }
@@ -178,6 +179,7 @@ impl From<core::IncidentKind> for IncidentKind {
             K::TypingOff => IncidentKind::TypingOff,
             K::ScreamShout => IncidentKind::ScreamShout,
             K::SnoringWhileDown => IncidentKind::SnoringWhileDown,
+            K::DistressWords => IncidentKind::DistressWords,
         }
     }
 }
@@ -269,6 +271,10 @@ impl SafetyEngine {
     }
     pub fn push_audio(&self, s: AudioScores) {
         self.lock().push_audio(s.into());
+    }
+    /// Run the distress-word spotter on this frame? (mic open and a fall within `distress_after_s`)
+    pub fn words_wanted(&self, now_ms: u64) -> bool {
+        self.lock().words_wanted(now_ms)
     }
     pub fn push_typing(&self, s: TypingSample, now_ms: u64) -> TypingVerdict {
         self.lock().push_typing(s.into(), now_ms).into()

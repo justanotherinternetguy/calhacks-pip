@@ -76,7 +76,7 @@ Build: `cargo-ndk` (Android .so for arm64/x86_64) and `cargo` + `xcframework` (i
 
 ### Mic: listening windows only (v2)
 - The mic is off by default. The engine opens a **listening window** (night mode) after a fall, a phone drop, a grab, a missed check-in or unsteady gait, and closes it 10 min after the last such incident cleared. Inside a window `AudioRecord` captures continuously; ~1 s frames become YAMNet labels (scream, shout, snoring) plus a sound level (dB SPL). Only labels reach the engine.
-- Scream/shout counts only within 2 min of a fall or grab and not in a loud venue (median level ≥ 80 dB); snoring counts only while down after a fall with a missed check-in. Vomiting and distress words were considered and left out: YAMNet has no vomiting class, and on-device speech recognition is not reliable from a background service.
+- Scream/shout counts only within 2 min of a fall or grab and not in a loud venue (median level ≥ 80 dB); snoring counts only while down after a fall with a missed check-in. Vomiting was considered and left out: YAMNet has no vomiting class. Distress words ("help", "get off me", …) are spotted by Vosk (offline, fixed phrase list) on the same frames, only within 10 min of a fall; the system speech recognizer was not used because it is not reliable from a background service. A heard phrase is a Watch clue in the audio family and never asks on its own.
 - Either way, the mic is a **booster signal**. The model must work without it.
 
 ### Personal baselines

@@ -65,7 +65,7 @@ mod tests {
     use super::*;
 
     fn f(t_ms: u64, scream: f32, level_db: f32) -> AudioScores {
-        AudioScores { t_ms, scream, shout: 0.0, snore: 0.0, level_db }
+        AudioScores { t_ms, scream, shout: 0.0, snore: 0.0, level_db, distress: 0.0 }
     }
 
     #[test]

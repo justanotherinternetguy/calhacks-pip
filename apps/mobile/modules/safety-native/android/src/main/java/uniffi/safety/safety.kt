@@ -768,6 +768,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -834,6 +836,8 @@ fun uniffi_safety_ffi_checksum_method_safetyengine_set_night_mode(
 fun uniffi_safety_ffi_checksum_method_safetyengine_snapshot(
 ): Short
 fun uniffi_safety_ffi_checksum_method_safetyengine_tick(
+): Short
+fun uniffi_safety_ffi_checksum_method_safetyengine_words_wanted(
 ): Short
 fun uniffi_safety_ffi_checksum_constructor_safetyengine_new(
 ): Short
@@ -920,6 +924,8 @@ fun uniffi_safety_ffi_fn_method_safetyengine_snapshot(`ptr`: Pointer,uniffi_out_
 ): RustBuffer.ByValue
 fun uniffi_safety_ffi_fn_method_safetyengine_tick(`ptr`: Pointer,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_safety_ffi_fn_method_safetyengine_words_wanted(`ptr`: Pointer,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): Byte
 fun uniffi_safety_ffi_fn_func_combine_shares(`shares`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_safety_ffi_fn_func_decrypt_location(`hourKey`: RustBuffer.ByValue,`userId`: RustBuffer.ByValue,`epochId`: RustBuffer.ByValue,`seq`: Long,`blob`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1146,6 +1152,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_safety_ffi_checksum_method_safetyengine_tick() != 26273.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_safety_ffi_checksum_method_safetyengine_words_wanted() != 6454.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_safety_ffi_checksum_constructor_safetyengine_new() != 57386.toShort()) {
@@ -1655,6 +1664,11 @@ public interface SafetyEngineInterface {
      */
     fun `tick`(`nowMs`: kotlin.ULong): List<EngineEvent>
     
+    /**
+     * Run the distress-word spotter on this frame? (mic open and a fall within `distress_after_s`)
+     */
+    fun `wordsWanted`(`nowMs`: kotlin.ULong): kotlin.Boolean
+    
     companion object
 }
 
@@ -1926,6 +1940,21 @@ open class SafetyEngine: Disposable, AutoCloseable, SafetyEngineInterface
     
 
     
+    /**
+     * Run the distress-word spotter on this frame? (mic open and a fall within `distress_after_s`)
+     */override fun `wordsWanted`(`nowMs`: kotlin.ULong): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_safety_ffi_fn_method_safetyengine_words_wanted(
+        it, FfiConverterULong.lower(`nowMs`),_status)
+}
+    }
+    )
+    }
+    
+
+    
 
     
     
@@ -1964,14 +1993,16 @@ public object FfiConverterTypeSafetyEngine: FfiConverter<SafetyEngine, Pointer> 
 
 
 /**
- * One ~1 s microphone frame: YAMNet scores + estimated level (dB SPL). Labels only, never audio.
+ * One ~1 s microphone frame: YAMNet scores + estimated level (dB SPL) + distress-word confidence (0 when nothing was
+ * heard or the spotter is off). Labels only, never audio or words.
  */
 data class AudioScores (
     var `tMs`: kotlin.ULong, 
     var `scream`: kotlin.Float, 
     var `shout`: kotlin.Float, 
     var `snore`: kotlin.Float, 
-    var `levelDb`: kotlin.Float
+    var `levelDb`: kotlin.Float, 
+    var `distress`: kotlin.Float
 ) {
     
     companion object
@@ -1988,6 +2019,7 @@ public object FfiConverterTypeAudioScores: FfiConverterRustBuffer<AudioScores> {
             FfiConverterFloat.read(buf),
             FfiConverterFloat.read(buf),
             FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
         )
     }
 
@@ -1996,7 +2028,8 @@ public object FfiConverterTypeAudioScores: FfiConverterRustBuffer<AudioScores> {
             FfiConverterFloat.allocationSize(value.`scream`) +
             FfiConverterFloat.allocationSize(value.`shout`) +
             FfiConverterFloat.allocationSize(value.`snore`) +
-            FfiConverterFloat.allocationSize(value.`levelDb`)
+            FfiConverterFloat.allocationSize(value.`levelDb`) +
+            FfiConverterFloat.allocationSize(value.`distress`)
     )
 
     override fun write(value: AudioScores, buf: ByteBuffer) {
@@ -2005,6 +2038,7 @@ public object FfiConverterTypeAudioScores: FfiConverterRustBuffer<AudioScores> {
             FfiConverterFloat.write(value.`shout`, buf)
             FfiConverterFloat.write(value.`snore`, buf)
             FfiConverterFloat.write(value.`levelDb`, buf)
+            FfiConverterFloat.write(value.`distress`, buf)
     }
 }
 
@@ -3106,7 +3140,8 @@ enum class IncidentKind {
     CHECK_IN_MISSED,
     TYPING_OFF,
     SCREAM_SHOUT,
-    SNORING_WHILE_DOWN;
+    SNORING_WHILE_DOWN,
+    DISTRESS_WORDS;
     companion object
 }
 

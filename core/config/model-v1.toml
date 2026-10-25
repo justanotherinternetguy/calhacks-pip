@@ -169,6 +169,17 @@ loud_venue_frames = 15
 snore_min = 0.4
 snore_frames = 3
 snore_window_s = 60
+# Distress words ("help", "help me", "get off me", "leave me alone", "call the police", …), from an on-device keyword
+# spotter (Vosk, fixed phrase list). It runs only inside the listening window and only within distress_after_s of a
+# fall (not a drop or grab); the engine gets a confidence per frame, never the words. >= distress_frames frames with
+# confidence >= distress_min within distress_window_s (distress_frames_loud in a loud venue) open a Watch incident
+# in the audio family: a clue that joins the episode and counts toward a check-in, never asks on its own.
+distress_min = 0.6
+distress_frames = 1
+distress_frames_loud = 2
+distress_window_s = 30
+distress_after_s = 600
+distress_clear_min = 10
 listen_hold_min = 10
 # ---- check-in ----
 # Serious enough to ask "You okay?" on their own (Danger kinds always do). Milder Watch kinds need

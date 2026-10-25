@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only. Export the check-in screen so adb (extra "preview" = check or told) can draw its
+     debug preview (CheckInActivity honours `preview` only in a debuggable app). Release builds keep it private. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <activity
+            android:name="expo.modules.safetynative.CheckInActivity"
+            android:exported="true"
+            tools:replace="android:exported" />
+        <!-- adb: run a WAV through the distress-word spotter (see DebugWordsReceiver) -->
+        <receiver android:name="expo.modules.safetynative.DebugWordsReceiver" android:exported="true" />
+    </application>
+</manifest>

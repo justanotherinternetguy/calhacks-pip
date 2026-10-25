@@ -90,7 +90,7 @@ export type IncidentKind =
   | 'separated' | 'stopped_on_way_home' | 'in_vehicle'
   | 'battery_critical'
   | 'check_in_missed' | 'typing_off'
-  | 'scream_shout' | 'snoring_while_down';
+  | 'scream_shout' | 'snoring_while_down' | 'distress_words';
 /** context = logged only · watch = full sensing, counts toward a check-in · danger = asks "You okay?" on its own. */
 export type IncidentTier = 'context' | 'watch' | 'danger';
 /** One live metric vs its personal baseline band (mean ± 2.5 SD; 3.5 SD until the baseline is trusted). */

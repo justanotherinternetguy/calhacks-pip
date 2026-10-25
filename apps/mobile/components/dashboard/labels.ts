@@ -25,7 +25,7 @@ export const KIND_LABEL: Record<IncidentKind, string> = {
   hard_impact: 'Hard impact', unsteady_gait: 'Unsteady walking', stumble: 'Stumble', repeated_stumbles: 'Repeated stumbles',
   slowed_walk: 'Slow walking', phone_left_behind: 'Phone left behind', grab: 'Phone grabbed', separated: 'Separated from group',
   stopped_on_way_home: 'Stopped on the way home', in_vehicle: 'In a vehicle', battery_critical: 'Battery critical',
-  check_in_missed: 'Check-in missed', typing_off: 'Typing off', scream_shout: 'Scream / shout', snoring_while_down: 'Snoring while down',
+  check_in_missed: 'Check-in missed', typing_off: 'Typing off', scream_shout: 'Scream / shout', snoring_while_down: 'Snoring while down', distress_words: 'Words like “help”',
 };
 export const kindLabel = (k: string) => KIND_LABEL[k as IncidentKind] ?? k.replace(/_/g, ' ');
 

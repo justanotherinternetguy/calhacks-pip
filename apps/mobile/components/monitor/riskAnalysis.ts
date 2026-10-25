@@ -79,7 +79,7 @@ INCIDENT KINDS (tier: context = logged only, watch = counts toward a check-in, d
 - phone: phone_left_behind; handling: grab [danger] (phone snatched or yanked; afterwards the phone may be with someone else)
 - location: separated (apart from all friends, not heading home), stopped_on_way_home (stopped before reaching home), in_vehicle
 - device: battery_critical; check_in: check_in_missed [danger] (no answer to "You okay?" in 2 min), typing_off (answered, but typing did not match their normal rhythm: impaired or not them)
-- audio (labels only, no recordings; the mic only listens for 10 min after a fall, drop, grab, missed check-in or unsteady gait): scream_shout, snoring_while_down [danger] (snoring-like breathing while down after a missed check-in: possible loss of consciousness)
+- audio (labels only, no recordings; the mic only listens for 10 min after a fall, drop, grab, missed check-in or unsteady gait): scream_shout, snoring_while_down [danger] (snoring-like breathing while down after a missed check-in: possible loss of consciousness), distress_words (someone near the phone said "help", "get off me", "call the police" or similar within 10 min after a fall; on-device keyword spotting, the words themselves never leave the phone; can be a bystander)
 Escalation ladder: idle -> check (asked "You okay?") -> heads_up (friends notified) -> unlocked (location released to friends); snatch = grab confirmed; resolved = over.
 Check-ins can be turned off, so the absence of check_in_missed is not reassurance. An answered check-in is. "No response" means a check_in_missed or a pending check-in running out; when no check-in was asked, whether they would answer is unknown: say so, never "no response".
 

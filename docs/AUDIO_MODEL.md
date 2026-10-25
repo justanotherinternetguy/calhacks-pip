@@ -97,3 +97,28 @@ Each score is the max over its group. Note there is no class literally named "Sc
 3. Check the CSV has 521 rows, header `index,mid,display_name`, index column `0..520`, and that
    `Screaming`, `Shout`, `Yell`, `Bellow`, `Whoop`, `Snoring` are present. Convert CRLF to LF.
 4. Copy the same two files to both the Android assets dir and `ios/Resources/`, and update the hashes above.
+
+## Distress words (Vosk)
+
+Inside a listening window, and only within `distress_after_s` (10 min) of a fall or hard impact (the engine's
+`words_wanted`), `DistressWordSpotter.kt` also feeds each frame to an offline Vosk recognizer limited to a fixed
+phrase list plus `[unk]`: "help", "help me", "somebody help", "someone help", "get off me", "leave me alone",
+"call the police", "call an ambulance", "i can't breathe" (also "can't breathe"), "i'm hurt", "it hurts". Only
+final results count, and only whole listed phrases. The frame's `distress` score is the lowest word confidence of the
+best phrase heard. Recognised text is never logged, stored or uploaded; the engine sees only that number.
+
+| | |
+|---|---|
+| Library | `com.alphacephei:vosk-android:0.3.75` (`@aar`, shares the module's JNA 5.14.0), Apache 2.0 |
+| Model | `vosk-model-small-en-us-0.15` from `https://alphacephei.com/vosk/models/`, Apache 2.0 |
+| Model zip | 41,205,931 bytes, SHA-256 `30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498`; 68 MB unpacked |
+| Path | `android/src/main/assets/vosk-model-small-en-us/` (git-ignored; the `fetchVoskModel` Gradle task downloads, checks and unpacks it before `preBuild`) |
+| On the phone | copied once into `filesDir/vosk/vosk-model-small-en-us/` (Vosk loads from a directory); `VERSION` decides when the copy is stale |
+
+Off-device check (2026-10-25, espeak-ng voices at 16 kHz in the same frames): every listed phrase scored 1.00, also in
+brown noise; ten neutral sentences and pink noise scored 0. "stop" and "get off" were dropped from the list because
+everyday sentences hit them ("can you stop by later"). "yelp" still reads as "help". With a grammar this small, hits
+score near 1.0 whether right or wrong, so precision comes from the gate (after a fall only) and the role (a clue that
+never asks on its own), not from `distress_min`. Synthetic voices are clean: expect lower recall from real voices in a
+bar.
+

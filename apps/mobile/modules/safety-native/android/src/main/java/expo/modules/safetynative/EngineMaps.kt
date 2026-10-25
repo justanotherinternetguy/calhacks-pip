@@ -32,7 +32,7 @@ fun incidentKindName(k: IncidentKind): String = when (k) {
   IncidentKind.STOPPED_ON_WAY_HOME -> "stopped_on_way_home"; IncidentKind.IN_VEHICLE -> "in_vehicle"
   IncidentKind.BATTERY_CRITICAL -> "battery_critical"; IncidentKind.CHECK_IN_MISSED -> "check_in_missed"
   IncidentKind.TYPING_OFF -> "typing_off"; IncidentKind.SCREAM_SHOUT -> "scream_shout"
-  IncidentKind.SNORING_WHILE_DOWN -> "snoring_while_down"
+  IncidentKind.SNORING_WHILE_DOWN -> "snoring_while_down"; IncidentKind.DISTRESS_WORDS -> "distress_words"
 }
 
 fun incidentTierName(t: IncidentTier): String = when (t) {

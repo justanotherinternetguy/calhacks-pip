@@ -74,8 +74,13 @@ the CPU awake.
   such incident.
 - Inside a window, on-device **YAMNet** (TFLite, bundled) classifies ~0.975 s frames of 16 kHz audio. It
   gives three scores (**scream, shout, snoring**) and a sound level in dB SPL.
+- For **10 min after a fall** (not a drop or a grab), the same frames also go through an offline keyword spotter
+  (**Vosk**, small English model, bundled). It only knows a fixed list of phrases: "help", "help me", "somebody
+  help", "someone help", "get off me", "leave me alone", "call the police", "call an ambulance", "I can't breathe",
+  "I'm hurt", "it hurts". It gives one number per frame, the confidence that one of them was said. The words
+  themselves never leave the spotter.
 - Only those numbers reach the engine. PCM stays in one buffer. The phone classifies it, zeroes it and
-  drops it. The app does not record, store or upload any audio.
+  drops it. The app does not record, store or upload any audio or text.
 
 ### Location
 - In night mode, the phone uploads an **encrypted** location every 5 min. After friends get an alert, it
@@ -145,6 +150,7 @@ The engine uses no probability model and no machine-learned score. Signals open 
 | Check-in typing off | watch | check-in typing far off the personal typing baseline (z > 2.5) | a normal check-in |
 | Scream / shout | watch | ≥ 2 frames within 2 min of a fall or grab, venue not loud (median < 80 dB) | 10 min |
 | Snoring while down | danger | snoring while down after a fall and a check-in was missed | answered / steps resume |
+| Words like "help" | watch | a distress phrase (confidence ≥ 0.6) within 10 min of a fall; 2 within 30 s in a loud venue. A clue only: never asks on its own, once per fall | 10 min |
 
 The server detects **phone offline** (§6). Entries in the on-device log expire after 8 h.
 

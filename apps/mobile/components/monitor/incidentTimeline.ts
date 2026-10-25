@@ -20,7 +20,7 @@ export const FAMILY: Record<IncidentKind, Family> = {
   phone_left_behind: 'phone', grab: 'handling',
   separated: 'location', stopped_on_way_home: 'location', in_vehicle: 'location',
   battery_critical: 'device', check_in_missed: 'check_in', typing_off: 'check_in',
-  scream_shout: 'audio', snoring_while_down: 'audio',
+  scream_shout: 'audio', snoring_while_down: 'audio', distress_words: 'audio',
 };
 
 export type TimelineIncident = {
@@ -163,6 +163,12 @@ export const CHAINS: ChainDef[] = [
     name: 'violent_contact',
     meaning: 'an impact or grab, then a scream within two minutes: consistent with an assault or robbery',
     steps: [{ kinds: ['hard_impact', 'grab'], within_s: 0 }, { kinds: ['scream_shout'], within_s: 120 }],
+    concern: 'high',
+  },
+  {
+    name: 'fall_then_calling_out',
+    meaning: 'a fall or impact, then words like "help" within ten minutes: consistent with being hurt and calling for help',
+    steps: [{ kinds: ['possible_fall', 'hard_impact', 'down_after_fall'], within_s: 0 }, { kinds: ['distress_words'], within_s: 600 }],
     concern: 'high',
   },
   {

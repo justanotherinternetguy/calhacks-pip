@@ -12,7 +12,7 @@ scope here (see `tools/collect` for the tuning plan).
 | Day key `K_day` | subject phone (zeroized at day end), Shamir shares on friends' phones | k-of-n GF(256) shares, each HPKE-sealed to one friend's X25519 key and Ed25519-signed by the subject |
 | Device identity keys | Keychain / Keystore, usable while locked | Never leave the device. Fingerprint verified in person via QR |
 | Home places, baselines, evening window | device only, encrypted at rest | Never uploaded |
-| Microphone audio | RAM only, listening windows only (after a fall, drop, grab, missed check-in or unsteady gait) | Only YAMNet class scores + a sound level enter the engine. Nothing stored or sent |
+| Microphone audio | RAM only, listening windows only (after a fall, drop, grab, missed check-in or unsteady gait) | Only YAMNet class scores, a sound level and (within 10 min of a fall) one distress-phrase confidence enter the engine. No audio or recognised text is stored or sent |
 | Coarse status | `devices.{night_mode,battery_pct,status_level}`, `incidents.summary` | Visible to group members and the server by design |
 | Proximity | `proximity_tokens` (HMAC(group_epoch_key, geohash7)[..16], 9 cells), `presence` | Server learns only together/separated |
 
