@@ -25,8 +25,8 @@ const MAX_COLUMN = 520;
 
 /**
  * Home. The map fills the screen: you in sky, friends placed where they are, the group's zone in lilac. A paper sheet
- * rises over the bottom with one line on how things stand, the hold-for-help button and "I'm okay". A sidebar lists
- * everyone's status.
+ * rises over the bottom with your own check-in or alert (if any), the hold-for-help button and "I'm okay". The friends
+ * sidebar opens with how your friends stand ("Keep an eye on …"), then lists everyone's status.
  */
 export default function Home() {
   const router = useRouter();
@@ -78,7 +78,8 @@ export default function Home() {
   }, [others, me, myLoc]);
   const anyPlaced = mapPeople.some((p) => p.loc);
   const worst = others[0] && (others[0].c.tone === 'high' || others[0].c.tone === 'mild') ? others[0] : null;
-  const line = headline({ alarmed, sosActive, checkOpen, myEsc, worst, others, counts, now, saidOkayAt });
+  const line = myLine({ alarmed, sosActive, checkOpen, myEsc });
+  const friendsNote = friendsLine({ worst, others });
 
   const column = Math.min(width, MAX_COLUMN);
   const okayCaption = checkOpen ? 'Unlock first, then type a short phrase.'
@@ -112,20 +113,24 @@ export default function Home() {
 
         <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) + 10 }]} onLayout={(e) => setSheetH(Math.round(e.nativeEvent.layout.height))}>
           <Handle />
-          <Pressable
-            accessibilityRole={line.onPress ? 'button' : undefined}
-            onPress={line.onPress === 'friends' ? openDrawer : line.onPress === 'groups' ? () => router.push('/groups') : line.onPress === 'check' ? () => router.push('/check-in') : line.onPress === 'snatch' ? () => router.push('/snatch') : line.onPress ? () => open(line.onPress!) : undefined}
-            disabled={!line.onPress}
-            style={({ pressed }) => [styles.lineRow, pressed && { opacity: 0.7 }]}
-          >
-            <View style={{ flex: 1, gap: 6, minWidth: 0 }}>
-              {line.tag && <Chip fill={line.tag.fill} small>{line.tag.text}</Chip>}
-              <D accessibilityRole="header" style={{ fontSize: 28, lineHeight: 32 }}>{line.title}</D>
-              <T style={{ fontSize: 14, lineHeight: 19, color: ui.quiet }} numberOfLines={2}>{line.sub}</T>
-            </View>
-            {line.onPress ? <View style={{ marginTop: 12 }}>{Icon.chevron(ui.muted)}</View> : null}
-          </Pressable>
-          <Hairline style={{ marginTop: 16, marginBottom: 16 }} />
+          {line ? (
+            <>
+              <Pressable
+                accessibilityRole={line.onPress ? 'button' : undefined}
+                onPress={line.onPress === 'check' ? () => router.push('/check-in') : line.onPress === 'snatch' ? () => router.push('/snatch') : undefined}
+                disabled={!line.onPress}
+                style={({ pressed }) => [styles.lineRow, pressed && { opacity: 0.7 }]}
+              >
+                <View style={{ flex: 1, gap: 6, minWidth: 0 }}>
+                  {line.tag && <Chip fill={line.tag.fill} small>{line.tag.text}</Chip>}
+                  <D accessibilityRole="header" style={{ fontSize: 28, lineHeight: 32 }}>{line.title}</D>
+                  <T style={{ fontSize: 14, lineHeight: 19, color: ui.quiet }} numberOfLines={2}>{line.sub}</T>
+                </View>
+                {line.onPress ? <View style={{ marginTop: 12 }}>{Icon.chevron(ui.muted)}</View> : null}
+              </Pressable>
+              <Hairline style={{ marginTop: 16, marginBottom: 16 }} />
+            </>
+          ) : <View style={{ height: 14 }} />}
 
           <HoldForHelp active={alarmed} pending={standDown.state === 'pending'} onTrigger={onSos} onStandDown={() => void standDown.run()} />
 
@@ -151,10 +156,27 @@ export default function Home() {
           onHistory={() => { setDrawer(false); router.push('/history'); }}
           onSettings={() => { setDrawer(false); router.push('/settings'); }}
           header={(
-            <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 14 }}>
-              <D accessibilityRole="header" style={{ fontSize: 26, lineHeight: 30 }}>Friends</D>
-              <T style={{ fontSize: 13, lineHeight: 18, color: ui.quiet }}>{counts.out} out · {counts.home} home</T>
-            </View>
+            <>
+              <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 14 }}>
+                <D accessibilityRole="header" style={{ fontSize: 26, lineHeight: 30 }}>Friends</D>
+                <T style={{ fontSize: 13, lineHeight: 18, color: ui.quiet }}>{counts.out} out · {counts.home} home</T>
+              </View>
+              {friendsNote && (
+                <Pressable
+                  accessibilityRole={friendsNote.onPress ? 'button' : undefined}
+                  onPress={friendsNote.onPress ? () => open(friendsNote.onPress!) : undefined}
+                  disabled={!friendsNote.onPress}
+                  style={({ pressed }) => [styles.lineRow, pressed && { opacity: 0.7 }]}
+                >
+                  <View style={{ flex: 1, gap: 6, minWidth: 0 }}>
+                    {friendsNote.tag && <Chip fill={friendsNote.tag.fill} small>{friendsNote.tag.text}</Chip>}
+                    <D style={{ fontSize: 22, lineHeight: 26 }}>{friendsNote.title}</D>
+                    {friendsNote.sub ? <T style={{ fontSize: 13.5, lineHeight: 18, color: ui.quiet }} numberOfLines={3}>{friendsNote.sub}</T> : null}
+                  </View>
+                  {friendsNote.onPress ? <View style={{ marginTop: 10 }}>{Icon.chevron(ui.muted)}</View> : null}
+                </Pressable>
+              )}
+            </>
           )}
         />
       </FriendsDrawer>
@@ -172,15 +194,16 @@ const MINE: Record<string, { title: string; sub: string; tag: string }> = {
   sos: { title: 'pip told your friends.', sub: 'They can see your location now.', tag: 'Help called' },
 };
 
-function headline(a: {
-  alarmed: boolean; sosActive: boolean; checkOpen: boolean; myEsc: string; worst: Person | null; others: Person[];
-  counts: { out: number; home: number }; now: number; saidOkayAt: number | null;
-}): Line {
-  if (a.alarmed || a.checkOpen) {
-    const key = a.sosActive ? 'sos' : a.myEsc === 'snatch' ? 'snatch' : a.myEsc === 'heads_up' || a.myEsc === 'unlocked' ? a.myEsc : 'check';
-    const m = MINE[key];
-    return { tag: { text: m.tag, fill: key === 'check' ? ht.lilac : ht.coral }, title: m.title, sub: m.sub, onPress: key === 'snatch' ? 'snatch' : key === 'sos' ? undefined : 'check' };
-  }
+/** Your own state for the sheet: a check-in, SOS or snatch. Nothing when you're fine. */
+function myLine(a: { alarmed: boolean; sosActive: boolean; checkOpen: boolean; myEsc: string }): Line | null {
+  if (!a.alarmed && !a.checkOpen) return null;
+  const key = a.sosActive ? 'sos' : a.myEsc === 'snatch' ? 'snatch' : a.myEsc === 'heads_up' || a.myEsc === 'unlocked' ? a.myEsc : 'check';
+  const m = MINE[key];
+  return { tag: { text: m.tag, fill: key === 'check' ? ht.lilac : ht.coral }, title: m.title, sub: m.sub, onPress: key === 'snatch' ? 'snatch' : key === 'sos' ? undefined : 'check' };
+}
+
+/** How your friends stand, shown at the top of the Friends drawer. `onPress` is the friend to open. */
+function friendsLine(a: { worst: Person | null; others: Person[] }): Line | null {
   if (a.worst) {
     const { f, c } = a.worst;
     const newest = [...f.records].reverse().find((r) => isActive(r) && r.tier !== 'context');
@@ -194,13 +217,12 @@ function headline(a: {
       onPress: f.id,
     };
   }
-  if (!a.others.length) return { title: 'No friends yet.', sub: 'Add friends in person: one of you scans the other’s code.', onPress: 'groups' };
+  if (!a.others.length) return null; // the list already says how to add friends
   const okay = a.others.filter((p) => p.c.saidOkay).map((p) => p.f.name);
   return {
     tag: { text: 'All quiet', fill: ht.mint },
     title: 'All quiet.',
-    sub: [`${a.counts.out} out · ${a.counts.home} home`, okay.length ? `${okay.join(', ')} said they’re okay` : null].filter(Boolean).join(' · '),
-    onPress: 'friends',
+    sub: okay.length ? `${okay.join(', ')} said they’re okay` : '',
   };
 }
 
