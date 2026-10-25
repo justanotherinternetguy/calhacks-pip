@@ -24,7 +24,7 @@ function PersonMarker({ p, focused, dim, onSelect }: { p: MapPerson & { loc: { l
   useEffect(() => { const t = setTimeout(() => setTrack(false), 900); return () => clearTimeout(t); }, []);
   return (
     <Marker identifier={p.id}
-      coordinate={{ latitude: p.loc.lat, longitude: p.loc.lng }} anchor={{ x: 0.5, y: focused ? 0.62 : 1 }}
+      coordinate={{ latitude: p.loc.lat, longitude: p.loc.lng }} anchor={{ x: 0.5, y: 0.5 }}
       tracksViewChanges={track} zIndex={focused ? 3 : p.isMe ? 2 : p.tone === 'high' ? 2 : 1}
       onPress={onSelect && !p.isMe ? () => onSelect(p.id) : undefined} tappable={!!onSelect && !p.isMe}
       accessibilityLabel={p.isMe ? 'You' : p.name}>

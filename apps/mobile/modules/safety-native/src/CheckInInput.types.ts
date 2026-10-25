@@ -1,4 +1,4 @@
-import type { StyleProp, ViewStyle } from 'react-native';
+import type { StyleProp, TextStyle } from 'react-native';
 
 export type CheckInResult = { phrase: string; typed: string; keyTimesMs: number[]; backspaces: number; durationMs: number };
 
@@ -11,7 +11,8 @@ export type CheckInInputProps = {
   phrase: string;
   autoFocus?: boolean;
   placeholder?: string;
-  style?: StyleProp<ViewStyle>;
+  /** text styles reach the JS input; the native view uses the box ones */
+  style?: StyleProp<TextStyle>;
   onChange?: (typed: string) => void;
   onComplete: (r: CheckInResult) => void;
 };

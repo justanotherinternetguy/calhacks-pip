@@ -13,14 +13,20 @@ export type { FriendsMapProps, MapPerson } from './FriendsMap.types';
 const PAD = 56;
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
+// Same shape as the native Pin: a ringed disc with the name underneath, the disc at the centre of the icon.
+const LABEL_H = 24;
+const PIN_W = 110;
+const pinSize = (focused: boolean) => (focused ? 28 : 22);
+
 function pinHtml(p: MapPerson, focused: boolean, dim: boolean) {
   const t = tones[p.tone];
-  const d = focused ? 44 : p.isMe ? 30 : 36;
+  const d = pinSize(focused);
   const fill = p.isMe ? ht.sky : t.hollow ? ht.paper : t.dot;
-  const cls = ['pip-pin', dim && 'pip-pin--dim', p.tone === 'high' && !p.isMe && 'pip-pin--pulse'].filter(Boolean).join(' ');
+  const cls = ['pip-pin', dim && 'pip-pin--dim', p.tone === 'high' && !p.isMe && 'pip-pin--pulse', p.isMe && 'pip-pin--me'].filter(Boolean).join(' ');
+  const label = p.isMe ? '' : focused ? `<span class="pip-pin__chip">${esc(p.name)}</span>` : esc(p.name);
   return `<div class="${cls}" role="button" aria-label="${esc(p.isMe ? 'You' : p.name)}">
-    <div class="pip-pin__disc" style="--fill:${fill};width:${d}px;height:${d}px;font-size:${focused ? 19 : 16}px">${p.isMe ? '' : esc(p.initial)}</div>
-    <div class="pip-pin__stem"></div>${focused ? `<div class="pip-pin__name">${esc(p.name)}</div>` : ''}
+    <div class="pip-pin__disc" style="--fill:${fill};width:${d}px;height:${d}px"></div>
+    <div class="pip-pin__name">${label}</div>
   </div>`;
 }
 
@@ -73,12 +79,10 @@ export function FriendsMap({ people, anchor, focusId, onSelect, insetBottom = 0,
     for (const p of placed(people)) {
       const focused = focusId === p.id;
       const dim = !!focusId && !focused && !p.isMe;
-      const d = focused ? 44 : p.isMe ? 30 : 36;
-      const h = d + 10 + (focused ? 22 : 0);
-      const icon = L.divIcon({ className: 'pip-pin-wrap', html: pinHtml(p, focused, dim), iconSize: [Math.max(d, 90), h], iconAnchor: [Math.max(d, 90) / 2, d + 10] });
+      const h = LABEL_H * 2 + pinSize(focused);
+      const icon = L.divIcon({ className: 'pip-pin-wrap', html: pinHtml(p, focused, dim), iconSize: [PIN_W, h], iconAnchor: [PIN_W / 2, h / 2] });
       const m = L.marker([p.loc.lat, p.loc.lng], { icon, keyboard: true, title: p.isMe ? 'You' : p.name, zIndexOffset: focused ? 300 : p.isMe ? 200 : p.tone === 'high' ? 200 : 0 });
       if (!p.isMe) {
-        if (!focused) m.bindTooltip(p.name, { direction: 'top', offset: [0, -d - 6], className: 'pip-tip' });
         m.on('click', () => onSelectRef.current?.(p.id));
         m.on('keypress', (e) => { if (e.originalEvent?.key === 'Enter') onSelectRef.current?.(p.id); });
       }

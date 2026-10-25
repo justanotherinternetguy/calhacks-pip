@@ -2,12 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { P, Screen } from '@/components/ui';
-import { Brand, Btn, Caps, D, Dot, Mono, T } from '@/components/pip/kit';
+import { Btn, Caps, D, Icon, Mono, T } from '@/components/pip/kit';
 import { fmtCountdown } from '@/components/telemetry/labels';
 import { CheckInInput, SafetyNative, type CheckInResult } from '@/modules/safety-native';
+import { useFriends } from '@/lib/friends';
 import { useStore } from '@/lib/store';
-import { ht, ui } from '@/lib/theme';
+import { fontFor, ht, ui } from '@/lib/theme';
 
 const GLAD_MS = 2500;
 
@@ -30,7 +32,10 @@ export default function CheckIn() {
 function JsCheckIn() {
   const router = useRouter();
   const params = useLocalSearchParams<{ phrase?: string; deadline?: string }>();
+  const insets = useSafeAreaInsets();
   const pending = useStore((s) => s.pendingCheck);
+  const myEsc = useStore((s) => s.status?.engine.escalation ?? 'idle');
+  const why = useFriends((s) => s.friends.find((f) => f.isMe)?.checkSummary) || null;
   const phrase = params.phrase ?? pending?.phrase ?? '';
   const [fallbackDeadline] = useState(() => Date.now() + 90_000);
   const deadline = Number(params.deadline ?? pending?.deadlineMs ?? fallbackDeadline);
@@ -68,7 +73,7 @@ function JsCheckIn() {
     try {
       const v = await SafetyNative.submitCheckIn(r);
       if (v.accepted) { setAccepted(true); setTimeout(finish, GLAD_MS); }
-      else setResult(`Not accepted: ${v.reason}. Try once more, or tap "Need help".`);
+      else setResult(`Not accepted: ${v.reason}. Try once more, or tap “I need help”.`);
     } finally { setBusy(false); }
   };
   const onChange = (t: string) => {
@@ -84,65 +89,72 @@ function JsCheckIn() {
   const help = async () => { await SafetyNative.needHelp(); finish(); };
 
   const total = Math.max(1, Math.round((deadline - (fallbackDeadline - 90_000)) / 1000));
-  const ring = 2 * Math.PI * 18;
+  const words = phrase.split(/\s+/).filter(Boolean);
+  const told = myEsc === 'heads_up' || myEsc === 'unlocked';
 
   if (accepted) {
     return (
-      <View style={[styles.screen, { justifyContent: 'center', alignItems: 'center', gap: 10, padding: 24 }]}>
-        <Dot tone="out" size={28} />
-        <D accessibilityRole="header" style={{ fontSize: 40, lineHeight: 44 }}>Glad you’re okay.</D>
-        <T style={{ fontSize: 16, color: ui.quiet, textAlign: 'center' }}>Thanks for letting your friends know.</T>
+      <View style={[styles.screen, { backgroundColor: ht.mint, justifyContent: 'center', alignItems: 'center', gap: 8, padding: 24 }]}>
+        <View style={styles.badge}>{Icon.check(ht.ink, 36)}</View>
+        <D accessibilityRole="header" style={{ fontSize: 30, lineHeight: 34, fontWeight: '700', textAlign: 'center' }}>Glad you’re okay</D>
+        <T style={{ fontSize: 16, lineHeight: 22, color: ui.text2, textAlign: 'center' }}>Your friends know you’re fine.</T>
       </View>
     );
   }
 
+  // As on the site: a full lilac screen (coral once friends were told), the question, why, a countdown and the words.
   return (
-    <View style={styles.screen}>
-      <View style={styles.youWrap}>
-        <View style={{ position: 'absolute', top: 56 }}><Brand size={26} /></View>
-        <View style={styles.youGlow} />
-        <Dot tone="out" isMe size={20} />
-      </View>
-      <ScrollView style={styles.card} contentContainerStyle={{ gap: 16, padding: 22, paddingTop: 24, maxWidth: 560, width: '100%', alignSelf: 'center' }} keyboardShouldPersistTaps="handled">
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          <Svg width={44} height={44} viewBox="0 0 44 44" accessibilityRole="image" accessibilityLabel={`${left} seconds left`}>
-            <Circle cx={22} cy={22} r={18} fill="none" stroke={ui.line} strokeWidth={3} />
-            <Circle cx={22} cy={22} r={18} fill="none" stroke={ht.butter} strokeWidth={6} strokeLinecap="round"
-              strokeDasharray={`${ring}`} strokeDashoffset={ring * (1 - Math.min(1, left / total))} transform="rotate(-90 22 22)" />
-            <Circle cx={22} cy={22} r={18} fill="none" stroke={ht.ink} strokeWidth={1.5} />
-          </Svg>
-          <T style={{ flex: 1, fontSize: 14, color: ui.quiet }}>
-            Friends get a heads-up in <Mono style={{ color: ui.text, fontWeight: '500' }}>{fmtCountdown(left * 1000)}</Mono>
-          </T>
+    <View style={[styles.screen, { backgroundColor: told ? ht.coral : ht.lilac, paddingTop: insets.top + 24, paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+        <Caps color={ui.text2} style={{ letterSpacing: 1, textAlign: 'center' }}>PIP · CHECK-IN</Caps>
+        <D accessibilityRole="header" style={{ fontSize: told ? 34 : 46, lineHeight: told ? 38 : 50, fontWeight: '700', textAlign: 'center', marginTop: 10 }}>
+          {told ? 'Your friends were told' : 'You okay?'}
+        </D>
+        <T style={{ fontSize: 15.5, lineHeight: 22, color: ui.text2, textAlign: 'center', marginTop: 6 }}>
+          {told ? 'Type the words if you’re okay, and they’ll know.' : why ?? 'pip noticed something and wants to check on you.'}
+        </T>
+
+        {!told && <Countdown left={left} total={total} />}
+
+        <T style={{ fontSize: 14, lineHeight: 18, fontWeight: '600', color: ui.text2, marginTop: told ? 28 : 22 }}>Type these words</T>
+        <View testID="checkin-phrase" accessible accessibilityLabel={phrase} style={styles.words}>
+          {words.map((w, i) => <Mono key={`${w}${i}`} style={styles.word}>{w}</Mono>)}
         </View>
-        <View style={{ gap: 6 }}>
-          <D accessibilityRole="header" style={{ fontSize: 44, lineHeight: 48 }}>You okay?</D>
-          <T style={{ fontSize: 17, lineHeight: 25, color: ui.text2 }}>Type the words below so your friends know you’re good.</T>
+        <View style={{ alignSelf: 'stretch', marginTop: 14 }} testID="checkin-input" accessible={false}>
+          <CheckInInput phrase={phrase} placeholder="type here…" onChange={onChange} onComplete={submit} style={[styles.input, fontFor('500', 'mono')]} />
         </View>
-        <View style={{ alignSelf: 'flex-start', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 18, backgroundColor: ui.sunk }}>
-          <D testID="checkin-phrase" style={{ fontSize: 28, lineHeight: 34, letterSpacing: 0 }}>{phrase}</D>
-        </View>
-        <View style={{ gap: 6 }} testID="checkin-input" accessible={false}>
-          <Caps>TYPE IT HERE</Caps>
-          <CheckInInput phrase={phrase} placeholder={phrase} onChange={onChange} onComplete={submit} />
-        </View>
-        {result && <T style={{ fontSize: 14, color: ht.coralDeep }}>{result}</T>}
-        <View style={{ gap: 10, marginTop: 8 }}>
-          <Btn kind="main" size={56} title={busy ? 'Checking…' : 'Okay'} onPress={done} disabled={busy} />
-          <Btn kind="coral" title="Need help" onPress={help} />
-          <T style={{ fontSize: 12.5, lineHeight: 17, color: ui.quiet, textAlign: 'center', marginTop: -4 }}>Alerts your friends now and shares your location with them.</T>
-        </View>
+        {result && <T style={{ fontSize: 14, lineHeight: 19, color: ui.text, fontWeight: '600', textAlign: 'center', marginTop: 10 }}>{result}</T>}
       </ScrollView>
+      <View style={styles.buttons}>
+        <Btn kind="main" size={48} title={busy ? 'Checking…' : 'I’m OK'} onPress={done} disabled={busy} />
+        <Btn kind={told ? 'paper' : 'coral'} size={48} title="I need help" onPress={help} />
+      </View>
+    </View>
+  );
+}
+
+/** The site's countdown: a paper disc, an ink arc that runs down, the time in mono. */
+function Countdown({ left, total }: { left: number; total: number }) {
+  const r = 50;
+  const c = 2 * Math.PI * r;
+  return (
+    <View style={{ width: 116, height: 116, marginTop: 22, alignItems: 'center', justifyContent: 'center' }} accessibilityRole="timer" accessibilityLabel={`${left} seconds before friends get a heads-up`}>
+      <Svg width={116} height={116} viewBox="0 0 120 120" style={StyleSheet.absoluteFill}>
+        <Circle cx={60} cy={60} r={r} fill={ht.paper} stroke="rgba(30,27,46,0.12)" strokeWidth={9} />
+        <Circle cx={60} cy={60} r={r} fill="none" stroke={ht.ink} strokeWidth={9} strokeLinecap="round"
+          strokeDasharray={`${c}`} strokeDashoffset={c * (1 - Math.min(1, left / total))} transform="rotate(-90 60 60)" />
+      </Svg>
+      <Mono style={{ fontSize: 26, lineHeight: 30, fontWeight: '500' }}>{fmtCountdown(left * 1000)}</Mono>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: ui.ground },
-  youWrap: { height: 250, alignItems: 'center', justifyContent: 'center' },
-  youGlow: { position: 'absolute', width: 84, height: 84, borderRadius: 42, backgroundColor: ui.youWash },
-  card: {
-    position: 'absolute', left: 0, right: 0, top: 230, bottom: 0, backgroundColor: ui.panel, borderTopLeftRadius: 30, borderTopRightRadius: 30,
-    borderWidth: 2, borderBottomWidth: 0, borderColor: ht.ink,
-  },
+  body: { alignItems: 'center', paddingHorizontal: 22, paddingBottom: 16, maxWidth: 480, width: '100%', alignSelf: 'center' },
+  words: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginTop: 8 },
+  word: { fontSize: 16, lineHeight: 20, fontWeight: '500', paddingVertical: 7, paddingHorizontal: 11, borderRadius: 10, overflow: 'hidden', backgroundColor: ht.paper, borderWidth: 1.5, borderColor: ht.ink },
+  input: { borderColor: ht.ink, textAlign: 'center', fontSize: 18 },
+  buttons: { gap: 8, paddingHorizontal: 22, maxWidth: 480, width: '100%', alignSelf: 'center' },
+  badge: { width: 74, height: 74, borderRadius: 37, backgroundColor: ht.paper, borderWidth: 2.5, borderColor: ht.ink, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
 });

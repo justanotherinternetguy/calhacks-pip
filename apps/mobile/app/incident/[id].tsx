@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import Svg, { Path, Rect } from 'react-native-svg';
 import * as Clipboard from 'expo-clipboard';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { format, formatDistanceToNow } from 'date-fns';
-import { Button, Card, H1, H2, P, Pill, Row, Screen } from '@/components/ui';
+import { Btn, Caps, Card, D, Icon, IconBtn, Mono, T, Well } from '@/components/pip/kit';
 import { Map } from '@/components/Map';
 import { SafetyNative, type DecryptedLocation } from '@/modules/safety-native';
 import { MIN_MEMBERS_FOR_FALLBACK, NO_EVENTS, useStore, useUserId } from '@/lib/store';
@@ -12,7 +15,7 @@ import {
   listUnlockApprovals, listUnlockRequests, rpc, subscribe,
 } from '@/lib/db';
 import type { Incident, IncidentEventKind, UnlockApproval, UnlockRequest } from '@/lib/types';
-import { colors, levelColor } from '@/lib/theme';
+import { ht, ui } from '@/lib/theme';
 import { EVENT_LABEL } from '@/components/monitor/labels';
 import { useIncidentLocation } from '@/components/incident/useIncidentLocation';
 import * as actions from '@/lib/incidentActions';
@@ -32,6 +35,11 @@ export default function IncidentScreen() {
   const [approvals, setApprovals] = useState<UnlockApproval[]>([]);
   const [k, setK] = useState(2);
   const [busy, setBusy] = useState<string | null>(null);
+  /** friend actions taken from this screen (their buttons turn butter, as on the site) */
+  const [done, setDone] = useState<string[]>([]);
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const back = () => (router.canGoBack() ? router.back() : router.replace('/home'));
 
   const subject = incident?.user_id;
   const subjectName = subject ? profiles[subject]?.display_name ?? 'Your friend' : '';
@@ -111,81 +119,157 @@ export default function IncidentScreen() {
   const infoText = useMemo(() => (incident ? actions.dispatcherText({ subjectName, incident }, last) : ''), [subjectName, incident, last]);
   const copyInfo = () => Clipboard.setStringAsync(infoText).then(() => setNotice('Copied.'));
 
-  if (!incident) return <Screen><P muted>Loading…</P></Screen>;
+  if (!incident) return <View style={[styles.screen, { justifyContent: 'center', alignItems: 'center' }]}><T style={{ color: ui.quiet }}>Loading…</T></View>;
+  const lvl = resolved ? 'resolved' : incident.level;
+  const hue = LEVEL_HUE[lvl] ?? LEVEL_HUE.check;
+  const did = (k: string) => done.includes(k);
+  const press = (k: string, f: () => Promise<void> | void) => async () => { await f(); setDone((d) => (d.includes(k) ? d : [...d, k])); };
+
+  // As on the site's friend phone: who and how bad, the map (sealed until the phone opens it), one sentence about what
+  // happened, then the four things a friend does, two by two.
   return (
-    <Screen>
-      <Row style={{ justifyContent: 'space-between' }}>
-        <H1>{isSubject ? 'Your incident' : subjectName}</H1>
-        <Pill text={resolved ? 'resolved' : incident.level} color={levelColor(resolved ? 'resolved' : incident.level)} />
-      </Row>
-      {/* The one-line triggering sequence is all a friend ever sees of the subject's signals (CONTRACTS §6). */}
-      <Card tint={levelColor(resolved ? 'resolved' : incident.level)} style={{ paddingVertical: 12 }}>
-        <P muted style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.6 }}>What triggered this</P>
-        <P style={{ fontSize: 17, fontWeight: '600', lineHeight: 23 }}>{incident.summary ?? 'No details from the phone yet.'}</P>
-        <P muted style={{ fontSize: 13 }}>opened {formatDistanceToNow(new Date(incident.opened_at), { addSuffix: true })}</P>
-      </Card>
-      {incident.level === 'snatch' && <Card tint={colors.danger}><P style={{ fontWeight: '700' }}>Possible phone snatch. {subjectName} may not have their phone. Don't chase.</P></Card>}
-
-      {trail.length ? (
-        <>
-          <Map points={trail} style={{ height: 300 }} />
-          <P muted>Last update {format(last!.tMs, 'HH:mm:ss')} · ±{Math.round(last!.accuracyM)} m · {trail.length} points</P>
-        </>
-      ) : (
-        <Card>
-          <P style={{ fontWeight: '700' }}>Location locked</P>
-          <P muted>{offlineLevel ? `Their phone is offline. ${group?.threshold_k ?? 2} friends can unlock the last known location together.` : 'Their phone shares it if things look serious. You can also ask for it now.'}</P>
-          {!offlineLevel && !isSubject && !resolved && (
-            <Button title="Get location now" kind="danger" onPress={act('location', () => actions.requestLocation(ctx!), 'Asked their phone for its location. It appears here in a few seconds.')} loading={busy === 'location'} />
+    <View style={styles.screen}>
+      <StatusBar style="dark" />
+      <ScrollView contentContainerStyle={[styles.body, { paddingTop: insets.top + 8, paddingBottom: Math.max(insets.bottom, 16) + 16 }]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <IconBtn label="Back" onPress={back}>{Icon.back()}</IconBtn>
+          {!isSubject && !resolved && (
+            <Pressable accessibilityRole="button" onPress={copyInfo} hitSlop={8}><T style={{ fontSize: 13.5, fontWeight: '600', color: ui.link }}>Copy info</T></Pressable>
           )}
-          {offlineLevel && !req && !isSubject && (
+        </View>
+
+        {resolved && (
+          <View style={styles.found} accessibilityRole="header">
+            {Icon.check(ht.ink, 20)}
+            <D style={{ fontSize: 18, lineHeight: 22 }}>{isSubject ? 'You’re marked safe' : `${subjectName} is safe`}</D>
+          </View>
+        )}
+
+        <View style={styles.head}>
+          <View style={styles.avatar}><D style={{ fontSize: 19, lineHeight: 23 }}>{(isSubject ? 'You' : subjectName).slice(0, 1).toUpperCase()}</D></View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <D accessibilityRole="header" style={{ fontSize: 22, lineHeight: 26 }} numberOfLines={1}>{isSubject ? 'Your alert' : subjectName}</D>
+            <T style={{ fontSize: 13.5, lineHeight: 18, fontWeight: '600', color: hue.text }} numberOfLines={1}>
+              {LEVEL_LINE[lvl] ?? lvl.replace(/_/g, ' ')} · {trail.length && !resolved ? 'location shared · logged' : formatDistanceToNow(new Date(incident.opened_at), { addSuffix: true })}
+            </T>
+          </View>
+        </View>
+
+        <View style={styles.mapCard}>
+          {trail.length ? (
+            <Map points={trail} style={StyleSheet.absoluteFill} />
+          ) : (
             <>
-              <Button title="Request location" kind="danger" onPress={requestUnlock} loading={busy === 'unlock'} disabled={!fallbackAllowed} />
-              {!fallbackAllowed && <P muted style={{ fontSize: 13 }}>Fallback unlock needs at least {MIN_MEMBERS_FOR_FALLBACK} members. This group has {activeMembers} active.</P>}
+              <SealedMap />
+              <View style={styles.lock}>
+                {Icon.lock(ht.cream, 26)}
+                <D style={{ fontSize: 15, lineHeight: 19, color: ht.cream }}>Location sealed</D>
+                <T style={{ fontSize: 12.5, lineHeight: 17, color: ht.creamSoft, textAlign: 'center', maxWidth: 260 }}>
+                  {resolved ? 'The alert is closed. Their location stays sealed.' : offlineLevel ? `Their phone is offline. ${group?.threshold_k ?? 2} friends can open the last known location together.` : 'Their phone opens it to you if things look serious.'}
+                </T>
+              </View>
             </>
           )}
-          {req && (
-            <>
-              <P>Unlock approvals: {approvals.length} / {k}</P>
-              <View style={{ height: 8, backgroundColor: colors.border, borderRadius: 4 }}><View style={{ height: 8, width: `${Math.min(100, (approvals.length / k) * 100)}%`, backgroundColor: colors.accent, borderRadius: 4 }} /></View>
-              <P muted>pip logs every unlock and shows it to {subjectName} and the group.</P>
-            </>
-          )}
-        </Card>
-      )}
+        </View>
+        {last ? <Mono style={{ fontSize: 12, lineHeight: 16, color: ui.quiet }}>Updated {format(last.tMs, 'HH:mm:ss')} · ±{Math.round(last.accuracyM)} m · {trail.length} points</Mono> : null}
 
-      {!isSubject && !resolved && (
-        <Row style={{ flexWrap: 'wrap' }}>
-          <Button title="Ring phone" onPress={ring} loading={busy === 'ring'} style={{ flex: 1, minWidth: 140 }} />
-          <Button title="Call" kind="ghost" onPress={call} style={{ flex: 1, minWidth: 140 }} />
-          <Button title="I'm going" kind="primary" onPress={going} loading={busy === 'en_route'} style={{ flex: 1, minWidth: 140 }} />
-          <Button title="Found / safe" kind="ok" onPress={found} loading={busy === 'found'} style={{ flex: 1, minWidth: 140 }} />
-        </Row>
-      )}
-      {isSubject && !resolved && <Button title="I'm safe · resolve" kind="ok" onPress={found} loading={busy === 'found'} />}
-      {!!notice && <P muted testID="incident-notice">{notice}</P>}
+        {/* The one-line triggering sequence is all a friend ever sees of the subject's signals (CONTRACTS §6). */}
+        <T style={{ fontSize: 15, lineHeight: 21, color: ui.text2 }}>{incident.summary ?? 'No details from the phone yet.'}</T>
+        {incident.level === 'snatch' && (
+          <T style={{ fontSize: 14.5, lineHeight: 20, fontWeight: '700', color: ht.coralDeep }}>Possible phone snatch. {subjectName} may not have their phone. Don’t chase.</T>
+        )}
 
-      {!isSubject && !resolved && (
-        <Card tint={colors.warn}>
-          <H2>Escalate</H2>
-          <P muted>pip won't call anyone for you. Read or paste this:</P>
-          <P style={{ fontSize: 14 }}>{infoText}</P>
-          <Button title="Copy info" kind="ghost" onPress={copyInfo} />
-          <Row>
-            {group?.campus_safety_number && <Button title="Call campus safety" kind="ghost" style={{ flex: 1 }} onPress={act('campus', () => actions.callCampus(ctx!, group.campus_safety_number!))} />}
-            <Button title="Call 911" kind="danger" style={{ flex: 1 }} onPress={act('911', () => actions.call911(ctx!))} />
-          </Row>
-        </Card>
-      )}
+        {!trail.length && !isSubject && !resolved && !offlineLevel && (
+          <Btn kind="coral" size={44} title="Get location now" loading={busy === 'location'}
+            onPress={act('location', () => actions.requestLocation(ctx!), 'Asked their phone for its location. It appears here in a few seconds.')} />
+        )}
+        {!trail.length && offlineLevel && !req && !isSubject && !resolved && (
+          <>
+            <Btn kind="coral" size={44} title="Request location" onPress={requestUnlock} loading={busy === 'unlock'} disabled={!fallbackAllowed} />
+            {!fallbackAllowed && <T style={{ fontSize: 13, color: ui.quiet }}>Fallback unlock needs at least {MIN_MEMBERS_FOR_FALLBACK} members. This group has {activeMembers} active.</T>}
+          </>
+        )}
+        {req && !trail.length && (
+          <View style={{ gap: 6 }}>
+            <T style={{ fontSize: 14, fontWeight: '600' }}>Unlock approvals: {approvals.length} / {k}</T>
+            <View style={styles.track}><View style={[styles.trackFill, { width: `${Math.min(100, (approvals.length / k) * 100)}%` }]} /></View>
+            <T style={{ fontSize: 13, color: ui.quiet }}>pip logs every unlock and shows it to {subjectName} and the group.</T>
+          </View>
+        )}
 
-      <H2>Timeline</H2>
-      {events.map((e) => (
-        <Row key={e.id} style={{ alignItems: 'flex-start' }}>
-          <P muted style={{ width: 56, fontSize: 13 }}>{format(new Date(e.created_at), 'HH:mm')}</P>
-          <P style={{ flex: 1 }}>{e.actor_id ? profiles[e.actor_id]?.display_name ?? 'Someone' : 'System'} {EVENT_LABEL[e.kind] ?? e.kind}</P>
-        </Row>
-      ))}
-      {!events.length && <P muted>No events yet.</P>}
-    </Screen>
+        {!isSubject && !resolved && (
+          <View style={styles.grid}>
+            <Btn title="Ring" kind={did('ring') ? 'butter' : 'paper'} size={44} onPress={press('ring', ring)} loading={busy === 'ring'} style={styles.cell} />
+            <Btn title="Call" kind={did('call') ? 'butter' : 'paper'} size={44} onPress={press('call', call)} style={styles.cell} />
+            <Btn title="I’m going" kind={did('en_route') ? 'butter' : 'paper'} size={44} onPress={press('en_route', going)} loading={busy === 'en_route'} style={styles.cell} />
+            <Btn title="Found safe" kind="mint" size={44} onPress={found} loading={busy === 'found'} style={styles.cell} />
+          </View>
+        )}
+        {isSubject && !resolved && <Btn title="I’m safe · close the alert" kind="mint" size={48} icon={Icon.check(ht.ink)} onPress={found} loading={busy === 'found'} />}
+        {!!notice && <T testID="incident-notice" style={{ fontSize: 13.5, lineHeight: 19, color: ui.quiet, textAlign: 'center' }}>{notice}</T>}
+
+        {!isSubject && !resolved && (
+          <Card style={{ marginTop: 6 }}>
+            <D style={{ fontSize: 18, lineHeight: 22 }}>Need more help?</D>
+            <T style={{ fontSize: 13.5, lineHeight: 19, color: ui.quiet }}>pip won’t call anyone for you. Read this out, or copy it:</T>
+            <Well style={{ padding: 14, borderRadius: 16 }}><T style={{ fontSize: 14, lineHeight: 20 }}>{infoText}</T></Well>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {group?.campus_safety_number && <Btn title="Campus safety" kind="paper" size={44} style={{ flex: 1 }} onPress={act('campus', () => actions.callCampus(ctx!, group.campus_safety_number!))} />}
+              <Btn title="Call 911" kind="coral" size={44} style={{ flex: 1 }} onPress={act('911', () => actions.call911(ctx!))} />
+            </View>
+          </Card>
+        )}
+
+        <Caps style={{ marginTop: 10 }}>WHAT HAPPENED</Caps>
+        <View style={{ gap: 10 }}>
+          {events.map((e) => (
+            <View key={e.id} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
+              <Mono style={{ width: 48, fontSize: 13, lineHeight: 20, color: ui.quiet }}>{format(new Date(e.created_at), 'HH:mm')}</Mono>
+              <T style={{ flex: 1, fontSize: 14.5, lineHeight: 20 }}>{e.actor_id ? profiles[e.actor_id]?.display_name ?? 'Someone' : 'System'} {EVENT_LABEL[e.kind] ?? e.kind}</T>
+            </View>
+          ))}
+          {!events.length && <T style={{ fontSize: 14, color: ui.quiet }}>No events yet.</T>}
+        </View>
+      </ScrollView>
+    </View>
   );
 }
+
+const LEVEL_LINE: Record<string, string> = {
+  check: 'Check-in pending', heads_up: 'Heads-up', unlocked: 'Location shared', sos: 'Called for help', snatch: 'Phone snatched',
+  offline: 'Phone offline', battery_dying: 'Battery dying', resolved: 'Found safe',
+};
+const LEVEL_HUE: Record<string, { text: string }> = {
+  check: { text: ht.butterDeep }, battery_dying: { text: ht.butterDeep }, offline: { text: ht.butterDeep },
+  heads_up: { text: ht.coralDeep }, unlocked: { text: ht.coralDeep }, sos: { text: ht.coralDeep }, snatch: { text: ht.coralDeep },
+  resolved: { text: ht.mintDeep },
+};
+
+/** A made-up street plan behind the lock (it shows nothing real: there is nothing to show yet). */
+function SealedMap() {
+  return (
+    <Svg width="100%" height="100%" viewBox="0 0 240 170" preserveAspectRatio="xMidYMid slice" style={StyleSheet.absoluteFill}>
+      <Rect width={240} height={170} fill={ht.sunk} />
+      <Path d="M150 20 h70 v56 h-70 z" fill="rgba(61,214,163,0.35)" />
+      <Path d="M-10 60 L250 40 M-10 128 L250 112 M60 -10 L80 180 M178 -10 L160 180" stroke={ht.paper} strokeWidth={11} fill="none" />
+      <Path d="M-10 92 L250 80 M120 -10 L124 180" stroke={ht.paper} strokeWidth={5} fill="none" />
+    </Svg>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: ui.ground },
+  body: { gap: 14, paddingHorizontal: 18, maxWidth: 560, width: '100%', alignSelf: 'center' },
+  found: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 52, borderRadius: 18,
+    backgroundColor: ht.mint, borderWidth: 2, borderColor: ht.ink, shadowColor: ht.ink, shadowOpacity: 1, shadowRadius: 0, shadowOffset: { width: 0, height: 4 }, elevation: 0,
+  },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 },
+  avatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: ht.sky, borderWidth: 2, borderColor: ht.ink, alignItems: 'center', justifyContent: 'center' },
+  mapCard: { height: 220, borderRadius: 18, overflow: 'hidden', borderWidth: 2, borderColor: ht.ink, backgroundColor: ht.sunk },
+  lock: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(30,27,46,0.62)', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 16 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
+  cell: { flexBasis: '45%', flexGrow: 1 },
+  track: { height: 8, backgroundColor: ui.line, borderRadius: 4, overflow: 'hidden' },
+  trackFill: { height: 8, backgroundColor: ht.lilacDeep, borderRadius: 4 },
+});

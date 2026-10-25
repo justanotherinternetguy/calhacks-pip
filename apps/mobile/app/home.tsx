@@ -10,8 +10,7 @@ import { FriendsDrawer } from '@/components/pip/FriendsDrawer';
 import { FriendsList } from '@/components/pip/FriendsList';
 import { FriendsMap, type MapPerson } from '@/components/pip/FriendsMap';
 import { HoldForHelp } from '@/components/pip/HoldForHelp';
-import { NightModeSwitch } from '@/components/pip/NightModeSwitch';
-import { Brand, Btn, Chip, D, Dot, Hairline, Handle, Icon, IconBtn, T } from '@/components/pip/kit';
+import { Brand, Btn, Chip, D, Dot, Hairline, Handle, Icon, T } from '@/components/pip/kit';
 import { whereIs } from '@/components/pip/where';
 import { usePeople, type Person } from '@/components/pip/usePeople';
 import { ago, isActive } from '@/lib/concern';
@@ -84,9 +83,11 @@ export default function Home() {
   const column = Math.min(width, MAX_COLUMN);
   const okayCaption = checkOpen ? 'Unlock first, then type a short phrase.'
     : alarmed ? (standDown.state === 'pending' ? 'Confirm it’s you…' : standDown.state === 'failed' ? 'Could not confirm. Try again.' : 'Stands the alert down. Needs your fingerprint.')
-    : saidOkayAt ? `Friends told · ${ago(saidOkayAt, now)}`
-    : 'Tells your friends you’re fine. Nothing else changes.';
-  const headerH = insets.top + 62;
+    : saidOkayAt ? `Friends told you’re okay · ${ago(saidOkayAt, now)}`
+    : null;
+  const nightLabel = Platform.OS === 'web' ? 'Web preview' : `Night mode · ${nightOn ? 'on' : 'off'}`;
+  const calm = calmLine({ nightOn, worst, others });
+  const headerH = insets.top + 56;
 
   return (
     <View style={styles.screen}>
@@ -95,18 +96,22 @@ export default function Home() {
         <FriendsMap testID="friends-map" people={mapPeople} anchor={anyPlaced ? anchor : null} onSelect={open} insetTop={headerH} insetBottom={sheetH} style={StyleSheet.absoluteFill} />
 
         <View style={[styles.header, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
-          <IconBtn label="You and settings" onPress={() => router.push('/settings')}>{Icon.sliders(ui.text)}</IconBtn>
-          <View style={styles.brandPill}>
-            <Brand size={22} />
-            <T style={{ fontSize: 12.5, lineHeight: 16, color: ui.quiet, fontWeight: '500' }}>
-              {Platform.OS === 'web' ? 'Web' : nightOn ? 'Night mode on' : 'Night mode off'}
-              {counts.out ? ` · ${counts.out} out` : ''}
-            </T>
+          <View style={styles.pill}><Brand size={24} /></View>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {/* Night mode's own switch (with what it pauses) lives on your page. */}
+            <Pressable accessibilityRole="button" accessibilityLabel={`${nightLabel}. Open your page`} hitSlop={4}
+              onPress={() => (me ? open(me.f.id) : router.push('/settings'))} style={({ pressed }) => [styles.pill, pressed && styles.pillPressed]}>
+              <View style={[styles.pillDot, nightOn && { backgroundColor: ht.mint }]} />
+              <D style={styles.pillText}>{nightLabel}</D>
+            </Pressable>
+            <Pressable accessibilityRole="button" hitSlop={4} onPress={openDrawer}
+              accessibilityLabel={`Friends${worst ? `: ${worst.f.name} ${worst.c.tone === 'high' ? 'needs you' : 'is on watch'}` : ''}`}
+              style={({ pressed }) => [styles.pill, { paddingHorizontal: 12 }, pressed && styles.pillPressed]}>
+              {Icon.people(ui.text2, 19)}
+              {others.length > 0 && <D style={styles.pillText}>{counts.out}</D>}
+              {worst ? <Dot tone={worst.c.tone} size={11} style={{ position: 'absolute', right: -2, top: -2 }} /> : null}
+            </Pressable>
           </View>
-          <IconBtn label={`Friends${worst ? `: ${worst.f.name} ${worst.c.tone === 'high' ? 'needs you' : 'is on watch'}` : ''}`} onPress={openDrawer}
-            badge={worst ? <Dot tone={worst.c.tone} size={12} style={{ position: 'absolute', right: -3, top: -3 }} /> : undefined}>
-            {Icon.people(ui.text)}
-          </IconBtn>
         </View>
 
         <View style={{ flex: 1 }} pointerEvents="none" />
@@ -128,23 +133,29 @@ export default function Home() {
                 </View>
                 {line.onPress ? <View style={{ marginTop: 12 }}>{Icon.chevron(ui.muted)}</View> : null}
               </Pressable>
-              <Hairline style={{ marginTop: 16, marginBottom: 16 }} />
+              <Hairline style={{ marginTop: 14, marginBottom: 14 }} />
             </>
-          ) : <View style={{ height: 14 }} />}
+          ) : (
+            <Pressable accessibilityRole={calm.onPress ? 'button' : undefined} disabled={!calm.onPress}
+              onPress={calm.onPress ? () => open(calm.onPress!) : undefined}
+              style={({ pressed }) => [styles.calmRow, pressed && { opacity: 0.7 }]}>
+              {calm.tone ? <Dot tone={calm.tone} size={11} /> : null}
+              <D accessibilityRole="header" style={{ flex: 1, fontSize: 18, lineHeight: 23, color: ui.text }}>{calm.text}</D>
+              {calm.onPress ? Icon.chevron(ui.muted) : null}
+            </Pressable>
+          )}
 
           <HoldForHelp active={alarmed} pending={standDown.state === 'pending'} onTrigger={onSos} onStandDown={() => void standDown.run()} />
 
           <Btn
-            testID="okay-button" kind="main" size={56}
+            testID="okay-button" kind="mint" size={48}
             title={checkOpen ? 'I’m okay' : alarmed ? 'I’m okay · stand down' : saidOkayAt ? 'Still okay' : 'I’m okay'}
-            icon={checkOpen || alarmed ? Icon.fingerprint(ht.cream) : Icon.check(ht.cream)}
+            icon={checkOpen || alarmed ? Icon.fingerprint(ht.ink) : saidOkayAt ? Icon.check(ht.ink) : undefined}
             onPress={onOkay}
             disabled={standDown.state === 'pending'}
-            style={{ marginTop: 12 }}
+            style={{ marginTop: 10 }}
           />
-          <T style={{ textAlign: 'center', fontSize: 12.5, lineHeight: 17, color: ui.quiet, marginTop: 8 }}>{okayCaption}</T>
-
-          <NightModeSwitch style={{ marginTop: 6 }} />
+          {okayCaption ? <T style={{ textAlign: 'center', fontSize: 12.5, lineHeight: 17, color: ui.quiet, marginTop: 8 }}>{okayCaption}</T> : null}
         </View>
       </View>
 
@@ -202,6 +213,22 @@ function myLine(a: { alarmed: boolean; sosActive: boolean; checkOpen: boolean; m
   return { tag: { text: m.tag, fill: key === 'check' ? ht.lilac : ht.coral }, title: m.title, sub: m.sub, onPress: key === 'snatch' ? 'snatch' : key === 'sos' ? undefined : 'check' };
 }
 
+const names = (xs: string[]) => (xs.length <= 3 ? xs.join(', ').replace(/, ([^,]*)$/, ' and $1') : `${xs.slice(0, 2).join(', ')} and ${xs.length - 2} more`);
+
+/** The sheet's one line when nothing of yours is open: how the night stands, in a sentence (as on the site). */
+function calmLine(a: { nightOn: boolean; worst: Person | null; others: Person[] }): { text: string; tone?: Person['c']['tone']; onPress?: string } {
+  if (a.worst) {
+    const { f, c } = a.worst;
+    return { text: c.tone === 'high' ? `${f.name} might not be okay.` : `Keep an eye on ${f.name}.`, tone: c.tone, onPress: f.id };
+  }
+  const out = a.others.filter((p) => p.c.tone === 'out');
+  const together = out.filter((p) => p.c.headline === 'Together').map((p) => p.f.name);
+  if (!a.nightOn) return { text: out.length ? `Night mode is off. ${names(out.map((p) => p.f.name))} ${out.length === 1 ? 'is' : 'are'} out.` : 'You’re home. Have a good night.' };
+  if (together.length) return { text: `Out with ${names(together)}. Everyone’s okay.` };
+  if (out.length) return { text: `${names(out.map((p) => p.f.name))} ${out.length === 1 ? 'is' : 'are'} out too. Everyone’s okay.` };
+  return { text: a.others.length ? 'Night mode is on. Your friends are home.' : 'Night mode is on. Add a friend to look out for you.' };
+}
+
 /** How your friends stand, shown at the top of the Friends drawer. `onPress` is the friend to open. */
 function friendsLine(a: { worst: Person | null; others: Person[] }): Line | null {
   if (a.worst) {
@@ -229,14 +256,21 @@ function friendsLine(a: { worst: Person | null; others: Person[] }): Line | null
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: ui.ground, alignItems: 'center' },
   column: { flex: 1, maxWidth: MAX_COLUMN, alignSelf: 'center' },
-  header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 14 },
-  brandPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 10, height: 44, paddingLeft: 12, paddingRight: 16, borderRadius: 999,
-    backgroundColor: ui.panel, borderWidth: 2, borderColor: ht.ink,
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14 },
+  // the site's status pill: paper on a thin line, Fredoka in ink-mid
+  pill: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, height: 40, paddingHorizontal: 14, borderRadius: 999,
+    backgroundColor: ui.panel, borderWidth: 1.5, borderColor: ui.line,
+    shadowColor: ht.ink, shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
+  pillPressed: { backgroundColor: ui.sunk },
+  pillDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: ui.panel, borderWidth: 1.5, borderColor: ht.ink },
+  pillText: { fontSize: 14, lineHeight: 18, color: ui.text2 },
   sheet: {
-    backgroundColor: ui.panel, borderTopLeftRadius: 30, borderTopRightRadius: 30, borderWidth: 2, borderBottomWidth: 0, borderColor: ht.ink,
-    paddingTop: 10, paddingHorizontal: 22,
+    backgroundColor: ui.panel, borderTopLeftRadius: 28, borderTopRightRadius: 28, borderWidth: 1.5, borderBottomWidth: 0, borderColor: ui.line,
+    paddingTop: 10, paddingHorizontal: 18,
+    shadowColor: ht.ink, shadowOpacity: 0.14, shadowRadius: 16, shadowOffset: { width: 0, height: -4 }, elevation: 8,
   },
+  calmRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, marginBottom: 14, minHeight: 46 },
   lineRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginTop: 16 },
 });

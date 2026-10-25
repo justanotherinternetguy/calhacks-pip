@@ -74,23 +74,27 @@ export function Mark({ initial, tone, isMe, dim, size = 13, style }: { initial: 
   );
 }
 
+/** Height of the name under a pin; the same space sits above the disc so the disc is the pin's centre. */
+export const PIN_LABEL_H = 24;
+
 /**
- * A pin on the map: a disc of the tone's colour with the person's initial, inside the cream-and-ink keyline every
- * floating shape wears. `me` is the sky disc. `focused` grows it and hangs the name underneath.
+ * A pin on the map, as on the site's radar: a disc of the tone's colour in a thick ink ring with the name underneath.
+ * `me` is the sky disc (no name). `focused` grows it and puts the name on an ink chip. The disc is the centre of the
+ * view, so anchor the marker at (0.5, 0.5).
  */
-export function Pin({ initial, name, tone, isMe, focused, dim }: { initial: string; name?: string; tone: Tone; isMe?: boolean; focused?: boolean; dim?: boolean }) {
+export function Pin({ name, tone, isMe, focused, dim }: { initial?: string; name?: string; tone: Tone; isMe?: boolean; focused?: boolean; dim?: boolean }) {
   const t = tones[tone];
-  const d = focused ? 44 : isMe ? 30 : 36;
+  const d = focused ? 28 : 22;
   const fill = isMe ? ht.sky : t.hollow ? ht.paper : t.dot;
   return (
-    <View accessible={false} style={{ alignItems: 'center', opacity: dim ? 0.5 : 1 }}>
-      <View style={[s.keylineOuter, { width: d, height: d, borderRadius: d / 2 }]}>
-        <View style={[s.keylineInner, { backgroundColor: fill, borderRadius: d / 2 }]}>
-          {!isMe && <D style={{ fontSize: focused ? 19 : 16, lineHeight: focused ? 24 : 20, color: ui.text }}>{initial}</D>}
-        </View>
+    <View accessible={false} style={{ alignItems: 'center', opacity: dim ? 0.5 : 1, minWidth: 64 }}>
+      <View style={{ height: PIN_LABEL_H }} />
+      <View style={{ width: d, height: d, borderRadius: d / 2, backgroundColor: fill, borderWidth: 2.5, borderColor: tone === 'offline' && !isMe ? ht.muted : ui.keyline }} />
+      <View style={{ height: PIN_LABEL_H, justifyContent: 'center' }}>
+        {isMe || !name ? null : focused
+          ? <Chip small style={{ alignSelf: 'center' }}>{name}</Chip>
+          : <D style={s.pinName} numberOfLines={1}>{name}</D>}
       </View>
-      <View style={s.pinStem} />
-      {focused && name ? <Chip style={{ marginTop: 2 }}>{name}</Chip> : null}
     </View>
   );
 }
@@ -324,9 +328,7 @@ export const s = StyleSheet.create({
   tab: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 40, paddingHorizontal: 16, borderRadius: 999 },
   switchTrack: { width: 50, height: 28, borderRadius: 14, padding: 2, borderWidth: 1.5, borderColor: ui.keyline, justifyContent: 'center' },
   switchKnob: { width: 21, height: 21, borderRadius: 11, borderWidth: 1.5, borderColor: ui.keyline },
-  keylineOuter: { backgroundColor: ui.keyline, padding: 1.5 },
-  keylineInner: { flex: 1, borderWidth: 2.5, borderColor: ht.cream, alignItems: 'center', justifyContent: 'center' },
-  pinStem: { width: 3, height: 7, backgroundColor: ui.keyline, borderBottomLeftRadius: 2, borderBottomRightRadius: 2, marginTop: -1 },
+  pinName: { fontSize: 13, lineHeight: 16, color: ht.inkMid, textShadowColor: ht.cream, textShadowRadius: 3, textShadowOffset: { width: 0, height: 0 } },
 });
 
 /** The site's spring, for the bigger moments. */

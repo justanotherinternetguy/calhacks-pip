@@ -47,14 +47,15 @@ const MAP_CSS = `
 .leaflet-bar{border:2px solid #1E1B2E!important;border-radius:14px!important;box-shadow:0 3px 0 #1E1B2E!important;overflow:hidden}
 .leaflet-bar a{background:#FFFCF5!important;color:#1E1B2E!important;border-bottom:1.5px solid #E6D8BD!important;font:600 18px/26px Fredoka,system-ui,sans-serif!important}
 .leaflet-bar a:last-child{border-bottom:0!important}
-.pip-pin{position:relative;display:flex;flex-direction:column;align-items:center;cursor:pointer;transform:translateY(0);transition:transform 160ms cubic-bezier(.34,1.56,.64,1)}
+.pip-pin{position:relative;display:flex;flex-direction:column;align-items:center;padding-top:24px;cursor:pointer;transition:transform 160ms cubic-bezier(.34,1.56,.64,1)}
 .pip-pin:hover{transform:translateY(-2px)}
-.pip-pin__disc{display:grid;place-items:center;border-radius:50%;background:var(--fill);box-shadow:0 0 0 2.5px #FBF3E4,0 0 0 4px #1E1B2E;font:600 16px Fredoka,system-ui,sans-serif;color:#1E1B2E}
-.pip-pin__stem{width:3px;height:7px;margin-top:3px;background:#1E1B2E;border-radius:0 0 2px 2px}
+.pip-pin__disc{position:relative;box-sizing:border-box;border-radius:50%;background:var(--fill);border:2.5px solid #1E1B2E}
 .pip-pin--dim{opacity:.5}
-.pip-pin__name{margin-top:3px;padding:3px 10px;border-radius:999px;background:#1E1B2E;color:#FBF3E4;font:500 12.5px/16px Fredoka,system-ui,sans-serif;white-space:nowrap}
-.pip-pin--pulse .pip-pin__disc::after{content:"";position:absolute;inset:-4px;border-radius:50%;background:#FF6B5C;opacity:.5;animation:pip-pulse 2.4s ease-out infinite;z-index:-1}
-@keyframes pip-pulse{0%{transform:scale(1);opacity:.5}100%{transform:scale(2.6);opacity:0}}
+.pip-pin__name{display:flex;align-items:center;height:24px;font:600 13px/16px Fredoka,system-ui,sans-serif;color:#3A3552;white-space:nowrap;text-shadow:0 0 3px #FBF3E4,0 0 3px #FBF3E4}
+.pip-pin__chip{padding:3px 10px;border-radius:999px;background:#1E1B2E;color:#FBF3E4;font-weight:500;text-shadow:none}
+.pip-pin--pulse .pip-pin__disc::after,.pip-pin--me .pip-pin__disc::after{content:"";position:absolute;inset:-3px;border-radius:50%;background:#FF6B5C;opacity:.5;animation:pip-pulse 2.4s ease-out infinite;z-index:-1}
+.pip-pin--me .pip-pin__disc::after{background:#4AA8FF;animation-duration:2.2s}
+@keyframes pip-pulse{0%{transform:scale(1);opacity:.45}100%{transform:scale(3.4);opacity:0}}
 .pip-tip{background:#1E1B2E!important;color:#FBF3E4!important;border:0!important;border-radius:999px!important;padding:3px 10px!important;font:500 12.5px Fredoka,system-ui,sans-serif!important;box-shadow:none!important}
 .pip-tip::before{display:none!important}
 `;
