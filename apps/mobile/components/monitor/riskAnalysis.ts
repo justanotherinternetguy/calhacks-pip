@@ -14,8 +14,13 @@ export type Urgency = 'info' | 'warn' | 'urgent';
 export type Trajectory = 'rising' | 'steady' | 'easing';
 export type Confidence = 'low' | 'medium' | 'high';
 export type ChainStep = { t: string; id: number | null; note: string };
-/** One thing that moved the score: up (+) or down (−). */
-export type Driver = { factor: string; ids: number[]; effect: 'up' | 'down' };
+/** One step of the reasoning that moved the score: what combines which incidents (or context), and by how much. */
+export type Driver = { factor: string; ids: number[]; effect: 'up' | 'down'; points: number };
+export type Effect = 'up' | 'down' | 'none';
+/** How the model read one incident on its own: its meaning here and its signed share of the score. */
+export type Assessment = { id: number; reading: string; effect: Effect; points: number };
+/** The owner said they are fine: answered a check-in (fingerprint / face / PIN) or tapped "I'm okay". */
+export type OkConfirmation = { atMs: number; how: 'check_in' | 'tapped' };
 export type Analysis = {
   risk: RiskLevel;
   /** 0-100, always inside the band of `risk` */
@@ -25,7 +30,13 @@ export type Analysis = {
   headline: string;
   analysis: string;
   chain: ChainStep[];
+  /** per incident, in the order the model gave them */
+  assessments: Assessment[];
   drivers: Driver[];
+  /** sum of the assessment and driver points: the score before it is pulled into the level's band */
+  ledger: number;
+  /** set when this read is the local reset after the owner confirmed OK (no model call) */
+  okReset: OkConfirmation | null;
   benign: string;
   watchFor: string;
   reminders: { text: string; urgency: Urgency }[];
@@ -48,6 +59,8 @@ export type AnalysisInput = {
   friendEvents: (IncidentEvent & { actorName: string })[];
   previous: { risk: RiskLevel; score: number | null; headline: string; atMs: number } | null;
   shownReminders: string[];
+  /** times the owner confirmed they are OK, oldest first (phone clock) */
+  confirmations?: OkConfirmation[];
 };
 
 const MAX_RECORDS = 40;
@@ -79,6 +92,12 @@ THE TIMELINE (JSON, all times on the phone clock, all durations in seconds)
 - trend: weighted load (watch 1, danger 3) of incidents that started in the last 15 min vs the 15 min before. calm_for_s: time since the last incident cleared when nothing is open.
 - engine_events[] oldest first: the phone engine's recent event log. Escalation steps: check_requested, heads_up, unlock_location, snatch_detected, call_option (no response for 10 min), resolved. signal_incident / incident_cleared mirror incidents[] opening and closing. battery_dying. audio_listening: the mic window opened or closed. sampling_rate_changed / location_interval_changed: the engine changed sensor mode (housekeeping, not evidence of danger on their own). incident_log_cleared: the log was reset.
 You are asked again after every new engine event, incident or friend action, and the user message names the newest engine event. Update your previous read: keep the score steady when the new event changes nothing, and say so in the analysis.
+CONFIRMED OK: the user message lists the times the subject confirmed they are fine (answered a check-in with fingerprint / face / PIN, or tapped "I'm okay"). A confirmation resolves everything before it: those incidents add 0 points (say "before the OK"), and the score restarts from 0 using only what happened after the latest confirmation.
+
+SHOW YOUR WORK (the console draws arrows from each incident to your reading of it, then into the score)
+- assessments[]: one entry per incident you weighed (every active one and any that matter; skip pure housekeeping): id, reading (max 90 chars: what this incident means here, e.g. "fall 40 s after the impairment started"), effect up / down / none, points (signed share of the score, e.g. +15, -10, 0).
+- drivers[]: the reasoning steps that combine incidents or add context: factor (the step, with its timing), ids (the incidents it combines, [] for pure context like late night), effect, points (the extra the combination adds or removes beyond the incidents' own points, e.g. +10 for two families within 2 min, -15 for an answered check-in).
+- The points of assessments and drivers must add up to your score (before it is fitted to the level's band).
 
 HOW TO REASON
 1. Order matters. Fall then scream reads differently from scream then fall. Impairment then separated then in_vehicle late at night is the drugging / led-away pattern; the same kinds in the reverse order, or spread over hours, are not.
@@ -99,7 +118,7 @@ Move within a band by timing tightness, duration and how many independent famili
 Reminders are short pop-ups shown to the friends right now (max 110 characters, 0-3). Make them concrete actions using the subject's name, e.g. "Call Alex now: still down 4 min after a fall, no answer." Urgency "urgent" only at high/critical, "warn" at elevated, "info" otherwise. Do not repeat a reminder already shown unless the situation got worse.
 
 Answer with one JSON object only, no prose around it:
-{"risk":"low|elevated|high|critical","score":0,"trajectory":"rising|steady|easing","confidence":"low|medium|high","headline":"one line, max 90 chars","analysis":"3-6 sentences for the friends: what the sequence adds up to and why","chain":[{"t":"HH:MM:SS","id":12,"note":"what this step means in the sequence"}],"drivers":[{"factor":"what raised or lowered the score, with its timing","ids":[12,14],"effect":"up|down"}],"benign":"the most plausible innocent explanation, one sentence","watch_for":"what would change your read, one sentence","reminders":[{"text":"...","urgency":"info|warn|urgent"}]}`;
+{"risk":"low|elevated|high|critical","score":0,"trajectory":"rising|steady|easing","confidence":"low|medium|high","headline":"one line, max 90 chars","analysis":"3-6 sentences for the friends: what the sequence adds up to and why","chain":[{"t":"HH:MM:SS","id":12,"note":"what this step means in the sequence"}],"assessments":[{"id":12,"reading":"what #12 means here","effect":"up|down|none","points":15}],"drivers":[{"factor":"the step that combines incidents or adds context, with its timing","ids":[12,14],"effect":"up|down","points":10}],"benign":"the most plausible innocent explanation, one sentence","watch_for":"what would change your read, one sentence","reminders":[{"text":"...","urgency":"info|warn|urgent"}]}`;
 
 /** The answer's shape, enforced by Claude's structured outputs (OpenRouter only gets JSON mode plus the prompt). */
 const obj = (properties: Record<string, unknown>) => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
@@ -112,7 +131,8 @@ export const ANALYSIS_SCHEMA = obj({
   headline: { type: 'string' },
   analysis: { type: 'string' },
   chain: { type: 'array', items: obj({ t: { type: 'string' }, id: { type: 'integer' }, note: { type: 'string' } }) },
-  drivers: { type: 'array', items: obj({ factor: { type: 'string' }, ids: { type: 'array', items: { type: 'integer' } }, effect: enumOf(['up', 'down']) }) },
+  assessments: { type: 'array', items: obj({ id: { type: 'integer' }, reading: { type: 'string' }, effect: enumOf(['up', 'down', 'none']), points: { type: 'integer' } }) },
+  drivers: { type: 'array', items: obj({ factor: { type: 'string' }, ids: { type: 'array', items: { type: 'integer' } }, effect: enumOf(['up', 'down']), points: { type: 'integer' } }) },
   benign: { type: 'string' },
   watch_for: { type: 'string' },
   reminders: { type: 'array', items: obj({ text: { type: 'string' }, urgency: enumOf(['info', 'warn', 'urgent']) }) },
@@ -149,6 +169,13 @@ export function buildMessages(input: AnalysisInput): ChatMessage[] {
   if (input.friendEvents.length) {
     lines.push(`Friend actions so far: ${input.friendEvents.map((e) => `${e.actorName} ${EVENT_LABEL[e.kind] ?? e.kind} (${ago(new Date(e.created_at).getTime(), Date.now())} ago)`).join('; ')}.`);
   }
+  const oks = input.confirmations ?? [];
+  if (oks.length) {
+    const last = oks[oks.length - 1];
+    const before = timeline.incidents.filter((i) => recAt(input.records, i.id) <= last.atMs).map((i) => `#${i.id}`);
+    lines.push('', `${input.subjectName} confirmed they are OK ${oks.length > 1 ? `${oks.length} times, last` : ''} ${ago(last.atMs, input.phoneNow)} ago (${last.how === 'check_in' ? 'answered a check-in with fingerprint / face / PIN' : 'tapped "I\'m okay"'}).`
+      + (before.length ? ` Resolved by it, 0 points: ${before.join(' ')}.` : ' No incident came before it.'));
+  }
   if (input.previous) {
     const p = input.previous;
     lines.push('', `Your previous read (${ago(p.atMs, Date.now())} ago): ${p.risk}${p.score != null ? ` ${p.score}/100` : ''}: ${p.headline}`);
@@ -159,6 +186,31 @@ export function buildMessages(input: AnalysisInput): ChatMessage[] {
     { role: 'system', content: SYSTEM },
     { role: 'user', content: lines.join('\n') },
   ];
+}
+
+/** Phone time an incident started (records may hold several copies of an id across log resets: the newest). */
+function recAt(records: IncidentRecord[], id: number): number {
+  let t = -Infinity;
+  for (const r of records) if (r.id === id && r.tMs > t) t = r.tMs;
+  return t;
+}
+
+/**
+ * The read right after the owner confirmed they are OK: risk 0, every incident before it resolved. Shown at once,
+ * without a model call; the next engine event or incident brings a fresh read that starts from 0.
+ */
+export function okAnalysis(subjectName: string, ok: OkConfirmation, records: IncidentRecord[]): Analysis {
+  const before = [...records].filter((r) => r.tMs <= ok.atMs).sort((a, b) => b.tMs - a.tMs).slice(0, 12);
+  const how = ok.how === 'check_in' ? 'answered the check-in (fingerprint, face or PIN)' : 'tapped "I\'m okay"';
+  return {
+    risk: 'low', score: 0, trajectory: 'easing', confidence: 'high',
+    headline: `${subjectName} confirmed they are OK`,
+    analysis: `${subjectName} ${how}. Everything logged before that counts as resolved, so the risk is back to 0. The next incident starts a new read.`,
+    chain: [],
+    assessments: before.map((r) => ({ id: r.id, reading: 'before the OK: resolved', effect: 'none' as const, points: 0 })),
+    drivers: [{ factor: `Confirmed OK: ${how}`, ids: before.map((r) => r.id), effect: 'down', points: 0 }],
+    ledger: 0, okReset: ok, benign: '', watchFor: 'Any new incident after the confirmation.', reminders: [], floor: null,
+  };
 }
 
 /**
@@ -181,6 +233,11 @@ const num = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' ?
 const ids = (v: unknown): number[] =>
   (Array.isArray(v) ? v : [v]).map((x) => (typeof x === 'number' ? x : Number.parseInt(String(x ?? '').replace('#', ''), 10))).filter(Number.isFinite);
 const clamp = (n: number, [lo, hi]: [number, number]) => Math.min(hi, Math.max(lo, Math.round(n)));
+/** Points with the sign of their effect (a model may send "+15", 15 for a down step, or nothing). */
+const signed = (v: unknown, effect: 'up' | 'down') => {
+  const n = Math.abs(Math.round(num(v)));
+  return Number.isFinite(n) ? Math.min(100, n) * (effect === 'down' ? -1 : 1) : 0;
+};
 
 /** Parses the model's answer; a non-JSON answer still shows up as the analysis text. */
 export function parseAnalysis(text: string, floor: { level: RiskLevel; reason: string } | null = null): Analysis {
@@ -189,7 +246,7 @@ export function parseAnalysis(text: string, floor: { level: RiskLevel; reason: s
     const risk = floor && RISKS.indexOf(floor.level) > 1 ? floor.level : 'elevated';
     return {
       risk, score: RISK_BAND[risk][0], trajectory: 'steady', confidence: 'low', headline: 'The AI answered in free text',
-      analysis: text.slice(0, 1500), chain: [], drivers: [], benign: '', watchFor: '', reminders: [], floor: floor && risk === floor.level ? floor.reason : null,
+      analysis: text.slice(0, 1500), chain: [], assessments: [], drivers: [], ledger: RISK_BAND[risk][0], okReset: null, benign: '', watchFor: '', reminders: [], floor: floor && risk === floor.level ? floor.reason : null,
     };
   }
   // The level is authoritative; the score is pulled into its band. A missing level comes from the score.
@@ -214,10 +271,25 @@ export function parseAnalysis(text: string, floor: { level: RiskLevel; reason: s
     .map((d: unknown): Driver => {
       const s = (typeof d === 'string' ? { factor: d } : (d ?? {})) as Record<string, unknown>;
       const e = String(s.effect ?? '').trim();
-      return { factor: str(s.factor, 240), ids: ids(s.ids ?? []).slice(0, 8), effect: e === 'down' || e === '-' || e === '−' ? 'down' : 'up' };
+      const effect = e === 'down' || e === '-' || e === '−' ? 'down' : 'up';
+      return { factor: str(s.factor, 240), ids: ids(s.ids ?? []).slice(0, 8), effect, points: signed(s.points, effect) };
     })
     .filter((d) => d.factor)
     .slice(0, 8);
+  const seen = new Set<number>();
+  const assessments = (Array.isArray(o.assessments) ? o.assessments : [])
+    .map((a: unknown): Assessment | null => {
+      const s = (a ?? {}) as Record<string, unknown>;
+      const id = ids(s.id)[0];
+      if (id == null || seen.has(id)) return null;
+      seen.add(id);
+      const e = String(s.effect ?? '').trim();
+      const effect: Effect = e === 'up' || e === 'down' ? e : 'none';
+      return { id, reading: str(s.reading, 160), effect, points: effect === 'none' ? 0 : signed(s.points, effect) };
+    })
+    .filter((a): a is Assessment => !!a)
+    .slice(0, 24);
+  const ledger = [...assessments, ...drivers].reduce((n, x) => n + x.points, 0);
   const reminders = (Array.isArray(o.reminders) ? o.reminders : [])
     .map((r: unknown) => {
       const s = (typeof r === 'string' ? { text: r } : (r ?? {})) as Record<string, unknown>;
@@ -234,7 +306,10 @@ export function parseAnalysis(text: string, floor: { level: RiskLevel; reason: s
     headline: str(o.headline, 140) || 'Analysis',
     analysis: str(o.analysis),
     chain,
+    assessments,
     drivers,
+    ledger,
+    okReset: null,
     benign: str(o.benign, 400),
     watchFor: str(o.watch_for ?? o.watchFor, 400),
     reminders,

@@ -16,6 +16,11 @@ import { AnalysisPanel } from '@/components/monitor/AnalysisPanel';
 import { ReminderToasts, toastVisible, type Toast } from '@/components/monitor/ReminderToasts';
 import { EscalationDock } from '@/components/monitor/EscalationDock';
 import { escalationRank, useRiskAnalysis, type Reminder } from '@/components/monitor/useRiskAnalysis';
+import { okAnalysis, type Assessment } from '@/components/monitor/riskAnalysis';
+import { useOkConfirmations } from '@/components/monitor/okConfirmations';
+import { LinkOverlay, LinkProvider } from '@/components/monitor/ReasoningLinks';
+import { reasoningLinks } from '@/components/monitor/AnalysisPanel';
+import { kindLabel } from '@/components/telemetry/labels';
 import { timeBucket } from '@/components/monitor/incidentTimeline';
 import { beep, primeAudio } from '@/components/monitor/beep';
 import { TelemetryHeader, type SubjectOption } from '@/components/telemetry/TelemetryHeader';
@@ -118,8 +123,11 @@ export default function MonitorScreen() {
   // not something to analyze: only what comes after them counts.
   const resetSeq = buffers.events.find((e) => e.name === 'incident_log_cleared')?.seq;
   const lastEvent = buffers.events.filter((e) => e.seq !== resetSeq).at(-1) ?? null;
+  // "I'm OK" confirmations (answered check-in / tapped I'm okay): logged in the incident list, reset the AI read to 0.
+  const { list: confirmations, clear: clearConfirmations } = useOkConfirmations(subjectId, buffers.events);
+  const latestOk = confirmations.at(-1) ?? null;
   const digest = [
-    subjectId, escalation ?? '-', isCheckPending(tick) ? 'check' : '', lastEvent?.key ?? '-',
+    subjectId, escalation ?? '-', isCheckPending(tick) ? 'check' : '', lastEvent?.key ?? '-', latestOk?.atMs ?? '-',
     records.map((r) => `${r.id}:${r.clearedMs > 0 ? 1 : 0}${r.acknowledged ? 1 : 0}${r.watched ? 1 : 0}:${r.sequenceId}`).join(','),
     subjectServer.map((i) => `${i.id}:${i.level}`).join(','),
     friendEvents.map((e) => e.id).join(','),
@@ -134,13 +142,27 @@ export default function MonitorScreen() {
     buildInput: () => ({
       subjectName, phoneNow, tick, records, events: buffers.events, serverIncidents: subjectServer,
       friendEvents: friendEvents.map((e) => ({ ...e, actorName: name(e.actor_id) })),
+      confirmations,
     }),
+    ok: latestOk,
+    // Reset to 0 only when nothing happened after the OK (an old confirmation on reload must not hide newer incidents).
+    buildOk: (ok) => (records.some((r) => r.tMs > ok.atMs) ? null : okAnalysis(subjectName, ok, records)),
     onNewReminders: (fresh: Reminder[]) => {
       setToasts((prev) => [...fresh.map((r) => ({ ...r, subjectName })), ...prev.filter((t) => toastVisible(t, Date.now()))].slice(0, 10));
       if (Platform.OS === 'web' && soundRef.current && fresh.some((r) => r.urgency === 'urgent')) beep();
     },
   });
   const dismissToast = useCallback((id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
+  // Arrows: incident rows → the AI's reading of each → the steps that combine them → the score.
+  const links = useMemo(() => reasoningLinks(ai.analysis), [ai.analysis]);
+  const assessments = useMemo(() => new Map<number, Assessment>((ai.analysis?.assessments ?? []).map((x) => [x.id, x])), [ai.analysis]);
+  const recordOf = useCallback((id: number) => {
+    let best: (typeof records)[number] | null = null;
+    for (const r of records) if (r.id === id && (!best || r.tMs > best.tMs)) best = r;
+    return best;
+  }, [records]);
+  const kindOf = useCallback((id: number) => { const r = recordOf(id); return r ? kindLabel(r.kind) : null; }, [recordOf]);
+  const timeOf = useCallback((id: number) => recordOf(id)?.tMs ?? null, [recordOf]);
 
   // Beep (web only) when a Supabase incident opens after this page loaded — never for one found on refresh.
   const [mountedAt] = useState(() => Date.now());
@@ -203,6 +225,7 @@ export default function MonitorScreen() {
     if (!ok) return;
     buffers.clearIncidents();
     clearAi();
+    clearConfirmations();
     setClearNote('Deleting…');
     const why = (e: unknown) => (e instanceof Error ? e.message : 'error');
     const [server, phone] = await Promise.all([
@@ -237,13 +260,16 @@ export default function MonitorScreen() {
         records={buffers.incidentList()} onPhone={buffers.incidentCountOnPhone} phoneNow={phoneNow}
         onClear={subjectId ? () => void clearIncidents() : undefined}
         clearNote={clearNote ?? undefined}
+        assessments={assessments}
+        confirmations={confirmations}
       />
-      <EventTicker events={buffers.events} />
+      <EventTicker events={buffers.events} now={phoneNow} />
     </View>
   );
-  const right = <AnalysisPanel state={ai} subjectName={subjectName} now={now} onRefresh={ai.refresh} onClear={clearAi} />;
+  const right = <AnalysisPanel state={ai} subjectName={subjectName} now={now} onRefresh={ai.refresh} onClear={clearAi} kindOf={kindOf} timeOf={timeOf} />;
 
   return (
+    <LinkProvider>
     <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
       <TelemetryHeader
         groupName={groupName} now={now} subjects={subjects} subjectId={subjectId} manual={manual} onPick={setPinned}
@@ -277,7 +303,9 @@ export default function MonitorScreen() {
         onAlert={() => { if (Platform.OS === 'web' && soundRef.current) beep(); }}
       />
       {newest && <View style={[styles.edge, { backgroundColor: levelColor(newest.level) }]} />}
+      <LinkOverlay links={links} />
     </SafeAreaView>
+    </LinkProvider>
   );
 }
 

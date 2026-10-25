@@ -1524,3 +1524,23 @@ fn walk_impact_hold_keeps_falls_and_bumps_that_stop_the_walk() {
     let hold = (v1.incidents.walk_impact_hold_s * 1000.0) as u64;
     assert!(*opened >= rec.t_ms + hold && *opened <= rec.t_ms + hold + 2_000, "opened at {opened} for a bump at {}", rec.t_ms);
 }
+
+/// Fall, "You okay?" comes up, then the person gets up and walks: the check-in is withdrawn as soon as the fall
+/// clears (FallRecovered), long before its deadline, and the friends are never told.
+#[test]
+fn getting_up_after_a_fall_withdraws_the_check_in() {
+    let mut g = Gen::new(0, 21);
+    g.walk(30.0, G_POCKET);
+    g.fall(G_POCKET, 10.0);
+    g.walk(40.0, G_POCKET);
+    let mut e = Engine::new(&generic(DEFAULT_TOML), None, 0).unwrap();
+    let evs = synth::replay(&mut e, &motion_trace(g.out, 21));
+    let check = first(&evs, is_check).expect("a check-in after the fall");
+    let recovered = incidents(&evs, IncidentKind::FallRecovered);
+    assert_eq!(recovered.len(), 1, "{:?}", kinds(&evs));
+    let resolved = first(&evs, |e| matches!(e, EngineEvent::Resolved)).expect("check-in withdrawn");
+    let deadline = Config::default_v1().thresholds.check_deadline_s as u64 * 1000;
+    assert!(resolved >= recovered[0].0 && resolved <= recovered[0].0 + 1000, "withdrawn at {resolved}, got up at {}", recovered[0].0);
+    assert!(resolved < check + deadline, "before the deadline");
+    assert!(!evs.iter().any(|(_, e)| matches!(e, EngineEvent::HeadsUp { .. } | EngineEvent::UnlockLocation { .. })));
+}

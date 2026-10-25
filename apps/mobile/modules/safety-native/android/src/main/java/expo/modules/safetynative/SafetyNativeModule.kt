@@ -290,6 +290,7 @@ fun SafetyRuntime.submitCheckIn(sample: TypingSample): Map<String, Any?> {
   if (dismissed) {
     alerts.cancelCheckIn(); alerts.cancelEscalated(); AlarmReceiver.cancelCheckTimeout(app)
     logCheckAnswered(verified = secure)   // no-op before friends were involved (no incident row yet)
+    noteOwnerOk("check-in answered")
     clearOwnerVerified()
   }
   engine.saveNow()
@@ -299,6 +300,7 @@ fun SafetyRuntime.submitCheckIn(sample: TypingSample): Map<String, Any?> {
 /** Owner confirmed with fingerprint / PIN while friends already hold the location or a grab is running: dismiss. */
 fun SafetyRuntime.biometricDismiss() {
   logCheckAnswered(verified = true)
+  noteOwnerOk("biometric stand-down")
   pushAction(UserAction.BIOMETRIC_DISMISS)
   alerts.cancelCheckIn(); alerts.cancelEscalated(); AlarmReceiver.cancelCheckTimeout(app)
   clearOwnerVerified()

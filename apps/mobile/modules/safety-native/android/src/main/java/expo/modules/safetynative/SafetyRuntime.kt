@@ -287,6 +287,15 @@ class SafetyRuntime private constructor(val app: Context) {
     if (sensing != null || telemetryOn || dashboardStreamingOn || collecting) telemetry.start() else telemetry.stop()
   }
 
+  /**
+   * The owner confirmed they are OK (a check-in answered after fingerprint / face / PIN, or an alert stood down with
+   * a biometric). Rides the telemetry `events` as `owner_ok`, so the friends' monitor logs it and resets its AI read.
+   */
+  fun noteOwnerOk(how: String) {
+    synchronized(eventRing) { eventRing.addLast("owner_ok"); while (eventRing.size > EVENT_RING_MAX) eventRing.removeFirst() }
+    Log.i(TAG, "owner confirmed OK ($how)")
+  }
+
   /** Engine events (snake_case, CONTRACTS §7 `events`) since the previous call; clears the ring. */
   fun drainTelemetryEvents(): List<String> = synchronized(eventRing) { val l = eventRing.toList(); eventRing.clear(); l }
 

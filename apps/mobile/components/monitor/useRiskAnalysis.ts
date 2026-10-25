@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isCheckPending, type EscalationLevel } from '@/modules/safety-native';
 import { chat, claudeConfigured, llmConfigured, LlmError } from '@/lib/llm';
-import { ANALYSIS_SCHEMA, buildMessages, parseAnalysis, riskFloor, type Analysis, type AnalysisInput, type Urgency } from './riskAnalysis';
+import { ANALYSIS_SCHEMA, buildMessages, parseAnalysis, riskFloor, type Analysis, type AnalysisInput, type OkConfirmation, type Urgency } from './riskAnalysis';
 
 /** Claude: coalesces the events of one burst (an incident and its check-in often land in the same frame). */
 const EVENT_DEBOUNCE_MS = 800;
@@ -16,7 +16,7 @@ const URGENT_DEBOUNCE_MS = 1_500;
 const MIN_GAP_MS = 45_000;
 const ERROR_RETRY_MS = 30_000;
 const RATE_LIMIT_RETRY_MS = 90_000;
-const CACHE_PREFIX = 'safe.monitor.ai.v3.'; // v3: structured timeline, score / drivers
+const CACHE_PREFIX = 'safe.monitor.ai.v4.'; // v4: per-incident assessments, driver points, OK resets
 
 export type Reminder = { id: string; text: string; urgency: Urgency; atMs: number };
 export type AnalysisStatus = 'off' | 'quiet' | 'cleared' | 'waiting' | 'running' | 'ready' | 'error';
@@ -36,15 +36,17 @@ type Inner = Omit<AnalysisState, 'status'> & {
   doneDigest: string | null;
   /** the friend cleared the messages; stays empty until the incidents change */
   cleared: boolean;
+  /** newest OK confirmation (phone ms) already applied as a reset, so a reload does not apply it again */
+  okSeen: number;
 };
 /** analysis null = cleared at `digest` */
-type Cached = { digest: string; analysis: Analysis | null; atMs: number; model: string | null; reminders: Reminder[] };
+type Cached = { digest: string; analysis: Analysis | null; atMs: number; model: string | null; reminders: Reminder[]; okSeen?: number };
 
 const RANK: Record<EscalationLevel, number> = { idle: 0, resolved: 0, check: 1, heads_up: 2, unlocked: 3, snatch: 3 };
 export const escalationRank = (l: EscalationLevel | null | undefined) => (l ? RANK[l] ?? 0 : 0);
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-const empty = (subject: string | null): Inner => ({ subject, phase: 'idle', analysis: null, atMs: 0, model: null, error: null, retryAt: null, reminders: [], doneDigest: null, cleared: false });
+const empty = (subject: string | null, okSeen = 0): Inner => ({ subject, phase: 'idle', analysis: null, atMs: 0, model: null, error: null, retryAt: null, reminders: [], doneDigest: null, cleared: false, okSeen });
 
 function readCache(subject: string): Cached | null {
   try {
@@ -63,7 +65,7 @@ function writeCache(subject: string, c: Cached | null) {
 /** A subject's starting point: its cached read, if any (no request while nothing changed since). */
 function initial(subject: string | null): Inner {
   const c = subject ? readCache(subject) : null;
-  return c ? { ...empty(subject), analysis: c.analysis, atMs: c.atMs, model: c.model, reminders: c.reminders, doneDigest: c.digest, cleared: !c.analysis } : empty(subject);
+  return c ? { ...empty(subject, c.okSeen ?? 0), analysis: c.analysis, atMs: c.atMs, model: c.model, reminders: c.reminders, doneDigest: c.digest, cleared: !c.analysis } : empty(subject);
 }
 
 export function useRiskAnalysis(opts: {
@@ -77,6 +79,10 @@ export function useRiskAnalysis(opts: {
   escalation: EscalationLevel | null;
   buildInput: () => Omit<AnalysisInput, 'previous' | 'shownReminders'>;
   onNewReminders?: (r: Reminder[]) => void;
+  /** newest time the subject confirmed they are OK; a newer one resets the read to 0 at once (no model call) */
+  ok?: OkConfirmation | null;
+  /** the reset read for `ok`; null when something happened after it (the model is told about the OK instead) */
+  buildOk?: (ok: OkConfirmation) => Analysis | null;
 }) {
   const { subjectId, digest, quiet, quietConfirmed, escalation } = opts;
   const configured = llmConfigured();
@@ -86,10 +92,11 @@ export function useRiskAnalysis(opts: {
   // Adjust state while rendering (React's pattern for "reset when a prop changes"): new subject → its cached read;
   // the phone confirms an empty log → drop the stale read.
   if (inner.subject !== subjectId) setInner(initial(subjectId));
-  else if (quietConfirmed && inner.analysis && inner.phase !== 'running') setInner(empty(subjectId));
+  else if (quietConfirmed && inner.analysis && inner.phase !== 'running') setInner(empty(subjectId, inner.okSeen));
 
   const innerRef = useRef(inner);
   const buildRef = useRef(opts.buildInput);
+  const buildOkRef = useRef(opts.buildOk);
   const onNewRef = useRef(opts.onNewReminders);
   const digestRef = useRef(digest);
   const subjectRef = useRef(subjectId);
@@ -98,7 +105,7 @@ export function useRiskAnalysis(opts: {
   const inFlight = useRef(false);
   const blocked = useRef(false); // bad key / no credit: wait for a manual retry
   const gen = useRef(0); // bumped by clear(): an answer to a request sent before it is dropped
-  useEffect(() => { innerRef.current = inner; buildRef.current = opts.buildInput; onNewRef.current = opts.onNewReminders; digestRef.current = digest; });
+  useEffect(() => { innerRef.current = inner; buildRef.current = opts.buildInput; buildOkRef.current = opts.buildOk; onNewRef.current = opts.onNewReminders; digestRef.current = digest; });
   useEffect(() => {
     subjectRef.current = subjectId;
     lastCallAt.current = 0;
@@ -134,8 +141,8 @@ export function useRiskAnalysis(opts: {
         .map((r, i) => ({ ...r, id: `${atMs}-${i}`, atMs }));
       const reminders = [...fresh, ...prev.reminders].slice(0, 20);
       lastRank.current = rankAtStart;
-      setInner({ subject, phase: 'idle', analysis, atMs, model, error: null, retryAt: null, reminders, doneDigest: startDigest, cleared: false });
-      writeCache(subject, { digest: startDigest, analysis, atMs, model, reminders });
+      setInner({ subject, phase: 'idle', analysis, atMs, model, error: null, retryAt: null, reminders, doneDigest: startDigest, cleared: false, okSeen: prev.okSeen });
+      writeCache(subject, { digest: startDigest, analysis, atMs, model, reminders, okSeen: prev.okSeen });
       if (fresh.length) onNewRef.current?.(fresh);
     } catch (e) {
       if (subjectRef.current !== subject || gen.current !== g) return;
@@ -150,6 +157,23 @@ export function useRiskAnalysis(opts: {
       setKick((k) => k + 1); // re-check: the picture may have changed while the request ran
     }
   }, []);
+
+  // The subject confirmed they are OK: risk back to 0 now. An answer still on its way predates the OK and is dropped;
+  // the next engine event or incident brings a fresh read (the prompt tells the model to start from 0 after the OK).
+  const okAt = opts.ok?.atMs ?? 0;
+  useEffect(() => {
+    const ok = opts.ok;
+    const build = buildOkRef.current;
+    if (!subjectId || !ok || !build || ok.atMs <= innerRef.current.okSeen) return;
+    const analysis = build(ok);
+    const prev = innerRef.current;
+    if (!analysis) { setInner({ ...prev, okSeen: ok.atMs }); return; }
+    gen.current += 1;
+    const atMs = Date.now();
+    setInner({ ...prev, subject: subjectId, phase: 'idle', analysis, atMs, model: null, error: null, retryAt: null, doneDigest: digestRef.current, cleared: false, okSeen: ok.atMs });
+    writeCache(subjectId, { digest: digestRef.current, analysis, atMs, model: null, reminders: prev.reminders, okSeen: ok.atMs });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subjectId, okAt]);
 
   // Schedule a read when the picture changes.
   useEffect(() => {
@@ -178,8 +202,9 @@ export function useRiskAnalysis(opts: {
     if (!subject) return;
     gen.current += 1;
     const d = digestRef.current;
-    setInner({ ...empty(subject), doneDigest: d, cleared: true });
-    writeCache(subject, { digest: d, analysis: null, atMs: Date.now(), model: null, reminders: [] });
+    const okSeen = innerRef.current.okSeen;
+    setInner({ ...empty(subject, okSeen), doneDigest: d, cleared: true });
+    writeCache(subject, { digest: d, analysis: null, atMs: Date.now(), model: null, reminders: [], okSeen });
   }, []);
   const status: AnalysisStatus =
     !configured ? 'off'
@@ -188,6 +213,6 @@ export function useRiskAnalysis(opts: {
     : !quiet && digest !== inner.doneDigest ? 'waiting'
     : inner.analysis ? 'ready'
     : inner.cleared && !quiet ? 'cleared' : 'quiet';
-  const { subject: _s, phase: _p, doneDigest: _d, cleared: _c, ...view } = inner;
+  const { subject: _s, phase: _p, doneDigest: _d, cleared: _c, okSeen: _o, ...view } = inner;
   return { ...view, status, configured, refresh, clear };
 }

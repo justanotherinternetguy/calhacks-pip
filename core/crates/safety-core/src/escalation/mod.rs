@@ -142,18 +142,18 @@ impl Escalation {
                 }
             }
             EscalationLevel::Check => {
-                // the user always gets the full check-in window before friends are involved
-                if self.check_deadline.map(|d| now_ms >= d).unwrap_or(false) {
-                    if trigger {
-                        self.set_level(EscalationLevel::HeadsUp);
-                        self.summary = summary.to_string();
-                        fx.check_missed = true;
-                        ev.push(EngineEvent::HeadsUp { summary: format!("no answer to a check-in; {}", self.summary) });
-                    } else {
-                        self.set_level(EscalationLevel::Resolved);
-                        fx.resolved = true;
-                        ev.push(EngineEvent::Resolved);
-                    }
+                if !trigger {
+                    // what asked cleared on its own (got up and walked after the fall, back with the group…): the
+                    // "You okay?" is withdrawn at once instead of waiting out its deadline
+                    self.set_level(EscalationLevel::Resolved);
+                    fx.resolved = true;
+                    ev.push(EngineEvent::Resolved);
+                } else if self.check_deadline.map(|d| now_ms >= d).unwrap_or(false) {
+                    // the user always gets the full check-in window before friends are involved
+                    self.set_level(EscalationLevel::HeadsUp);
+                    self.summary = summary.to_string();
+                    fx.check_missed = true;
+                    ev.push(EngineEvent::HeadsUp { summary: format!("no answer to a check-in; {}", self.summary) });
                 }
             }
             EscalationLevel::HeadsUp => {
@@ -352,14 +352,16 @@ mod tests {
     }
 
     #[test]
-    fn trigger_clearing_resolves_and_check_waits_its_deadline() {
+    fn trigger_clearing_withdraws_the_check_and_resolves_a_heads_up() {
         let cfg = Config::default_v1().thresholds;
         let mut e = Escalation::new(&cfg, 7);
         e.update(0, true, "");
-        // trigger gone before the deadline: still no heads-up, resolved at the deadline
-        assert!(e.update(10_000, false, "").0.is_empty());
-        let (ev, fx) = e.update(120_000, false, "");
-        assert!(fx.resolved && ev.contains(&EngineEvent::Resolved));
+        // still asking while the trigger holds, inside the deadline
+        assert!(e.update(5_000, true, "").0.is_empty());
+        assert_eq!(e.level(), EscalationLevel::Check);
+        // trigger gone before the deadline (got up after the fall): the check is withdrawn at once, no heads-up
+        let (ev, fx) = e.update(10_000, false, "");
+        assert!(fx.resolved && ev.contains(&EngineEvent::Resolved) && !has(&ev, |e| matches!(e, EngineEvent::HeadsUp { .. })));
         // no new check inside the repeat cooldown
         e.update(121_000, false, "");
         assert!(!has(&e.update(200_000, true, "").0, |e| matches!(e, EngineEvent::CheckRequested { .. })));

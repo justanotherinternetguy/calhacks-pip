@@ -55,6 +55,7 @@ class SosManager(private val rt: SafetyRuntime) {
     if (ok) {
       rt.sosActive = false
       rt.pushAction(UserAction.BIOMETRIC_DISMISS)
+      rt.noteOwnerOk("SOS cancelled")
       rt.emit("sos", mapOf("active" to false))
       rt.scope.launch { rt.resolveIncident() }
     }

@@ -10,11 +10,11 @@ export { ACTIVITY_LABEL, KIND_LABEL, PLACEMENT_LABEL, TIER_LABEL, fmtSd, fmtValu
 export const ENGINE_EVENT_LABEL: Record<string, string> = {
   check_requested: 'check-in requested', heads_up: 'friends notified (heads-up)', unlock_location: 'location unlocked', snatch_detected: 'snatch detected',
   resolved: 'resolved', battery_dying: 'battery dying', sampling_rate_changed: 'sampling rate changed',
-  audio_listening: 'mic listening window', signal_incident: 'incident opened', incident_cleared: 'incident cleared', incident_log_cleared: 'incident log reset', call_option: 'call option available',
+  audio_listening: 'mic listening window', signal_incident: 'incident opened', incident_cleared: 'incident cleared', incident_log_cleared: 'incident log reset', call_option: 'call option available', owner_ok: 'confirmed OK',
 };
 export const engineEventLabel = (name: string) => ENGINE_EVENT_LABEL[name] ?? name.replace(/_/g, ' ');
 export const engineEventColor = (name: string) =>
-  ({ check_requested: colors.warn, heads_up: colors.warn, unlock_location: colors.danger, snatch_detected: colors.danger, call_option: colors.danger, battery_dying: colors.warn, resolved: colors.ok, signal_incident: colors.warn, incident_cleared: colors.ok } as Record<string, string>)[name] ?? colors.muted;
+  ({ check_requested: colors.warn, heads_up: colors.warn, unlock_location: colors.danger, snatch_detected: colors.danger, call_option: colors.danger, battery_dying: colors.warn, resolved: colors.ok, signal_incident: colors.warn, incident_cleared: colors.ok, owner_ok: colors.ok } as Record<string, string>)[name] ?? colors.muted;
 /** Events that should make the console beep (escalation steps + call option). */
 export const ALERT_EVENTS = new Set(['check_requested', 'heads_up', 'unlock_location', 'snatch_detected', 'call_option']);
 

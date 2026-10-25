@@ -221,7 +221,7 @@ type TelemetryFrame = {
   sampleHz: number;                         // measured accelerometer delivery rate (e.g. 49.9)
   incidents: IncidentRecord[];              // new records (id > lastSentId) and records whose clearedMs / acknowledged / sequenceId changed — UPSERT by id; the whole live log again after a rejoin
   incidentCount: number;                    // total live log size, lets the UI detect gaps
-  events: string[];                         // engine events since the last frame, snake_case: check_requested, heads_up, unlock_location, snatch_detected, resolved, battery_dying, sampling_rate_changed, audio_listening, signal_incident, incident_cleared, call_option
+  events: string[];                         // engine events since the last frame, snake_case: check_requested, heads_up, unlock_location, snatch_detected, resolved, battery_dying, sampling_rate_changed, audio_listening, signal_incident, incident_cleared, call_option, owner_ok (the owner answered a check-in after fingerprint / face / PIN, or stood an alert / SOS down with a biometric; the monitor logs it as "Confirmed OK" and resets its AI read to 0)
   rttMs?: number;                           // self-echo round trip, smoothed
   state?: {
     metrics: LiveMetrics;                   // §9 shape (bands[], listening, context, placement, samplingFull, evidence, …)
