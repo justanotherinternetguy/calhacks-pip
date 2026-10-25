@@ -102,6 +102,7 @@ export class FrameMerger {
       events: p.events,
     };
     if (isNum(p.rttMs)) tick.rttMs = p.rttMs;
+    if (p.raw && Array.isArray(p.raw.t)) tick.raw = p.raw;
     return tick;
   }
 }

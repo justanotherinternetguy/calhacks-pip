@@ -248,6 +248,7 @@ export default function MonitorScreen() {
       <TelemetryHeader
         groupName={groupName} now={now} subjects={subjects} subjectId={subjectId} manual={manual} onPick={setPinned}
         conn={conn} tick={tick} soundOn={soundOn} onToggleSound={toggleSound} onHome={() => (router.canGoBack() ? router.back() : router.replace('/home'))}
+        links={[{ label: 'Collect data', onPress: () => router.push(subjectId ? { pathname: '/collect', params: { subject: subjectId } } : '/collect') }]}
       />
       {wide ? (
         <View style={styles.columns}>

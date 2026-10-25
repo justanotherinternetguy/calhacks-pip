@@ -62,12 +62,13 @@ impl Bands {
         self.get(name).map(|b| b.mean + k * b.sd).unwrap_or(f32::MAX)
     }
 
-    /// Unsteadiness metrics currently out of band on the concerning side, with the worst signed sd distance.
-    pub fn unsteady_out(&self) -> (Vec<&str>, f32) {
+    /// Unsteadiness metrics (of `use_metrics`, dashboard names) currently out of band on the concerning side, with the
+    /// worst signed sd distance.
+    pub fn unsteady_out(&self, use_metrics: &[String]) -> (Vec<&str>, f32) {
         let mut names = Vec::new();
         let mut worst = 0.0f32;
         for (mi, b) in self.bands.iter().enumerate() {
-            if b.in_band {
+            if b.in_band || !use_metrics.iter().any(|m| m == METRIC_NAMES[mi]) {
                 continue;
             }
             let concerning = match UNSTEADY_SIDE[mi] {

@@ -67,7 +67,7 @@ peak_g = 3.0
 # Classified after post_window_ms: drop (below) ⇒ PhoneDrop if not picked up; fall pattern (orientation change +
 # micro-motion after, or free fall + hard peak) ⇒ PossibleFall; any other peak > incident_peak_g with an orientation
 # change ⇒ HardImpact. A peak without orientation change (dancing, jumping, a slap) is not an incident.
-incident_peak_g = 2.5
+incident_peak_g = 3.0
 impact_window_ms = 400
 post_window_ms = 2000
 orientation_change_deg = 45.0
@@ -112,8 +112,14 @@ down_after_fall_s = 15
 # ---- gait ---- (needs full-rate sampling; the OS must not report stationary/vehicle)
 # Unsteady gait: stride variability / regularity / sway / wobble out of band for unsteady_persist_s of walking;
 # clears after unsteady_clear_s of in-band walking. A pause longer than drift_gap_s restarts the persistence clock.
-unsteady_persist_s = 30
+unsteady_persist_s = 35
 unsteady_clear_s = 120
+# Metrics the rule looks at. stride_cv is left out: in a pocket the step peaks are too noisy for it (it measured
+# 0.42 on a normal walk and lower on an unsteady one, 2026-10-25 /collect recordings).
+unsteady_metrics = ["regularity", "sway", "wobble"]
+# A bump with a tilt in the middle of a walk (a pocket sees one every few steps at 3 to 4 g) is held this long:
+# a walking window that starts after it drops it, a walk that stopped opens it as a hard impact.
+walk_impact_hold_s = 10
 drift_gap_s = 6
 # Slowed walk: cadence below (1 - slowed_cadence_frac) × baseline mean for slowed_persist_s of walking.
 slowed_cadence_frac = 0.2
@@ -217,6 +223,22 @@ wobble         = [15.0, 6.0]        # deg/s RMS rotation rate orthogonal to grav
 jerk           = [8.0, 4.0]        # g/s peak d|a|/dt per gait window
 rotation       = [40.0, 25.0]      # deg/s peak rotation rate per gait window
 peak_g         = [1.5, 0.3]        # g, peak total acceleration per gait window
+
+# Per-placement priors (used until that placement's own baseline is trusted). Pocket and unknown are calibrated to
+# one person's normal walk, phone in a trouser pocket (2026-10-25 /collect: regularity 0.93 ± 0.10, median 0.96;
+# sway 0.224 ± 0.008 g; wobble 100 ± 4 °/s; unsteady walk: regularity 0.49, sway 0.26 g, wobble 119 °/s). SDs are
+# wider than one walk showed so day-to-day variation stays inside the band.
+[baseline.placement_priors.pocket]
+step_cv    = [0.42, 0.06]
+regularity = [0.95, 0.07]
+sway_rms   = [0.224, 0.012]
+wobble     = [100.0, 6.0]
+
+[baseline.placement_priors.unknown]
+step_cv    = [0.42, 0.06]
+regularity = [0.95, 0.07]
+sway_rms   = [0.224, 0.012]
+wobble     = [100.0, 6.0]
 
 [baseline.typing_priors]
 # Population priors per typing feature: [median, sd]

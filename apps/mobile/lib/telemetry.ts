@@ -53,7 +53,12 @@ const COMMAND_JOIN_MS = 8_000;
 export type TelemetryCommand =
   | { cmd: 'reset_incidents' }
   | { cmd: 'friend_marked_safe'; incidentId: string; by: string }
-  | { cmd: 'release_location'; incidentId: string; requestId?: string; by: string };
+  | { cmd: 'release_location'; incidentId: string; requestId?: string; by: string }
+  // Data collection (only if the owner allowed it in Settings). Start / extend a session for `minutes` (1–15);
+  // `label` is the action happening now, shown in the phone's notification.
+  | { cmd: 'collect_start'; minutes: number; label?: string }
+  | { cmd: 'collect_label'; label: string }
+  | { cmd: 'collect_stop' };
 
 /**
  * Send a command to a member's phone on `telemetry-cmd:{userId}` (migration 0012: the subject or any group-mate may

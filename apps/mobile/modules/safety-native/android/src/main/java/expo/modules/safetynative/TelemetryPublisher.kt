@@ -94,7 +94,7 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
   private var lastSummaryMs = 0L
 
   fun desiredHz(): Int = when {
-    rt.telemetryOn || rt.dashboardStreamingOn -> HZ_STREAM
+    rt.telemetryOn || rt.dashboardStreamingOn || rt.collecting -> HZ_STREAM
     rt.nightActive -> HZ_NIGHT
     else -> 0
   }
@@ -155,6 +155,7 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
   private fun rateReason() = when {
     rt.telemetryOn -> "telemetry on"
     rt.dashboardStreamingOn -> "dashboard streaming"
+    rt.collecting -> "data collection"
     else -> "night mode"
   }
 
@@ -215,6 +216,16 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
         runCatching {
           rt.onLocationRequested(payload.optString("incidentId"), payload.optString("requestId").ifBlank { null }, payload.optString("by").ifBlank { null })
         }.onFailure { Log.w(TAG, "release_location failed", it) }
+      }
+      // Data collection (/collect). Ignored unless the owner allowed it in Settings (startCollect checks).
+      "collect_start" -> rt.scope.launch {
+        val r = rt.startCollect(payload.optInt("minutes", 10), payload.optString("label").ifBlank { null })
+        Log.i(TAG, "monitor command: collect_start ($r)")
+      }
+      "collect_label" -> rt.setCollectLabel(payload.optString("label"))
+      "collect_stop" -> rt.scope.launch {
+        Log.i(TAG, "monitor command: collect_stop")
+        rt.stopCollect("stopped from the dashboard")
       }
       else -> Log.w(TAG, "unknown monitor command: $cmd")
     }
@@ -278,6 +289,7 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
       .put("incidentCount", cachedLog.size)
       .put("events", JSONArray(events))
     rttMs?.let { o.put("rttMs", it) }
+    if (rt.collecting) rt.sensing?.drainCollectSamples()?.takeIf { it.isNotEmpty() }?.let { o.put("raw", rawJson(it)) }
 
     // State block: after every engine tick, at least once a second, and whenever something happened.
     val tickMs = rt.lastTickMs
@@ -311,6 +323,7 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
       .put("activity", metrics["activity"] ?: "unknown")
       .put("placement", metrics["placement"] ?: "unknown")
       .put("samplingFull", metrics["samplingFull"] ?: false)
+      .put("collect", jsonOf(rt.collectMap()))
     // Last fix for the friends' map (the map UI shows every friend's position).
     rt.lastLocation?.let { l ->
       s.put("loc", JSONObject().put("lat", l.latitude).put("lng", l.longitude).put("acc", l.accuracy.toDouble()).put("t", l.time))
@@ -320,6 +333,22 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
       rt.pendingCheck?.let { s.put("checkPending", true).put("checkDeadlineMs", it.deadlineMs).put("checkSummary", it.summary) }
     }
     return s
+  }
+
+  /**
+   * Data collection (CONTRACTS §7 `raw`): parallel arrays, newest last. `t` phone ms per sample; `a` user acceleration
+   * (g), `g` gravity unit vector, `r` gyro (rad/s), each flattened x, y, z. Rounded to keep a 10 Hz frame small.
+   */
+  private fun rawJson(samples: List<uniffi.safety.MotionSample>): JSONObject {
+    val t = JSONArray(); val a = JSONArray(); val g = JSONArray(); val r = JSONArray()
+    fun put(arr: JSONArray, x: Float, scale: Double) { arr.put(if (x.isFinite()) (x.toDouble() * scale).roundToLong() / scale else 0.0) }
+    for (s in samples) {
+      t.put(s.tMs.toLong())
+      put(a, s.ax, 100_000.0); put(a, s.ay, 100_000.0); put(a, s.az, 100_000.0)
+      put(g, s.gx, 10_000.0); put(g, s.gy, 10_000.0); put(g, s.gz, 10_000.0)
+      put(r, s.rx, 10_000.0); put(r, s.ry, 10_000.0); put(r, s.rz, 10_000.0)
+    }
+    return JSONObject().put("t", t).put("a", a).put("g", g).put("r", r)
   }
 
   /** 4-decimal magnitudes; non-finite values become 0 so one bad sample cannot sink the frame (org.json rejects NaN). */

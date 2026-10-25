@@ -126,12 +126,12 @@ The engine uses no probability model and no machine-learned score. Signals open 
 | Incident | Tier | Opens when | Clears when |
 |---|---|---|---|
 | Phone drop | watch | long free fall, lands flat, dead still, not picked up within 60 s | picked up |
-| High-g impact | watch | first reading above 2.5 g (opens at once) | reclassified ~2.4 s later as a fall, cleared as a drop / no-tilt hit |
-| Possible fall | watch | impact > 2.5 g + orientation change + micro-motion after (or free fall + hard peak) | steps resume |
+| High-g impact | watch | first reading above 3 g (opens at once; mid-walk a bump is held 10 s and dropped if walking continues) | reclassified ~2.4 s later as a fall, cleared as a drop / no-tilt hit |
+| Possible fall | watch | impact > 3 g + orientation change + micro-motion after (or free fall + hard peak) | steps resume |
 | Fall, recovered | context | steps resume after a possible fall | point event |
 | Down after fall | danger | after a fall/hard impact: no steps and no touch for 15 s | steps resume |
 | Hard impact | watch | hit with a tilt that was neither a fall nor a drop | walking resumes |
-| Unsteady gait | watch | variability / regularity / sway / wobble out of band for 30 s of walking | 2 min of in-band walking |
+| Unsteady gait | watch | regularity / sway / wobble out of band (pocket bands calibrated to one person) for 35 s of walking | 2 min of in-band walking |
 | Slowed walk | watch | cadence > 20 % below baseline for 1 min of walking | 30 s at normal cadence |
 | Stumble | context | single rhythm break + sideways jolt | point event, pruned after 30 min |
 | Repeated stumbles | watch | 3 stumbles within 5 min | 10 min without one |
@@ -219,8 +219,8 @@ Levels: `idle → check → heads_up → unlocked` (plus `snatch`, `resolved`).
 - Call campus safety / 911 with copyable "what to tell them" text.
 
 ### Demo sensitivity (Settings)
-This setting loads `model-demo.toml` over the production model. Impact triggers at 1.8 g. A grab needs a
-yank + twist + 2 s of jogging. Unsteady gait opens after 10 s, and the check-in lasts 30 s. Drop-vs-fall
+This setting loads `model-demo.toml` over the production model. Impact triggers at 3 g, the same as the production model. A grab needs a
+yank + twist + 2 s of jogging. Unsteady gait opens after 12 s, and the check-in lasts 30 s. Drop-vs-fall
 discrimination is off, a danger incident unlocks the location at once, and check-ins can repeat after
 15 s. The setting includes an in-app "how to trigger" guide. Turn it off to restore the production model.
 

@@ -36,6 +36,7 @@ class AlertManager(private val ctx: Context, private val rt: SafetyRuntime) {
     const val NOTIF_REARM = 1004
     const val NOTIF_ESCALATED = 1005
     const val NOTIF_INFO = 1006
+    const val NOTIF_COLLECT = 1007
     private const val TAG = "AlertManager"
   }
 
@@ -167,6 +168,25 @@ class AlertManager(private val ctx: Context, private val rt: SafetyRuntime) {
     nm.notify(NOTIF_REARM, n)
   }
   fun cancelRearm() = nm.cancel(NOTIF_REARM)
+
+  /**
+   * Ongoing while a data-collection session records: what to do now (the label from the /collect page) and that
+   * alerts are paused. "Stop" ends the session from the phone.
+   */
+  fun showCollecting(label: String?, untilMs: Long) {
+    val stop = PendingIntent.getBroadcast(ctx, 60, Intent(ctx, AlarmReceiver::class.java).setAction(AlarmReceiver.ACTION_STOP_COLLECT), flags())
+    val what = label?.replace('_', ' ')?.replaceFirstChar { it.uppercase() }
+    val n = NotificationCompat.Builder(ctx, CH_SENSING)
+      .setSmallIcon(android.R.drawable.ic_menu_edit)
+      .setContentTitle(if (what != null) "Now: $what" else "Recording motion data")
+      .setContentText("Data collection is on. Alerts and SOS are off until it ends.")
+      .setWhen(untilMs).setUsesChronometer(true).setChronometerCountDown(true)
+      .setOngoing(true).setSilent(true).setOnlyAlertOnce(true)
+      .addAction(0, "Stop", stop)
+      .setCategory(NotificationCompat.CATEGORY_STATUS).build()
+    nm.notify(NOTIF_COLLECT, n)
+  }
+  fun cancelCollecting() = nm.cancel(NOTIF_COLLECT)
 
   // ---- remote ring -------------------------------------------------------
 

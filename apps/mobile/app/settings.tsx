@@ -68,6 +68,9 @@ export default function Settings() {
   // Demo sensitivity: live engine on the bundled model-demo.toml (lenient thresholds).
   const demo = useNativeSwitch(SafetyNative.getDemoSensitivity, SafetyNative.setDemoSensitivity, 'Demo sensitivity', 'This build cannot switch the model config.');
   const [demoHelp, setDemoHelp] = useState(false);
+  // Data collection: lets a group-mate's /collect page record labelled motion from this phone.
+  const collectAllowed = useNativeSwitch(async () => (await SafetyNative.getCollect()).allowed, SafetyNative.setCollectAllowed, 'Data collection', 'This build cannot record data.');
+  const collect = status?.collect;
 
   const saveWindow = () => SafetyNative.setEveningWindow(Number(start) || 20, Number(end) || 6).then(() => Alert.alert('Saved'));
   const inject = async () => {
@@ -138,13 +141,24 @@ export default function Settings() {
         <Button title={demoHelp ? 'Hide: how to trigger' : 'How to trigger'} kind="ghost" onPress={() => setDemoHelp((h) => !h)} />
         {demoHelp && (
           <>
-            <P style={{ fontSize: 14 }}>Possible fall: phone in a pocket, drop onto a couch or bed (a firm hit with a tilt is enough). "High-g impact" appears at once, "Possible fall" about 2 s later. Don't touch it for 15 s → down after fall (red). Walk again → fall recovered.</P>
+            <P style={{ fontSize: 14 }}>Possible fall: phone in a pocket, drop it hard onto the floor or a bed (it needs a hit above 3 g with a tilt). "High-g impact" appears at once, "Possible fall" about 2 s later. Don't touch it for 15 s → down after fall (red). Walk again → fall recovered.</P>
             <P style={{ fontSize: 14 }}>Grab: screen on, phone in hand. Yank it away hard with a twist, then jog for 2 to 3 s.</P>
-            <P style={{ fontSize: 14 }}>Unsteady gait: stagger or sway while walking for 10 s. Slowed walk: walk at a crawl for 15 s. Stumble: trip mid-stride and keep walking (3 in 5 min → repeated stumbles).</P>
+            <P style={{ fontSize: 14 }}>Unsteady gait: stagger or sway while walking for 12 s. Slowed walk: walk at a crawl for 15 s. Stumble: trip mid-stride and keep walking (3 in 5 min → repeated stumbles).</P>
             <P style={{ fontSize: 14 }}>Phone left behind: leave it flat on a table, untouched, for 2 min while night mode is on.</P>
-            <P style={{ fontSize: 14 }}>pip asks "You okay?" 5 s after a possible fall, hard impact or scream (milder incidents need two kinds at once). If you don't answer, friends get a heads-up, then your location. To dismiss, confirm with fingerprint or PIN and type the phrase.</P>
+            <P style={{ fontSize: 14 }}>pip asks "You okay?" 5 s after a possible fall, hard impact or scream (milder incidents need two kinds at once). If you don't answer, friends get a heads-up, then your location. To dismiss, confirm with your face, fingerprint or PIN and type the phrase.</P>
           </>
         )}
+      </Card>
+      <Card>
+        <H2>Data collection</H2>
+        <Toggle label="Allow data collection" hint="Lets someone in your group record labelled motion data from this phone on the /collect page, to tune detection. While it records, check-ins, alerts and SOS are off and pip learns nothing. It stops by itself a few minutes after the page closes." value={collectAllowed.value} onChange={(v) => void collectAllowed.toggle(v)} />
+        {collectAllowed.error ? <P muted style={{ fontSize: 13 }}>Unavailable: {collectAllowed.error}</P> : null}
+        {collect?.on ? (
+          <>
+            <P style={{ fontSize: 14 }}>Recording now{collect.label ? `: ${collect.label.replace(/_/g, ' ')}` : ''}. Alerts and SOS are off.</P>
+            <Button title="Stop recording" kind="danger" onPress={() => void SafetyNative.stopCollect()} />
+          </>
+        ) : null}
       </Card>
       <Card>
         <H2>Debug</H2>

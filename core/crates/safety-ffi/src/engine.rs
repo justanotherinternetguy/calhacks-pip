@@ -286,6 +286,10 @@ impl SafetyEngine {
     pub fn set_learning(&self, enabled: bool) {
         self.lock().set_learning(enabled);
     }
+    /// Data-collection mode: incident rules run (night mode or not), but nothing escalates and nothing is learned.
+    pub fn set_collecting(&self, on: bool, now_ms: u64) {
+        self.lock().set_collecting(on, now_ms);
+    }
     /// Call every ~1 s in night mode; every incident rule and the escalation run inside.
     pub fn tick(&self, now_ms: u64) -> Vec<EngineEvent> {
         self.lock().tick(now_ms).into_iter().map(Into::into).collect()

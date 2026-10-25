@@ -8,7 +8,7 @@ import type { DrawFn } from './LiveCanvas.types';
 import { SERIES, drawSpans, drawTrace, fill, hband, hgrid, hline, label, traceMax, vgrid } from './draw';
 
 const WINDOWS = [10, 30, 60] as const;
-const IMPACT_G = 2.5; // CONTRACTS §6: impact = peak > 2.5 g with orientation change
+const IMPACT_G = 3.0; // model-v1 impact.incident_peak_g: impact = peak > 3 g with orientation change
 const BAND_SD = 2.5;
 
 /**

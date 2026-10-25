@@ -12,9 +12,15 @@ export type SubjectOption = { id: string; name: string; isMe: boolean; publishin
  * Top bar: who we are watching (group members; the publishing phone is auto-picked), the channel state with
  * latency and tick rate, the phone's mode pills straight from the newest tick, sound toggle, home.
  */
-export function TelemetryHeader({ groupName, now, subjects, subjectId, manual, onPick, conn, tick, soundOn, onToggleSound, onHome }: {
+export function TelemetryHeader({ groupName, now, subjects, subjectId, manual, onPick, conn, tick, soundOn, onToggleSound, onHome, kicker = 'Telemetry console', links }: {
   groupName: string; now: number; subjects: SubjectOption[]; subjectId: string | null; manual: boolean; onPick: (id: string | null) => void;
-  conn: TelemetryConnection | undefined; tick: TelemetryTick | null; soundOn: boolean; onToggleSound: () => void; onHome: () => void;
+  conn: TelemetryConnection | undefined; tick: TelemetryTick | null;
+  /** omit both to hide the sound toggle */
+  soundOn?: boolean; onToggleSound?: () => void;
+  onHome: () => void;
+  kicker?: string;
+  /** extra buttons left of "Map" (other consoles) */
+  links?: { label: string; onPress: () => void }[];
 }) {
   const stale = conn?.state === 'stale';
   const rate = conn && conn.state === 'live' ? `${conn.ticksPerSec.toFixed(1)} frames/s` : conn?.state === 'stale' ? 'no frames' : '';
@@ -24,12 +30,13 @@ export function TelemetryHeader({ groupName, now, subjects, subjectId, manual, o
     <View style={styles.bar}>
       <View style={styles.row}>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={styles.kicker}>Telemetry console</Text>
+          <Text style={styles.kicker}>{kicker}</Text>
           <Text style={styles.title} numberOfLines={1}>{groupName}</Text>
         </View>
         <View style={styles.right}>
           <Text style={styles.clock}>{fmtClock(now)}</Text>
-          <Ghost label={soundOn ? 'Sound on' : 'Sound off'} on={soundOn} onPress={onToggleSound} />
+          {onToggleSound && <Ghost label={soundOn ? 'Sound on' : 'Sound off'} on={soundOn} onPress={onToggleSound} />}
+          {links?.map((l) => <Ghost key={l.label} label={l.label} onPress={l.onPress} />)}
           <Ghost label="Map" onPress={onHome} />
         </View>
       </View>
@@ -106,5 +113,5 @@ const styles = StyleSheet.create({
   conn: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   connText: { fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6 },
   meta: { color: colors.muted, fontSize: 13, fontVariant: ['tabular-nums'], flexShrink: 1 },
-  pills: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' },
+  pills: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end', flexShrink: 1, maxWidth: '100%' },
 });

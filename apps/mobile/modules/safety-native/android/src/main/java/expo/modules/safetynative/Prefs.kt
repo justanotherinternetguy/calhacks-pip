@@ -107,6 +107,13 @@ class Prefs(context: Context) {
   var demoSensitivity: Boolean
     get() = getBool("demo_sensitivity", false)
     set(v) = putBool("demo_sensitivity", v)
+  /**
+   * "Allow data collection" (Settings): a group-mate's /collect page may start a labelled recording session on this
+   * phone (`collect_start` on telemetry-cmd). Off by default; commands are ignored while off.
+   */
+  var collectAllowed: Boolean
+    get() = getBool("collect_allowed", false)
+    set(v) = putBool("collect_allowed", v)
   /** Last observed touch / interactive unlock (wall-clock ms; 0 = never). Written at most once a minute by TouchTracker. */
   var lastTouchMs: Long
     get() = getLong("last_touch", 0L)

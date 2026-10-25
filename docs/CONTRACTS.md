@@ -340,3 +340,25 @@ sends it (acked), empties its own list and calls `purge_incidents` (migration 00
   group gets the location at once) and `check_repeat_cooldown_s = 15`. Off in model-v1. The monitor's dock also opens
   (one beep) the moment the phone's live log shows an active red record, before the incident row lands, with the
   phone's location map at the top once keys arrive.
+
+## 11. Data collection (labelled recordings for recalibration)
+
+A group-mate's `/collect` page (`apps/mobile/app/collect.tsx`) records the phone's raw motion and per-second metrics
+under action labels ("normal walking", "stumbling", …), to measure and retune the detection rules.
+- **Consent:** the phone owner turns on Settings → **Allow data collection** (`setCollectAllowed`, Prefs
+  `collect_allowed`, default off). Commands are ignored while it is off; turning it off ends a session.
+- **Commands** on `telemetry-cmd:{uid}`: `{ cmd: "collect_start", minutes, label? }` starts a session or extends the
+  running one (1–15 min; the page re-sends it every minute, so a closed tab ends the session by itself);
+  `{ cmd: "collect_label", label }` names the action happening now; `{ cmd: "collect_stop" }`. Starting a session
+  stands down a running check-in, alert or SOS (resolved for the group too).
+- **While a session runs:** full-rate sampling (50 Hz + gyro), 10 Hz frames, `SafetyEngine.set_collecting(true)`:
+  incident rules run whether or not night mode is on, but nothing escalates (no check-in, heads-up, unlock or snatch)
+  and the baseline learns nothing. Native also ignores SOS (button, tile, widget, hold) and "I need help", and sends no
+  low-battery alert, until the session ends. An ongoing notification shows the current action and a Stop button. When the session ends the phone resets its incident log, so staged incidents do not stay.
+- **Frame additions** (`v: 2`): `raw?: { t: number[]; a: number[]; g: number[]; r: number[] }` on every frame while
+  a session runs (samples since the previous frame, newest last; `a` user acceleration g, `g` gravity unit vector,
+  `r` gyro rad/s, each flattened x, y, z; device frame); `state.collect: { allowed, on, startedMs, untilMs, label,
+  demo }` on every state block. `getStatus().collect` carries the same block.
+- **Storage:** the server only relays frames. The page keeps recordings in the browser (IndexedDB) and exports
+  `tools/collect` Recording JSON (`motion` with `rx..rz`, `context`, `labels`, `meta`, plus `metrics`, `incidents`,
+  `gaps`), which `tools/collect export --split` turns into `core/traces/<label>/` for `sim batch`.

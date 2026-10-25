@@ -57,12 +57,12 @@ own.
 | Incident | Tier | Opens when | Clears when |
 |---|---|---|---|
 | Phone drop | watch | long free fall, lands flat, dead still, not picked up within 60 s | picked up |
-| High-g impact (warning) | watch | the first reading above 2.5 g, at once | replaced by possible fall / cleared by a drop, a grab or no tilt ~2.4 s later |
-| Possible fall | watch | impact > 2.5 g + orientation change + micro-motion after (or free fall + hard peak) | steps resume |
+| High-g impact (warning) | watch | the first reading above 3 g, at once; mid-walk a bump is held 10 s and dropped if walking continues (step strikes in a pocket) | replaced by possible fall / cleared by a drop, a grab or no tilt ~2.4 s later |
+| Possible fall | watch | impact > 3 g + orientation change + micro-motion after (or free fall + hard peak) | steps resume |
 | Fall, recovered | context | steps resume after a possible fall | (a moment, expires with the log) |
 | Down after fall | danger | after a possible fall or hard impact: no steps and no touch for 15 s | steps resume |
 | Hard impact | watch | the high-g warning stays when the impact had a tilt but was neither a fall nor a drop | walking resumes |
-| Unsteady gait | watch | stride variability / regularity / sway / wobble out of band for 30 s of walking | 2 min of in-band walking |
+| Unsteady gait | watch | regularity / sway / wobble out of band (pocket bands calibrated to one person) for 35 s of walking | 2 min of in-band walking |
 | Slowed walk | watch | cadence > 20 % below the baseline for 1 min of walking | 30 s at normal cadence |
 | Stumble | context | one step interval > 40 % off rhythm with a sideways jolt, walking continues | (a moment, pruned after 30 min if nothing follows) |
 | Repeated stumbles | watch | 3 stumbles within 5 min | 10 min of walking without one |
@@ -150,7 +150,7 @@ tile, widget) counts as consent and unlocks at once. A wrong phrase leaves the c
   context, and the incident log (with the time each incident cleared). It refreshes every second. Opening
   it forces full-rate sampling.
 - Settings → **Demo sensitivity**: loads a partial config override so you can trigger incidents by hand.
-  It sets impact at 1.8 g and grab after a yank + twist + 2 s of jogging. Unsteady gait opens after 10 s,
+  It keeps impact at 3 g, sets grab after a yank + twist + 2 s of jogging. Unsteady gait opens after 12 s,
   down after a fall after 30 s, and the check-in lasts 30 s. It also disables drop-vs-fall discrimination. Turn it off to
   restore the production thresholds.
 - The backend serves the model parameters in a signed TOML. The engine merges it over bundled defaults, so

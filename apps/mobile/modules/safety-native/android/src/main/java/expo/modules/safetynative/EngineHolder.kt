@@ -28,6 +28,9 @@ import javax.crypto.spec.GCMParameterSpec
  * explicitly on night-session stop (SensingService.stopNightSession → saveNow).
  */
 class EngineHolder(private val context: Context, private val prefs: Prefs) {
+  /** A data-collection session is running (SafetyRuntime.startCollect): a reloaded engine must keep it on. */
+  @Volatile var collecting = false
+
   companion object {
     private const val TAG = "EngineHolder"
     private const val KEY_ALIAS = "safe.baseline.aesgcm"
@@ -127,6 +130,7 @@ class EngineHolder(private val context: Context, private val prefs: Prefs) {
     val wasNight = runCatching { old?.snapshot()?.nightMode }.getOrNull() == true
     val fresh = create(activeConfigToml())   // throws EngineException → old engine stays live
     if (wasNight) fresh.setNightMode(true, System.currentTimeMillis().toULong())
+    if (collecting) fresh.setCollecting(true, System.currentTimeMillis().toULong())
     engine = fresh
     old?.close()
     Log.i(TAG, "engine reloaded${if (wasNight) " (night mode kept on)" else ""}")

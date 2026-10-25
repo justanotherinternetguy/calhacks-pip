@@ -52,6 +52,9 @@ pub struct Engine {
     ctx: Context,
     night_mode: bool,
     learning: bool,
+    /// Data collection (labelled recording): incident rules run as at night, but nothing escalates and nothing is
+    /// learned, so staged stumbles and falls neither alert friends nor end up in the baseline.
+    collecting: bool,
     pending: Vec<MotionSample>,
     placement: Placement,
     last_features: Option<GaitFeatures>,
@@ -69,6 +72,9 @@ pub struct Engine {
     /// newest touch / interaction time seen (Context.last_touch_ms or a screen-on edge)
     last_touch_ms: u64,
     last_walk_ms: Option<u64>,
+    /// A high-g bump that landed mid-walk (not the fall pattern), held for `walk_impact_hold_s`: a walking window
+    /// that starts after it drops it (a step strike), otherwise it opens as a hard impact when the hold ends.
+    walk_impact: Option<ImpactEvent>,
     /// last sign of travelling: a walking/running window, the OS reporting a vehicle, or speed above moving_speed_mps
     last_moving_ms: u64,
     stopped_fired_for: Option<u64>,
@@ -117,6 +123,7 @@ impl Engine {
             ctx: Context::default(),
             night_mode: false,
             learning: true,
+            collecting: false,
             pending: Vec::new(),
             placement: Placement::Unknown,
             last_features: None,
@@ -132,6 +139,7 @@ impl Engine {
             fall: None,
             last_touch_ms: 0,
             last_walk_ms: None,
+            walk_impact: None,
             last_moving_ms: now_ms,
             stopped_fired_for: None,
             stumbles: VecDeque::new(),
@@ -275,6 +283,7 @@ impl Engine {
         self.onset_impact = None;
         self.pending_drop = None;
         self.fall = None;
+        self.walk_impact = None;
         self.stumbles.clear();
         self.walk_since_stumble_s = 0.0;
         self.set_down_since = None;
@@ -303,6 +312,7 @@ impl Engine {
         self.onset_impact = None;
         self.pending_drop = None;
         self.fall = None;
+        self.walk_impact = None;
         self.stumbles.clear();
         self.walk_since_stumble_s = 0.0;
         self.set_down_since = None;
@@ -320,6 +330,41 @@ impl Engine {
 
     pub fn set_learning(&mut self, enabled: bool) {
         self.learning = enabled;
+    }
+
+    /// Data-collection mode on / off. While on, the incident rules run whether or not night mode is on, but no
+    /// check-in, alert or grab escalation starts and the baseline learns nothing. Rule clocks restart on both edges
+    /// so nothing staged carries over. The incident log is kept: the caller resets it when the session ends.
+    pub fn set_collecting(&mut self, on: bool, now_ms: u64) {
+        if on == self.collecting {
+            return;
+        }
+        self.collecting = on;
+        self.grab.reset();
+        self.unsteady.reset();
+        self.slowed.reset();
+        self.onset_impact = None;
+        self.pending_drop = None;
+        self.fall = None;
+        self.walk_impact = None;
+        self.stumbles.clear();
+        self.walk_since_stumble_s = 0.0;
+        self.last_moving_ms = now_ms;
+        self.update_sampling(now_ms);
+    }
+
+    pub fn collecting(&self) -> bool {
+        self.collecting
+    }
+
+    /// Incident rules run at night and while collecting.
+    fn detecting(&self) -> bool {
+        self.night_mode || self.collecting
+    }
+
+    /// Incidents may start a check-in / alert on their own (never while collecting).
+    fn escalates(&self) -> bool {
+        self.cfg.thresholds.auto_escalate && !self.collecting
     }
 
     // ---- tick drives everything ----
@@ -347,7 +392,7 @@ impl Engine {
         }
         // the live-metrics spike block closes every tick, whether or not a gait window completed
         self.spikes.close_block(now_ms);
-        if self.night_mode {
+        if self.detecting() {
             self.check_falls(now_ms);
             self.check_set_down(now_ms);
             self.check_location(now_ms);
@@ -357,7 +402,7 @@ impl Engine {
         self.log.maintain(now_ms);
         if self.night_mode {
             let ic = &self.cfg.incidents;
-            let trigger = self.cfg.thresholds.auto_escalate
+            let trigger = self.escalates()
                 && (self.log.check_trigger(self.cfg.thresholds.check_min_families)
                     || self.log.check_trigger_alone(&ic.check_alone_kinds(), (ic.check_alone_after_s * 1000.0) as u64, now_ms));
             let summary = self.summary();
@@ -370,7 +415,7 @@ impl Engine {
                 let raw = format!("{{\"deadline_s\":{}}}", self.cfg.thresholds.check_deadline_s);
                 self.open(IncidentKind::CheckInMissed, now_ms, "\"You okay?\" check-in not answered".into(), 0.0, raw);
             }
-            if self.cfg.thresholds.auto_escalate && self.cfg.thresholds.unlock_on_danger && self.log.unacked_danger() {
+            if self.escalates() && self.cfg.thresholds.unlock_on_danger && self.log.unacked_danger() {
                 let summary = self.summary();
                 let (ev, started) = self.esc.unlock_now(now_ms, &summary);
                 if started {
@@ -462,8 +507,11 @@ impl Engine {
 
     /// High-g onset: warn at once with a HardImpact; `on_impact` settles it ~`impact_window + post_window` later.
     fn on_impact_onset(&mut self, t_ms: u64, g: f32) {
-        if !self.night_mode {
+        if !self.detecting() {
             return;
+        }
+        if self.walking_at(t_ms) {
+            return; // mid-walk: wait for the classification (a step strike, or a fall that stops the walk)
         }
         self.last_fall_or_grab_ms = Some(t_ms);
         let raw = format!("{{\"onset_g\":{g:.3}}}");
@@ -481,7 +529,7 @@ impl Engine {
     /// as the HardImpact, a drop or a peak without a tilt clears it.
     fn on_impact(&mut self, ev: ImpactEvent) {
         self.last_impact = Some(ev);
-        if !self.night_mode {
+        if !self.detecting() {
             return;
         }
         let onset = self.onset_impact.take();
@@ -498,6 +546,12 @@ impl Engine {
             if let Some(id) = onset {
                 self.clear_id(id, ev.t_ms); // a peak without a tilt (jump, slap, dancing)
             }
+            return;
+        }
+        if ev.kind != ImpactKind::Fall && onset.is_none() && self.walking_at(ev.t_ms) {
+            // A bump with a tilt in the middle of a walk: in a pocket every few steps look like this. Hold it; steps
+            // that carry on drop it, a walk that stops opens it (see check_walk_impact).
+            self.walk_impact = Some(ev);
             return;
         }
         self.last_fall_or_grab_ms = Some(ev.t_ms);
@@ -543,6 +597,29 @@ impl Engine {
     }
 
     /// Start the "down after fall" clock for an impact (possible fall or hard impact).
+    /// Walking around `t_ms` (a walking gait window ended within 2.5 s of it), and the hold is on.
+    fn walking_at(&self, t_ms: u64) -> bool {
+        self.cfg.incidents.walk_impact_hold_s > 0.0
+            && self.last_walk_ms.map(|w| w.abs_diff(t_ms) <= 2_500).unwrap_or(false)
+    }
+
+    /// The held mid-walk bump: dropped by a walking window that starts after it, opened as a hard impact (with the
+    /// down-after-fall clock) once the hold ends without one.
+    fn check_walk_impact(&mut self, now_ms: u64) {
+        let Some(ev) = self.walk_impact else { return };
+        let window_ms = (self.cfg.gait.window_s * 1000.0) as u64;
+        if self.last_walk_ms.map(|w| w >= ev.t_ms + window_ms).unwrap_or(false) {
+            self.walk_impact = None; // a whole walking window after the bump: just a step
+            return;
+        }
+        if now_ms.saturating_sub(ev.t_ms) as f32 >= self.cfg.incidents.walk_impact_hold_s * 1000.0 {
+            self.walk_impact = None;
+            self.last_fall_or_grab_ms = Some(ev.t_ms);
+            self.log_impact(ev);
+            self.watch_fall(now_ms.saturating_sub(self.cfg.impact.impact_window_ms + self.cfg.impact.post_window_ms));
+        }
+    }
+
     fn watch_fall(&mut self, t_ms: u64) {
         let end_ms = t_ms + self.cfg.impact.impact_window_ms + self.cfg.impact.post_window_ms;
         self.fall = Some(FallWatch { t_ms, end_ms, alive_ms: 0, down_logged: false, snore_logged: false });
@@ -565,24 +642,24 @@ impl Engine {
         if f.is_walking || f.is_running {
             self.last_walk_ms = Some(f.t_ms);
             self.last_moving_ms = self.last_moving_ms.max(f.t_ms);
-            if self.night_mode {
+            if self.detecting() {
                 self.on_steps(f.t_ms);
             }
         }
         if f.full && f.is_walking {
-            if self.learning && self.ctx.activity == Activity::Walking && self.placement != Placement::Unknown {
+            if self.learning && !self.collecting && self.ctx.activity == Activity::Walking && self.placement != Placement::Unknown {
                 let day = local_day(f.t_ms, self.ctx.hour_local);
                 self.baseline.learn(&self.cfg.baseline, self.placement, &f, g.hop_s, day, self.night_mode);
             }
             // the OS activity gates gait incidents: sporadic periodic windows while dancing / riding are not walking
             let os_walking = !matches!(self.ctx.activity, Activity::Stationary | Activity::Vehicle);
-            if os_walking && self.night_mode {
+            if os_walking && self.detecting() {
                 self.gait_incidents(&f);
             }
         }
         if f.full {
             if let Some(gr) = self.grab.update(f.t_ms, f.is_running, self.ctx.speed_mps, self.ctx.separated) {
-                if self.night_mode {
+                if self.detecting() {
                     let summary = format!(
                         "Phone grabbed: jerk {:.0} g/s, rotation {:.0}°/s, then {}",
                         gr.jerk_g_per_s,
@@ -610,11 +687,11 @@ impl Engine {
                     }
                     self.onset_impact = None;
                     self.last_fall_or_grab_ms = Some(gr.t_ms);
-                    if self.cfg.thresholds.auto_escalate {
+                    if self.escalates() {
                         self.log.start_episode(gr.t_ms);
                     }
                     self.open(IncidentKind::Grab, gr.t_ms, summary.clone(), sd, raw);
-                    if self.cfg.thresholds.auto_escalate {
+                    if self.escalates() {
                         let seq = self.log.sequence_summary().unwrap_or_else(|| summary.clone());
                         let ev = self.esc.grab(gr.t_ms, seq);
                         self.events.extend(ev);
@@ -651,7 +728,7 @@ impl Engine {
         let hop = self.cfg.gait.hop_s;
         // unsteady: stride variability / regularity / sway / wobble out of band
         let rule = DriftRule { persist_s: ic.unsteady_persist_s, clear_s: ic.unsteady_clear_s, gap_s: ic.drift_gap_s };
-        let (oob, worst) = self.bands.unsteady_out();
+        let (oob, worst) = self.bands.unsteady_out(&ic.unsteady_metrics);
         match self.unsteady.push_walking(&rule, hop, f.t_ms, &oob, worst) {
             DriftStep::Open => {
                 let names = self.unsteady.metrics.join(", ");
@@ -711,6 +788,7 @@ impl Engine {
 
     /// Phone drop (not picked up), down after fall, snoring while down.
     fn check_falls(&mut self, now_ms: u64) {
+        self.check_walk_impact(now_ms);
         let ic = self.cfg.incidents.clone();
         if let Some(d) = self.pending_drop {
             if !self.impact.drop_active || self.touched_since(d.t_ms) {
@@ -889,6 +967,7 @@ impl Engine {
         let recent_incident = self.last_incident_ms.map(|t| now_ms.saturating_sub(t) as f32 <= sc.after_incident_min * 60_000.0).unwrap_or(false);
         let learn_walk = sc.learn_walks_full_rate
             && self.learning
+            && !self.collecting
             && !self.night_mode
             && self.ctx.activity == Activity::Walking
             && !self.baseline.any_trusted(&self.cfg.baseline);

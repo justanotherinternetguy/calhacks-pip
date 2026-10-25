@@ -161,6 +161,9 @@ export class WebSafetyNative implements SafetyNativeModuleType {
   // Demo sensitivity: no engine on web; the mock remembers the switch so Settings round-trips.
   setDemoSensitivity(on: boolean) { return this.mock.setDemoSensitivity(on); }
   getDemoSensitivity() { return this.mock.getDemoSensitivity(); }
+  setCollectAllowed(on: boolean) { return this.mock.setCollectAllowed(on); }
+  getCollect() { return this.mock.getCollect(); }
+  stopCollect() { return this.mock.stopCollect(); }
 
   // ---- real crypto -------------------------------------------------------------------------------
   async getIdentity(): Promise<Identity> {

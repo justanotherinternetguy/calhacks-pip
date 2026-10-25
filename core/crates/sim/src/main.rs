@@ -6,7 +6,7 @@ use std::process::exit;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  sim replay [--lowrate] <file.json|dir>\n  sim synth --scenario walk|drunk|fall|drop|still|dance|snatch --minutes N --out file.json [--seed S]\n  sim batch <dir>\n\nSIM_DEBUG=1 prints the escalation level and active incidents every 30 s during replay."
+        "usage:\n  sim replay [--lowrate] [--config model.toml] <file.json|dir>\n  sim synth --scenario walk|drunk|fall|drop|still|dance|snatch --minutes N --out file.json [--seed S]\n  sim batch [--config model.toml] <dir>\n\n--config merges a (partial) model TOML over the bundled model-v1 (e.g. core/config/model-demo.toml); automatic\nescalation stays on.\nSIM_DEBUG=1 prints the escalation level and active incidents every 30 s during replay."
     );
     exit(2)
 }
@@ -49,7 +49,7 @@ fn json_files(p: &Path) -> Vec<PathBuf> {
     let p = &resolve(p);
     if p.is_dir() {
         let mut v: Vec<PathBuf> = std::fs::read_dir(p)
-            .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().map(|x| x == "json").unwrap_or(false)).collect())
+            .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().map(|x| x == "json").unwrap_or(false) && p.file_name().map(|n| n != "index.json").unwrap_or(true)).collect())
             .unwrap_or_default();
         v.sort();
         v
@@ -73,11 +73,26 @@ struct Result_ {
     pass: bool,
 }
 
-fn run(path: &Path, verbose: bool, lowrate: bool) -> Result_ {
+/// `[thresholds] auto_escalate = true` appended to the --config TOML (or alone): traces carry escalation expectations.
+fn engine_toml(config: Option<&str>) -> String {
+    let base = config.map(|p| std::fs::read_to_string(p).unwrap_or_else(|e| {
+        eprintln!("read {p}: {e}");
+        exit(1)
+    }));
+    match base {
+        // a TOML table can't be declared twice: set the key inside an existing [thresholds] table
+        Some(t) if t.contains("auto_escalate") => t,
+        Some(t) if t.contains("[thresholds]") => t.replacen("[thresholds]", "[thresholds]\nauto_escalate = true", 1),
+        Some(t) => format!("{t}\n[thresholds]\nauto_escalate = true\n"),
+        None => "[thresholds]\nauto_escalate = true\n".into(),
+    }
+}
+
+fn run(path: &Path, verbose: bool, lowrate: bool, config: &str) -> Result_ {
     let tr = load(path);
     let tr = if lowrate { synth::decimate(&tr, 5) } else { tr };
     // traces carry escalation expectations (unlock / quiet / snatch): replay with automatic escalation on
-    let mut e = Engine::new("[thresholds]\nauto_escalate = true\n", None, 0).expect("config");
+    let mut e = Engine::new(config, None, 0).expect("config");
     let debug = verbose && std::env::var_os("SIM_DEBUG").is_some();
     let evs = synth::replay_with(&mut e, &tr, &mut |t, e| {
         if debug && t % 30_000 == 0 {
@@ -172,13 +187,13 @@ fn summary(results: &[Result_]) {
     }
 }
 
-fn batch(dir: &Path) -> i32 {
+fn batch(dir: &Path, config: &str) -> i32 {
     let files = json_files(dir);
     if files.is_empty() {
         eprintln!("no traces in {}", dir.display());
         return 1;
     }
-    let results: Vec<Result_> = files.iter().map(|f| run(f, false, false)).collect();
+    let results: Vec<Result_> = files.iter().map(|f| run(f, false, false, config)).collect();
     summary(&results);
     // false alarms per night-hour (quiet traces only), detection delay per scenario
     let mut hours: std::collections::BTreeMap<u8, (f32, u32)> = Default::default();
@@ -210,12 +225,22 @@ fn batch(dir: &Path) -> i32 {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let config = match args.iter().position(|a| a == "--config") {
+        Some(i) if i + 1 < args.len() => {
+            let c = args.remove(i + 1);
+            args.remove(i);
+            Some(c)
+        }
+        Some(_) => usage(),
+        None => None,
+    };
+    let config = engine_toml(config.as_deref());
     match args.first().map(|s| s.as_str()) {
         Some("replay") => {
             let lowrate = args.iter().any(|a| a == "--lowrate");
             let p = args.iter().skip(1).find(|a| !a.starts_with("--")).map(PathBuf::from).unwrap_or_else(|| usage());
-            let results: Vec<Result_> = json_files(&p).iter().map(|f| run(f, true, lowrate)).collect();
+            let results: Vec<Result_> = json_files(&p).iter().map(|f| run(f, true, lowrate, &config)).collect();
             summary(&results);
         }
         Some("synth") => {
@@ -242,7 +267,7 @@ fn main() {
         }
         Some("batch") => {
             let p = args.get(1).map(PathBuf::from).unwrap_or_else(|| usage());
-            exit(batch(&p));
+            exit(batch(&p, &config));
         }
         _ => usage(),
     }

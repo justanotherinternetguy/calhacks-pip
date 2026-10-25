@@ -183,6 +183,11 @@ class SafetyNativeModule : Module() {
     AsyncFunction("setDemoSensitivity") { on: Boolean -> rt.engine.setDemoSensitivity(on) }
     AsyncFunction("getDemoSensitivity") { rt.prefs.demoSensitivity }
 
+    // ---- data collection (Settings → Allow data collection; sessions are started from a /collect page) ----
+    AsyncFunction("setCollectAllowed") { on: Boolean -> rt.setCollectAllowed(on) }
+    AsyncFunction("getCollect") { rt.collectMap() }   // { allowed, on, startedMs, untilMs, label, demo }
+    AsyncFunction("stopCollect") { rt.stopCollect("stopped in the app") }
+
     // ---- check-in / SOS ------------------------------------------------------
 
     AsyncFunction("submitCheckIn") { r: TypingRecord -> rt.submitCheckIn(r.toSample()) }
@@ -301,5 +306,6 @@ fun SafetyRuntime.biometricDismiss() {
 
 fun SafetyRuntime.needHelp() {
   alerts.cancelCheckIn(); AlarmReceiver.cancelCheckTimeout(app)
+  if (collecting) { android.util.Log.i("SafetyRuntime", "need help ignored: data collection is running"); return }
   pushAction(UserAction.NEED_HELP)
 }

@@ -158,8 +158,8 @@ impl Gen {
             let nz = self.n3(0.03);
             self.push([-gb[0] + nz[0], -gb[1] + nz[1], -gb[2] + nz[2]], gb);
         }
-        // ~200 ms impact: any 10 Hz decimation phase still sees a sample above 2.5 g
-        for k in [1.6f32, 2.0, 2.8, 4.6, 3.8, 3.2, 2.9, 2.6, 2.0, 1.5] {
+        // ~200 ms impact: any 10 Hz decimation phase still sees a sample above 3 g (impact.incident_peak_g)
+        for k in [1.6f32, 2.4, 3.4, 4.6, 3.8, 3.6, 3.4, 3.2, 2.4, 1.5] {
             self.push([k * 0.3, k * 0.5, k * 0.8], gb);
         }
         let ga = unit(G_LYING);

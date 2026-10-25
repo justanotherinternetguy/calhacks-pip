@@ -107,6 +107,13 @@ pub struct IncidentCfg {
     pub down_after_fall_s: f32,
     pub unsteady_persist_s: f32,
     pub unsteady_clear_s: f32,
+    /// Metrics the unsteady-gait rule looks at (dashboard names: stride_cv, regularity, sway, wobble). Default: all four.
+    #[serde(default = "default_unsteady_metrics")]
+    pub unsteady_metrics: Vec<String>,
+    /// A high-g bump while walking (not the fall pattern) is held this long: dropped if walking continues, opened as a
+    /// hard impact if walking stopped. 0 = no hold (every bump with a tilt opens at once).
+    #[serde(default)]
+    pub walk_impact_hold_s: f32,
     pub drift_gap_s: f32,
     pub slowed_cadence_frac: f32,
     pub slowed_persist_s: f32,
@@ -144,6 +151,10 @@ pub struct IncidentCfg {
     pub check_alone: Vec<String>,
     #[serde(default)]
     pub check_alone_after_s: f32,
+}
+
+fn default_unsteady_metrics() -> Vec<String> {
+    ["stride_cv", "regularity", "sway", "wobble"].iter().map(|s| s.to_string()).collect()
 }
 
 impl IncidentCfg {
@@ -185,6 +196,36 @@ pub struct BaselineCfg {
     pub ewma_alpha: f32,
     pub priors: GaitPriors,
     pub typing_priors: TypingPriors,
+    /// Per-placement overrides of `priors` (used until that placement's personal baseline is trusted). A phone in a
+    /// pocket swings with the thigh, so its normal walk looks nothing like one held at the waist.
+    #[serde(default)]
+    pub placement_priors: PlacementPriors,
+}
+
+/// `[baseline.placement_priors.<placement>]`: any subset of the `priors` keys.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PlacementPriors {
+    #[serde(default)]
+    pub unknown: PartialPriors,
+    #[serde(default)]
+    pub pocket: PartialPriors,
+    #[serde(default)]
+    pub hand: PartialPriors,
+    #[serde(default)]
+    pub bag: PartialPriors,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PartialPriors {
+    pub cadence: Option<[f32; 2]>,
+    pub step_cv: Option<[f32; 2]>,
+    pub regularity: Option<[f32; 2]>,
+    pub harmonic_ratio: Option<[f32; 2]>,
+    pub sway_rms: Option<[f32; 2]>,
+    pub wobble: Option<[f32; 2]>,
+    pub jerk: Option<[f32; 2]>,
+    pub rotation: Option<[f32; 2]>,
+    pub peak_g: Option<[f32; 2]>,
 }
 
 /// [mean, sd] per feature
@@ -246,6 +287,12 @@ impl Config {
         }
         if let Some(bad) = i.check_alone.iter().find(|n| !IncidentKind::ALL.iter().any(|k| k.name() == n.as_str())) {
             return Err(EngineError::Config { msg: format!("incidents.check_alone: unknown incident kind \"{bad}\"") });
+        }
+        if let Some(bad) = i.unsteady_metrics.iter().find(|n| !["stride_cv", "regularity", "sway", "wobble"].contains(&n.as_str())) {
+            return Err(EngineError::Config { msg: format!("incidents.unsteady_metrics: unknown metric \"{bad}\"") });
+        }
+        if i.walk_impact_hold_s < 0.0 {
+            return err("incidents.walk_impact_hold_s must be >= 0");
         }
         if i.check_alone_after_s < 0.0 {
             return err("incidents.check_alone_after_s must be >= 0");

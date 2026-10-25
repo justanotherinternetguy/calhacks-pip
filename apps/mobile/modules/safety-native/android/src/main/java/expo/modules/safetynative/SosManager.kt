@@ -17,6 +17,8 @@ class SosManager(private val rt: SafetyRuntime) {
 
   fun trigger() {
     if (rt.sosActive) return
+    // A data-collection session records staged falls and grabs: SOS is off until it ends (Settings → Stop recording).
+    if (rt.collecting) { Log.i(TAG, "SOS ignored: data collection is running"); return }
     rt.sosActive = true
     rt.emit("sos", mapOf("active" to true))
     // Engine turns UserAction.MANUAL_SOS into EngineEvent.UnlockLocation on the next tick; SafetyRuntime.dispatch then

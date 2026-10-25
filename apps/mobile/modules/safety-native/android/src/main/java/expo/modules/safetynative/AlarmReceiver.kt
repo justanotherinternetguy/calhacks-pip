@@ -15,6 +15,7 @@ class AlarmReceiver : BroadcastReceiver() {
     const val ACTION_CHECK_TIMEOUT = "expo.modules.safetynative.CHECK_TIMEOUT"
     const val ACTION_NEED_HELP = "expo.modules.safetynative.NEED_HELP"
     const val ACTION_STOP_ALARM = "expo.modules.safetynative.STOP_ALARM"
+    const val ACTION_STOP_COLLECT = "expo.modules.safetynative.STOP_COLLECT"
 
     private fun pi(ctx: Context) = PendingIntent.getBroadcast(
       ctx, 50, Intent(ctx, AlarmReceiver::class.java).setAction(ACTION_CHECK_TIMEOUT),
@@ -39,6 +40,7 @@ class AlarmReceiver : BroadcastReceiver() {
       }
       ACTION_NEED_HELP -> rt.needHelp()
       ACTION_STOP_ALARM -> rt.alerts.stopAlarm()
+      ACTION_STOP_COLLECT -> rt.stopCollect("stopped on the phone")
     }
   }
 }

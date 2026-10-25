@@ -8,8 +8,50 @@ use safety_core::*;
 /// (`check_alone = []`), so each story exercises the Danger / two-family rules on their own. The bundled default
 /// (5 s down timer, possible fall / hard impact / scream ask on their own) is covered by `default_config_*` and
 /// `lone_*`.
+/// The synthetic walker models a waist-height phone with population-typical gait, while model-v1 carries one person's
+/// pocket calibration (placement priors, the mid-walk bump hold, no stride_cv in the unsteady rule; see
+/// `recorded_walks_*` below). The stories run on the generic model: these keys win over whatever the test passes.
+const GENERIC: &str = r#"
+[incidents]
+unsteady_metrics = ["stride_cv", "regularity", "sway", "wobble"]
+walk_impact_hold_s = 0
+[baseline.placement_priors.pocket]
+step_cv = [0.04, 0.02]
+regularity = [0.90, 0.06]
+sway_rms = [0.05, 0.025]
+wobble = [15.0, 6.0]
+[baseline.placement_priors.unknown]
+step_cv = [0.04, 0.02]
+regularity = [0.90, 0.06]
+sway_rms = [0.05, 0.025]
+wobble = [15.0, 6.0]
+"#;
+
+fn merge_toml(base: &mut toml::Value, over: toml::Value) {
+    match (base, over) {
+        (toml::Value::Table(b), toml::Value::Table(o)) => {
+            for (k, v) in o {
+                match b.get_mut(&k) {
+                    Some(bv) if bv.is_table() && v.is_table() => merge_toml(bv, v),
+                    _ => {
+                        b.insert(k, v);
+                    }
+                }
+            }
+        }
+        (b, o) => *b = o,
+    }
+}
+
+/// `toml` with the generic-model keys forced on top.
+fn generic(toml_src: &str) -> String {
+    let mut v: toml::Value = toml::from_str(toml_src).expect("test config");
+    merge_toml(&mut v, toml::from_str(GENERIC).unwrap());
+    toml::to_string(&v).unwrap()
+}
+
 fn engine() -> Engine {
-    Engine::new("[thresholds]\nauto_escalate = true\n[incidents]\ndown_after_fall_s = 120\ncheck_alone = []\n", None, 0).unwrap()
+    Engine::new(&generic("[thresholds]\nauto_escalate = true\n[incidents]\ndown_after_fall_s = 120\ncheck_alone = []\n"), None, 0).unwrap()
 }
 fn first<F: Fn(&EngineEvent) -> bool>(evs: &[(u64, EngineEvent)], f: F) -> Option<u64> {
     evs.iter().find(|(_, e)| f(e)).map(|(t, _)| *t)
@@ -114,7 +156,7 @@ const LOG_ONLY: &str = "[thresholds]\nauto_escalate = false\n";
 #[test]
 fn log_only_config_logs_incidents_without_escalating() {
     let tr = synth::trace(Scenario::Fall, 12, 1);
-    let mut e = Engine::new(LOG_ONLY, None, 0).unwrap();
+    let mut e = Engine::new(&generic(LOG_ONLY), None, 0).unwrap();
     let evs = synth::replay(&mut e, &tr);
     for k in [IncidentKind::UnsteadyGait, IncidentKind::PossibleFall, IncidentKind::DownAfterFall] {
         assert_eq!(incidents(&evs, k).len(), 1, "{k:?}: {:?}", kinds(&evs));
@@ -125,7 +167,7 @@ fn log_only_config_logs_incidents_without_escalating() {
     assert_eq!(s.escalation, EscalationLevel::Idle);
     assert!(s.sensing_full);
     // a grab is logged, not alerted
-    let mut e = Engine::new(LOG_ONLY, None, 0).unwrap();
+    let mut e = Engine::new(&generic(LOG_ONLY), None, 0).unwrap();
     let mut tr = synth::trace(Scenario::Snatch, 3, 31);
     tr.actions.clear();
     let evs = synth::replay(&mut e, &tr);
@@ -143,7 +185,7 @@ fn default_config_asks_after_a_lone_possible_fall() {
     let mut g = Gen::new(0, 201);
     g.walk(60.0, G_POCKET);
     g.fall(G_POCKET, 30.0);
-    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let mut e = Engine::new(&generic(DEFAULT_TOML), None, 0).unwrap();
     let evs = synth::replay(&mut e, &motion_trace(g.out, 201));
     let fall = incidents(&evs, IncidentKind::PossibleFall);
     assert_eq!(fall.len(), 1, "{:?}", kinds(&evs));
@@ -167,7 +209,7 @@ fn demo_config_unlocks_on_a_red_incident_at_once() {
     let mut g = Gen::new(0, 203);
     g.walk(60.0, G_POCKET);
     g.fall(G_POCKET, 60.0);
-    let mut e = Engine::new(demo, None, 0).unwrap();
+    let mut e = Engine::new(&generic(demo), None, 0).unwrap();
     let evs = synth::replay(&mut e, &motion_trace(g.out, 203));
     let down = incidents(&evs, IncidentKind::DownAfterFall);
     assert_eq!(down.len(), 1, "{:?}", kinds(&evs));
@@ -176,7 +218,7 @@ fn demo_config_unlocks_on_a_red_incident_at_once() {
     let check = first(&evs, is_check).expect("the possible fall asked first");
     assert!(check < unlock);
     // v1 keeps the check-in deadline: no unlock at the down-after-fall tick
-    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let mut e = Engine::new(&generic(DEFAULT_TOML), None, 0).unwrap();
     let mut g = Gen::new(0, 203);
     g.walk(60.0, G_POCKET);
     g.fall(G_POCKET, 60.0);
@@ -192,7 +234,7 @@ fn lone_dropped_phone_does_not_ask() {
     let mut g = Gen::new(0, 202);
     g.walk(60.0, G_HAND);
     g.drop(120.0);
-    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let mut e = Engine::new(&generic(DEFAULT_TOML), None, 0).unwrap();
     let evs = synth::replay(&mut e, &motion_trace(g.out, 202));
     assert!(!incidents(&evs, IncidentKind::HardImpact).is_empty() || !incidents(&evs, IncidentKind::PhoneDrop).is_empty(), "{:?}", kinds(&evs));
     assert!(first(&evs, is_check).is_none(), "a dropped phone must not ask: {:?}", kinds(&evs));
@@ -222,7 +264,7 @@ fn default_config_warns_at_the_peak_and_marks_down_15s_after_the_fall() {
     g.walk(30.0, G_POCKET);
     let fall = g.t_ms;
     g.fall(G_POCKET, 30.0);
-    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let mut e = Engine::new(&generic(DEFAULT_TOML), None, 0).unwrap();
     let evs = synth::replay(&mut e, &motion_trace(g.out, 13));
     let tick_of = |t: u64| t / 1000 * 1000 + 1000;
     let warn = incidents(&evs, IncidentKind::HardImpact);
@@ -247,7 +289,7 @@ fn hard_impact_that_then_lies_still_is_down_after_fall() {
     g.fall(G_POCKET, 0.0);
     g.still(2.0, synth::G_LYING, 0.4); // bouncing / tumbling right after the hit
     g.still(30.0, synth::G_LYING, 0.008);
-    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let mut e = Engine::new(&generic(DEFAULT_TOML), None, 0).unwrap();
     let evs = synth::replay(&mut e, &motion_trace(g.out, 14));
     let hard = incidents(&evs, IncidentKind::HardImpact);
     assert_eq!(hard.len(), 1, "{:?}", kinds(&evs));
@@ -262,7 +304,7 @@ fn hard_impact_that_then_lies_still_is_down_after_fall() {
 #[test]
 fn reset_empties_the_log_and_rests_sensing() {
     let tr = synth::trace(Scenario::Fall, 6, 15);
-    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let mut e = Engine::new(&generic(DEFAULT_TOML), None, 0).unwrap();
     e.push_context(Context { t_ms: 0, hour_local: 12, ..night_ctx(0) }); // daytime: only incidents force full rate
     synth::replay(&mut e, &tr);
     let end = tr.motion.last().unwrap().t_ms + 2000;
@@ -1041,21 +1083,21 @@ fn incident_log_expires_and_roundtrips_through_the_blob() {
     let log = e.incident_log();
     assert_eq!(log.iter().map(|r| r.kind).collect::<Vec<_>>(), vec![IncidentKind::HardImpact, IncidentKind::PossibleFall, IncidentKind::DownAfterFall], "newest last");
     let blob = e.export_baseline();
-    let e2 = Engine::new(DEFAULT_TOML, Some(&blob), end + 60_000).unwrap();
+    let e2 = Engine::new(&generic(DEFAULT_TOML), Some(&blob), end + 60_000).unwrap();
     assert_eq!(e2.incident_log(), log);
-    let e3 = Engine::new(DEFAULT_TOML, Some(&blob), end + 9 * 3_600_000).unwrap();
+    let e3 = Engine::new(&generic(DEFAULT_TOML), Some(&blob), end + 9 * 3_600_000).unwrap();
     assert!(e3.incident_log().is_empty());
-    let mut e4 = Engine::new(DEFAULT_TOML, Some(&blob), end + 60_000).unwrap();
+    let mut e4 = Engine::new(&generic(DEFAULT_TOML), Some(&blob), end + 60_000).unwrap();
     e4.tick(end + 7 * 3_600_000);
     assert_eq!(e4.incident_log().len(), 3);
     e4.tick(end + 8 * 3_600_000 + 1000);
     assert!(e4.incident_log().is_empty());
     // the blob is still a baseline blob: a v1 blob without a log loads, and an old-format log loads empty
-    assert!(Engine::new(DEFAULT_TOML, Some(b"not json"), 0).is_err());
+    assert!(Engine::new(&generic(DEFAULT_TOML), Some(b"not json"), 0).is_err());
     let v1 = br#"{"version":1,"gait":[],"typing":{"feats":[{"samples":[],"ewma":0,"ewvar":0,"n":0},{"samples":[],"ewma":0,"ewvar":0,"n":0},{"samples":[],"ewma":0,"ewvar":0,"n":0},{"samples":[],"ewma":0,"ewvar":0,"n":0},{"samples":[],"ewma":0,"ewvar":0,"n":0}],"n":0}}"#;
-    assert!(Engine::new(DEFAULT_TOML, Some(v1), 0).is_ok());
+    assert!(Engine::new(&generic(DEFAULT_TOML), Some(v1), 0).is_ok());
     let hmm_era = br#"{"version":3,"log":{"records":[{"id":1,"t_ms":5,"kind":"GaitDrift","summary":"x","sd_distance":0,"placement":"Pocket","raw_json":"{}","p_normal":1,"p_impaired":0,"p_incident":0,"p_unresponsive":0,"sequence_id":0,"watched":false}],"next_id":1,"next_seq":0}}"#;
-    let e5 = Engine::new(DEFAULT_TOML, Some(hmm_era), 10).unwrap();
+    let e5 = Engine::new(&generic(DEFAULT_TOML), Some(hmm_era), 10).unwrap();
     assert!(e5.incident_log().is_empty());
 }
 
@@ -1115,7 +1157,7 @@ fn baseline_trusted_after_7_distinct_days_and_night_incidents_excluded() {
     let m = e.metrics();
     assert!(!m.baseline_trusted && (m.baseline_walk_days - 4.0).abs() < 1e-3, "{m:?}");
     let blob = e.export_baseline();
-    let e2 = Engine::new(DEFAULT_TOML, Some(&blob), 24 * DAY).unwrap();
+    let e2 = Engine::new(&generic(DEFAULT_TOML), Some(&blob), 24 * DAY).unwrap();
     assert_eq!(e2.baseline().walk_days(Placement::Pocket), 4);
 
     // night sessions: walking during a night with a Watch incident is dropped, a quiet night is kept
@@ -1185,7 +1227,7 @@ fn baseline_learns_while_walking_by_day_and_roundtrips_through_blob() {
     assert_eq!(snap.placement, Placement::Pocket);
     assert_eq!(e.metrics().baseline_walk_days, 1.0);
     let blob = e.export_baseline();
-    let e2 = Engine::new(DEFAULT_TOML, Some(&blob), 0).unwrap();
+    let e2 = Engine::new(&generic(DEFAULT_TOML), Some(&blob), 0).unwrap();
     assert_eq!(e2.snapshot().baseline_seconds, snap.baseline_seconds);
     let mut e3 = engine();
     e3.set_night_mode(true, 0);
@@ -1311,7 +1353,9 @@ fn unsteady_gait_builds_visibly_in_metrics_before_the_incident_opens() {
     let drunk_t = g.t_ms;
     g.drunk_walk(60.0, G_POCKET);
     let tr = motion_trace(g.out, 171);
-    let mut e = engine();
+    // Pinned to 30 s: this story checks that a building run shows on the dashboard. The synthetic stagger pauses
+    // often enough that its longest unbroken run (36 s) is shorter than v1's 40 s.
+    let mut e = Engine::new(&generic("[incidents]\ndown_after_fall_s = 120\ncheck_alone = []\nunsteady_persist_s = 30\n"), None, 0).unwrap();
     let mut seen: Vec<(u64, String, bool, Vec<u32>)> = Vec::new();
     let evs = synth::replay_with(&mut e, &tr, &mut |t, e| {
         let m = e.metrics();
@@ -1334,4 +1378,149 @@ fn unsteady_gait_builds_visibly_in_metrics_before_the_incident_opens() {
     let after = seen.iter().find(|(t, _, _, _)| *t == fire_t).unwrap();
     assert!(after.3.contains(&drift[0].1.id) && !after.1.contains("out of band for"), "{after:?}");
     assert!(drift[0].1.summary.contains("for 30 s") || drift[0].1.summary.contains("for 31 s"), "{}", drift[0].1.summary);
+}
+
+/// Data collection: with night mode off the rules still log a fall, an unsteady walk and a grab, but no check-in,
+/// alert or snatch escalation starts and the baseline learns nothing. Manual SOS still works.
+#[test]
+fn collecting_logs_incidents_without_escalating_or_learning() {
+    for (scenario, kind) in [(Scenario::Fall, IncidentKind::PossibleFall), (Scenario::Drunk, IncidentKind::UnsteadyGait), (Scenario::Snatch, IncidentKind::Grab)] {
+        let mut tr = synth::trace(scenario, 6, 41);
+        tr.meta.night_mode = false;
+        tr.actions.clear();
+        let mut e = engine();
+        e.set_collecting(true, 0);
+        let evs = synth::replay(&mut e, &tr);
+        assert!(!incidents(&evs, kind).is_empty(), "{scenario:?}: {:?}", kinds(&evs));
+        assert!(
+            !evs.iter().any(|(_, e)| matches!(e, EngineEvent::CheckRequested { .. } | EngineEvent::HeadsUp { .. } | EngineEvent::UnlockLocation { .. } | EngineEvent::SnatchDetected { .. })),
+            "{scenario:?} escalated: {evs:?}"
+        );
+        assert_eq!(e.snapshot().escalation, EscalationLevel::Idle);
+        assert_eq!(e.snapshot().baseline_seconds, 0, "{scenario:?}: nothing learned while collecting");
+        assert!(e.collecting());
+        e.push_action(UserAction::ManualSos, 900_000);
+        assert_eq!(e.snapshot().escalation, EscalationLevel::Unlocked, "manual SOS still works");
+    }
+    // off again with night mode off: the same fall logs nothing
+    let mut tr = synth::trace(Scenario::Fall, 6, 41);
+    tr.meta.night_mode = false;
+    let mut e = engine();
+    e.set_collecting(true, 0);
+    e.set_collecting(false, 0);
+    let evs = synth::replay(&mut e, &tr);
+    assert!(incidents(&evs, IncidentKind::PossibleFall).is_empty());
+}
+
+// ---------------- recorded walks: one person, phone in a trouser pocket (/collect, 2026-10-25) ----------------
+
+fn recorded(name: &str) -> synth::Trace {
+    let p = format!("{}/../../traces/recorded/{name}.json", env!("CARGO_MANIFEST_DIR"));
+    serde_json::from_str(&std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p}: {e}"))).unwrap()
+}
+
+/// The engine needs one full gait window (6 s) before it knows a walk is on: bumps before that are not held.
+const WALK_KNOWN_MS: u64 = 8_000;
+
+fn opened_after(evs: &[(u64, EngineEvent)], t_ms: u64, kinds: &[IncidentKind]) -> Vec<String> {
+    evs.iter()
+        .filter_map(|(_, e)| match e {
+            EngineEvent::SignalIncident { record } if record.t_ms > t_ms && kinds.contains(&record.kind) => Some(record.summary.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A normal walk with the phone in a pocket: every few steps hit 3 to 4 g with a tilt, and stride_cv / sway /
+/// wobble sit far outside the population priors. With the pocket calibration none of it is an incident, on the
+/// production model or the demo one.
+#[test]
+fn recorded_walks_normal_pocket_walk_is_quiet() {
+    let tr = recorded("pocket_normal_walk");
+    let demo = include_str!("../../../config/model-demo.toml");
+    for (name, cfg) in [("v1", DEFAULT_TOML), ("demo", demo)] {
+        let mut e = Engine::new(cfg, None, 0).unwrap();
+        let evs = synth::replay(&mut e, &tr);
+        let bad = opened_after(&evs, WALK_KNOWN_MS, &[IncidentKind::HardImpact, IncidentKind::PossibleFall, IncidentKind::UnsteadyGait]);
+        assert!(bad.is_empty(), "{name}: {bad:?}");
+    }
+    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let evs = synth::replay(&mut e, &tr);
+    assert!(first(&evs, is_check).is_none(), "{:?}", kinds(&evs));
+}
+
+/// The same person staggering: regularity, sway or wobble is out of the pocket band on (nearly) every walking window,
+/// and the demo model opens unsteady walking. The production model needs 35 s, longer than the recording, so its band
+/// test is checked directly.
+#[test]
+fn recorded_walks_unsteady_pocket_walk_is_caught() {
+    let tr = recorded("pocket_unsteady_walk");
+    let demo = include_str!("../../../config/model-demo.toml");
+    let mut e = Engine::new(demo, None, 0).unwrap();
+    let evs = synth::replay(&mut e, &tr);
+    assert_eq!(incidents(&evs, IncidentKind::UnsteadyGait).len(), 1, "{:?}", kinds(&evs));
+
+    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let (mut walking, mut off) = (0, 0);
+    synth::replay_with(&mut e, &tr, &mut |_, e| {
+        let m = e.metrics();
+        // only ticks whose newest gait window was measured as walking (the bands are idle otherwise)
+        if e.last_features().map(|f| f.full && f.is_walking).unwrap_or(false) {
+            walking += 1;
+            if m.bands.iter().any(|b| ["regularity", "sway", "wobble"].contains(&b.name.as_str()) && !b.in_band) {
+                off += 1;
+            }
+        }
+    });
+    assert!(walking >= 20 && off * 10 >= walking * 9, "unsteady metrics out of band on {off} of {walking} walking ticks");
+}
+
+/// The mid-walk bump hold (model-v1 `walk_impact_hold_s`) never hides a real event: a fall pattern while walking
+/// opens a possible fall as before (only the instant high-g warning waits for the classification), and a bump after
+/// which the walk stops opens a hard impact once the hold ends, with the down-after-fall clock.
+#[test]
+fn walk_impact_hold_keeps_falls_and_bumps_that_stop_the_walk() {
+    let v1 = safety_core::config::Config::from_toml(DEFAULT_TOML).unwrap();
+    assert!(v1.incidents.walk_impact_hold_s > 0.0);
+    // synthetic walk then a fall: PossibleFall, no instant HardImpact warning
+    let mut g = Gen::new(0, 13);
+    g.walk(30.0, G_POCKET);
+    let fall = g.t_ms;
+    g.fall(G_POCKET, 40.0);
+    let mut e = Engine::new(DEFAULT_TOML, None, 0).unwrap();
+    let evs = synth::replay(&mut e, &motion_trace(g.out, 13));
+    let possible = incidents(&evs, IncidentKind::PossibleFall);
+    assert_eq!(possible.len(), 1, "{:?}", kinds(&evs));
+    assert!(possible[0].1.t_ms.abs_diff(fall) < 1500);
+    assert_eq!(incidents(&evs, IncidentKind::DownAfterFall).len(), 1, "{:?}", kinds(&evs));
+
+    // the recorded pocket walk, cut right after a bump at ~31 s, then no more walking: the bump is held, then opens
+    let mut tr = recorded("pocket_normal_walk");
+    let cut = 31_600;
+    tr.motion.retain(|s| s.t_ms < cut);
+    tr.context.retain(|c| c.t_ms < cut);
+    // a moment of thrashing (so the bump classifies as a bump, not a fall: motion right after it), then lying still
+    let mut t = cut;
+    let mut ctx = *tr.context.last().unwrap();
+    let mut seed = 7u32;
+    let mut noise = move || { seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345); ((seed >> 16) as f32 / 32_768.0 - 1.0) * 0.6 };
+    while t < cut + 40_000 {
+        let (ax, ay, az) = if t < cut + 1_800 { (noise(), noise(), noise()) } else { (0.002, -0.001, 0.001) };
+        tr.motion.push(MotionSample { t_ms: t, ax, ay, az, gx: 0.3, gy: -0.2, gz: 0.93, rx: 0.0, ry: 0.0, rz: 0.0 });
+        if t % 1000 == 0 {
+            ctx.t_ms = t;
+            ctx.activity = Activity::Stationary;
+            tr.context.push(ctx);
+        }
+        t += 20;
+    }
+    let demo = include_str!("../../../config/model-demo.toml"); // demo counts a 10° tilt: these bumps qualify
+    let mut e = Engine::new(demo, None, 0).unwrap();
+    let evs = synth::replay(&mut e, &tr);
+    let hard = incidents(&evs, IncidentKind::HardImpact).into_iter().filter(|(_, r)| r.t_ms > WALK_KNOWN_MS).collect::<Vec<_>>();
+    assert_eq!(hard.len(), 1, "{:?}", kinds(&evs));
+    let (opened, rec) = &hard[0];
+    assert!(rec.t_ms < cut && rec.t_ms > cut - 2_000, "the bump itself: {}", rec.t_ms);
+    let hold = (v1.incidents.walk_impact_hold_s * 1000.0) as u64;
+    assert!(*opened >= rec.t_ms + hold && *opened <= rec.t_ms + hold + 2_000, "opened at {opened} for a bump at {}", rec.t_ms);
 }

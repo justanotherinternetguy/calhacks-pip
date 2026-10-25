@@ -109,6 +109,7 @@ export default function RootLayout() {
         <Stack.Screen name="scan" options={{ presentation: 'modal', title: 'Scan friend QR' }} />
         <Stack.Screen name="incident/[id]" options={{ title: 'Incident' }} />
         <Stack.Screen name="monitor" options={{ headerShown: false }} />
+        <Stack.Screen name="collect" options={{ headerShown: false }} />
         <Stack.Screen name="unlock-approve/[requestId]" options={{ presentation: 'modal', title: 'Approve location unlock' }} />
       </Stack>
     </GestureHandlerRootView>

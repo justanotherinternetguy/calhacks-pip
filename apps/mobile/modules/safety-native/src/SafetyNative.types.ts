@@ -32,6 +32,8 @@ export type Status = {
   batteryPct: number;
   lastHeartbeatMs?: number;
   serviceRunning: boolean;
+  /** data collection (builds from 2026-10-25 on) */
+  collect?: TelemetryCollect;
 };
 
 export type ConfigureOptions = {
@@ -152,8 +154,32 @@ export type TelemetryState = {
   checkPhrase?: string;
   /** last location fix (friends' map); absent until the phone has one */
   loc?: TelemetryLocation;
+  /** data collection (phones from 2026-10-25 on) */
+  collect?: TelemetryCollect;
 };
 export type TelemetryLocation = { lat: number; lng: number; acc?: number; t: number };
+/**
+ * Raw motion samples since the previous frame, sent only while a data-collection session runs (CONTRACTS §7).
+ * Parallel arrays, newest last: `t` phone unix ms per sample; `a` user acceleration (g, gravity removed), `g` gravity
+ * unit vector and `r` gyroscope (rad/s), each flattened as x, y, z per sample (length 3 × t.length). Device frame,
+ * the same fields as the engine's MotionSample, so a recording replays through `sim`.
+ */
+export type TelemetryRaw = { t: number[]; a: number[]; g: number[]; r: number[] };
+/** Data-collection state on the phone (state block `collect`). */
+export type TelemetryCollect = {
+  /** the owner allowed collection in Settings; commands are ignored otherwise */
+  allowed: boolean;
+  /** a session is recording: rules run, alerts and learning are paused */
+  on: boolean;
+  /** phone unix ms when the session started (0 = off) */
+  startedMs: number;
+  /** phone unix ms when it stops by itself unless the dashboard extends it (0 = off) */
+  untilMs: number;
+  /** the action the phone was last told is happening (shown in its notification) */
+  label: string | null;
+  /** the live engine runs the demo-sensitivity thresholds */
+  demo: boolean;
+};
 /**
  * Wire frame (§7 v2), 10 Hz while streaming / 1 Hz in night mode: always the raw samples since the previous frame,
  * engine events and incident deltas; `state` only when something changed or a second passed. `lib/telemetry.ts`
@@ -172,6 +198,7 @@ export type TelemetryFrame = {
   incidentCount: number;
   events: (TelemetryEventName | string)[];
   rttMs?: number; // phone → Realtime → phone round trip (self-echo), smoothed
+  raw?: TelemetryRaw; // only while a data-collection session runs
   state?: TelemetryState;
 };
 /** What the monitor consumes: a v1 tick as published by older phones, or a v2 frame merged with the latest `state`. */
@@ -188,6 +215,7 @@ export type TelemetryTick = TelemetryState & {
   incidentCount: number; // total live log size on the phone (gap detection)
   events: (TelemetryEventName | string)[];
   rttMs?: number;
+  raw?: TelemetryRaw; // only while a data-collection session runs
 };
 export type TelemetryStatus = {
   on: boolean; // the explicit switch
@@ -264,6 +292,11 @@ export interface SafetyNativeModuleType {
    */
   setDemoSensitivity(on: boolean): Promise<void>;
   getDemoSensitivity(): Promise<boolean>;
+  /** Settings → Allow data collection: a group-mate's /collect page may record labelled motion data. Off ends a session. */
+  setCollectAllowed(on: boolean): Promise<void>;
+  getCollect(): Promise<TelemetryCollect>;
+  /** End a running data-collection session from the phone. */
+  stopCollect(): Promise<void>;
   addListener<K extends SafetyNativeEventName>(
     name: K,
     cb: (event: SafetyNativeEvents[K]) => void,

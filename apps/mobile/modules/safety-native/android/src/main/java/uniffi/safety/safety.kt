@@ -766,6 +766,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -822,6 +824,8 @@ fun uniffi_safety_ffi_checksum_method_safetyengine_push_motion(
 fun uniffi_safety_ffi_checksum_method_safetyengine_push_typing(
 ): Short
 fun uniffi_safety_ffi_checksum_method_safetyengine_reset_incidents(
+): Short
+fun uniffi_safety_ffi_checksum_method_safetyengine_set_collecting(
 ): Short
 fun uniffi_safety_ffi_checksum_method_safetyengine_set_learning(
 ): Short
@@ -905,6 +909,8 @@ fun uniffi_safety_ffi_fn_method_safetyengine_push_motion(`ptr`: Pointer,`samples
 fun uniffi_safety_ffi_fn_method_safetyengine_push_typing(`ptr`: Pointer,`s`: RustBuffer.ByValue,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_safety_ffi_fn_method_safetyengine_reset_incidents(`ptr`: Pointer,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_safety_ffi_fn_method_safetyengine_set_collecting(`ptr`: Pointer,`on`: Byte,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_safety_ffi_fn_method_safetyengine_set_learning(`ptr`: Pointer,`enabled`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -1125,6 +1131,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_safety_ffi_checksum_method_safetyengine_reset_incidents() != 51093.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_safety_ffi_checksum_method_safetyengine_set_collecting() != 63456.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_safety_ffi_checksum_method_safetyengine_set_learning() != 21424.toShort()) {
@@ -1630,6 +1639,11 @@ public interface SafetyEngineInterface {
      */
     fun `resetIncidents`(`nowMs`: kotlin.ULong)
     
+    /**
+     * Data-collection mode: incident rules run (night mode or not), but nothing escalates and nothing is learned.
+     */
+    fun `setCollecting`(`on`: kotlin.Boolean, `nowMs`: kotlin.ULong)
+    
     fun `setLearning`(`enabled`: kotlin.Boolean)
     
     fun `setNightMode`(`active`: kotlin.Boolean, `nowMs`: kotlin.ULong)
@@ -1843,6 +1857,20 @@ open class SafetyEngine: Disposable, AutoCloseable, SafetyEngineInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_safety_ffi_fn_method_safetyengine_reset_incidents(
         it, FfiConverterULong.lower(`nowMs`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Data-collection mode: incident rules run (night mode or not), but nothing escalates and nothing is learned.
+     */override fun `setCollecting`(`on`: kotlin.Boolean, `nowMs`: kotlin.ULong)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_safety_ffi_fn_method_safetyengine_set_collecting(
+        it, FfiConverterBoolean.lower(`on`),FfiConverterULong.lower(`nowMs`),_status)
 }
     }
     

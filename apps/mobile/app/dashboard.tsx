@@ -75,7 +75,7 @@ export default function DashboardScreen() {
         <StateStrip m={m} />
 
         <Text style={styles.section}>Live metrics vs baseline</Text>
-        <Text style={styles.hint}>Band = your mean ± 2.5 SD for this placement. A metric must stay out of band for 30 s of walking before it counts.</Text>
+        <Text style={styles.hint}>Band = your mean ± 2.5 SD for this placement. Unsteady walking counts after 35 s of walking out of band, slowed walking after 60 s.</Text>
         <View style={[styles.grid, { gap }]}>
           {(m?.bands ?? []).map((b) => (
             <MetricTile key={b.name} b={b} style={{ width: tileWidth }} />

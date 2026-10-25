@@ -55,6 +55,18 @@ function slice<T extends { t_ms: number }>(xs: T[] | undefined, t0: number, t1: 
   return (xs ?? []).filter(x => x.t_ms >= t0 && x.t_ms < t1).map(x => ({ ...x, t_ms: x.t_ms - rebase }));
 }
 
+/**
+ * The sim's pass rule (synth::Expect) for a scenario: must snatch, must reach a location unlock, or must stay quiet
+ * (no check-in). "At most Check" scenarios (unsteady walking, dancing…) count as quiet: a lone gait incident must not
+ * ask "You okay?".
+ */
+function simExpect(scenario: Scenario): SimTrace['meta']['expect'] {
+  const e = SCENARIOS[scenario];
+  if (e.min_escalation === 'Snatch') return 'snatch';
+  if (e.min_escalation) return 'unlock';
+  return 'quiet';
+}
+
 function toTrace(rec: Recording, id: string, scenario: Scenario, window?: Label): SimTrace {
   const t0 = window?.t_start_ms ?? 0;
   const t1 = window?.t_end_ms ?? Number.POSITIVE_INFINITY;
@@ -66,7 +78,10 @@ function toTrace(rec: Recording, id: string, scenario: Scenario, window?: Label)
     id,
     scenario,
     expect: SCENARIOS[scenario],
-    meta: { ...rec.meta, scenario },
+    meta: {
+      ...rec.meta, scenario, expect: simExpect(scenario), night_mode: true,
+      hour_local: rec.context.find(c => c.t_ms >= t0)?.hour_local ?? 23, incident_t_ms: null, seed: 0,
+    },
     motion: slice(rec.motion, t0, t1, t0),
     context: slice(rec.context, t0, t1, t0),
     audio: slice(rec.audio, t0, t1, t0),

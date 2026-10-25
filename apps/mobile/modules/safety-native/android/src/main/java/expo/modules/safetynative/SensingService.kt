@@ -93,6 +93,8 @@ class SensingService : Service(), SensorEventListener {
     private const val EARTH_RADIUS_M = 6_371_000.0
     /** Telemetry ring (CONTRACTS §7): samples kept between two publisher drains (50 Hz × 1 s = 50 in night mode; 128 covers a late frame). */
     private const val TELEMETRY_RING_MAX = 128
+    /** Data-collection ring: full samples kept between two publisher drains (10 s at 50 Hz covers a stalled socket). */
+    private const val COLLECT_RING_MAX = 500
 
     /** What the motion listeners are registered for. */
     private data class SamplingMode(val full: Boolean, val live: Boolean)
@@ -142,6 +144,8 @@ class SensingService : Service(), SensorEventListener {
   private val telemetryT = ArrayDeque<Long>(TELEMETRY_RING_MAX + 1)
   private val telemetryAccel = ArrayDeque<Float>(TELEMETRY_RING_MAX + 1)
   private val telemetryGyro = ArrayDeque<Float>(TELEMETRY_RING_MAX + 1)
+  /** Full samples since the last [drainCollectSamples], filled only while a data-collection session runs; guarded by motionLock. */
+  private val collectRing = ArrayDeque<MotionSample>(COLLECT_RING_MAX + 1)
   /** EMA of the accelerometer inter-sample interval (ns), for the measured `sampleHz`; -1 until two samples arrived. */
   private var intervalEmaNs = -1.0
   private var lastAccelNs = 0L
@@ -402,7 +406,7 @@ class SensingService : Service(), SensorEventListener {
   }
 
   /** True while the personal dashboard or the telemetry stream wants every sample as it happens. */
-  private fun streamingOn(): Boolean = rt.dashboardStreamingOn || rt.telemetryOn
+  private fun streamingOn(): Boolean = rt.dashboardStreamingOn || rt.telemetryOn || rt.collecting
 
   /** Partial wake lock for streaming (screen off + unplugged would otherwise suspend the CPU between sensor batches). */
   @Synchronized
@@ -449,7 +453,7 @@ class SensingService : Service(), SensorEventListener {
 
   /** FULL when the engine asked for it, the dashboard or telemetry streams, during a baseline walk, or while learning gait on a daytime walk. */
   private fun effectiveFull(): Boolean =
-    rt.samplingFull || rt.dashboardStreamingOn || rt.telemetryOn || rt.baselineWalkStartMs != 0L || (activity == Activity.WALKING && rt.prefs.learningEnabled)
+    rt.samplingFull || rt.dashboardStreamingOn || rt.telemetryOn || rt.collecting || rt.baselineWalkStartMs != 0L || (activity == Activity.WALKING && rt.prefs.learningEnabled)
 
   /**
    * (Re)registers the motion listeners for the current effective mode (rate + batching) and the stream wake lock.
@@ -493,6 +497,14 @@ class SensingService : Service(), SensorEventListener {
     flushMotion()
   }
 
+
+  /** Full samples recorded since the previous call (data collection only; empty otherwise). Clears the ring. */
+  fun drainCollectSamples(): List<MotionSample> = synchronized(motionLock) {
+    val l = collectRing.toList()
+    collectRing.clear()
+    l
+  }
+
   override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
   override fun onSensorChanged(e: SensorEvent) {
@@ -511,14 +523,17 @@ class SensingService : Service(), SensorEventListener {
         val full = synchronized(motionLock) {
           val gyroOn = fullActive
           val rx = if (gyroOn) rotation[0] else 0f; val ry = if (gyroOn) rotation[1] else 0f; val rz = if (gyroOn) rotation[2] else 0f
-          batch.add(
-            MotionSample(
-              tMs = tMs.toULong(),
-              ax = ax, ay = ay, az = az,
-              gx = gravity[0], gy = gravity[1], gz = gravity[2],
-              rx = rx, ry = ry, rz = rz,
-            ),
+          val sample = MotionSample(
+            tMs = tMs.toULong(),
+            ax = ax, ay = ay, az = az,
+            gx = gravity[0], gy = gravity[1], gz = gravity[2],
+            rx = rx, ry = ry, rz = rz,
           )
+          batch.add(sample)
+          if (rt.collecting) {
+            collectRing.addLast(sample)
+            if (collectRing.size > COLLECT_RING_MAX) collectRing.removeFirst()
+          }
           // Telemetry ring (CONTRACTS §7 accel/gyro/st): timestamped magnitudes, drained by TelemetryPublisher at its own cadence.
           telemetryT.addLast(tMs)
           telemetryAccel.addLast(sqrt(ax * ax + ay * ay + az * az))

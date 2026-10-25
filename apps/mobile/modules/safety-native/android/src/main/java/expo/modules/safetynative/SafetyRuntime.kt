@@ -204,6 +204,7 @@ class SafetyRuntime private constructor(val app: Context) {
       "batteryPct" to batteryPct(),
       "lastHeartbeatMs" to lastHeartbeatMs,
       "serviceRunning" to serviceRunning,
+      "collect" to collectMap(),
     )
   }
 
@@ -283,7 +284,7 @@ class SafetyRuntime private constructor(val app: Context) {
    * something explicitly asks for the stream without a service — then it publishes whatever the engine holds.
    */
   fun syncTelemetryPublisher() {
-    if (sensing != null || telemetryOn || dashboardStreamingOn) telemetry.start() else telemetry.stop()
+    if (sensing != null || telemetryOn || dashboardStreamingOn || collecting) telemetry.start() else telemetry.stop()
   }
 
   /** Engine events (snake_case, CONTRACTS §7 `events`) since the previous call; clears the ring. */
@@ -317,6 +318,7 @@ class SafetyRuntime private constructor(val app: Context) {
    * so the snapshot the UI receives is the one this tick produced. Every wall-clock tick loop goes through here.
    */
   fun runTick(now: Long = now(), emitDashboard: Boolean = true) {
+    if (collectUntilMs != 0L && now > collectUntilMs) stopCollect("timed out")
     val events = engine.get().tick(now.toULong())
     lastTickMs = now
     dispatch(events)
@@ -406,7 +408,7 @@ class SafetyRuntime private constructor(val app: Context) {
         emit("sos", mapOf("active" to false))
         emit("escalation", mapOf("level" to "resolved", "summary" to ""))
       }
-      EngineEvent.BatteryDying -> scope.launch {
+      EngineEvent.BatteryDying -> if (!collecting) scope.launch {
         locationUploader.uploadNow()
         val id = openIncident("battery_dying", "Battery at ${batteryPct()}%")
         alerts.pushToGroup(id, "battery_dying", "${displayName()}'s phone is dying", "Battery almost empty during night mode", critical = false)
@@ -443,6 +445,98 @@ class SafetyRuntime private constructor(val app: Context) {
         emit("callOption", mapOf("summary" to ev.summary))
       }
     }
+  }
+
+  // ---- data collection (labelled recordings for recalibration, /collect) -------------------------------------
+
+  /** Phone wall-clock when the running session started / stops by itself (0 = no session). */
+  @Volatile var collectStartedMs = 0L
+    private set
+  @Volatile var collectUntilMs = 0L
+    private set
+  /** The action the /collect page says is happening now (shown in the notification, echoed in telemetry). */
+  @Volatile var collectLabel: String? = null
+    private set
+  /** A session is recording: full-rate sampling, raw samples in every telemetry frame, rules on, alerts and learning off. */
+  val collecting: Boolean get() = collectUntilMs != 0L
+
+  fun collectMap(): Map<String, Any?> = mapOf(
+    "allowed" to prefs.collectAllowed, "on" to collecting, "startedMs" to collectStartedMs, "untilMs" to collectUntilMs,
+    "label" to collectLabel, "demo" to prefs.demoSensitivity,
+  )
+
+  /**
+   * `collect_start` from a group-mate's /collect page: start a session, or extend the running one (the page re-sends it
+   * every minute). Only when the owner allowed it in Settings. A check-in, alert or SOS that is running is stood down
+   * first (resolved for the group too): a recording session never alerts anyone. Returns "ok" or why it was refused.
+   */
+  @Synchronized
+  fun startCollect(minutes: Int, label: String?): String {
+    if (!prefs.collectAllowed) return "not allowed on this phone"
+    val now = now()
+    val first = !collecting
+    if (first) standDownForCollect()
+    collectUntilMs = now + minutes.coerceIn(1, 15) * 60_000L
+    label?.trim()?.takeIf { it.isNotEmpty() }?.let { collectLabel = it.take(40) }
+    if (first) {
+      collectStartedMs = now
+      engine.collecting = true
+      engine.get().setCollecting(true, now.toULong())
+      Log.i(TAG, "data collection on until ${collectUntilMs}: rules run, alerts and learning paused")
+      sensing?.onStreamingChanged()
+      syncTelemetryPublisher()
+      emitStatus()
+    }
+    alerts.showCollecting(collectLabel, collectUntilMs)
+    return "ok"
+  }
+
+  /** Ends whatever check-in, alert or SOS is running (engine Resolved → incident resolved, notifications cleared). */
+  private fun standDownForCollect() {
+    val esc = engine.snapshotOrNull()?.escalation
+    val escalating = esc != null && esc != EscalationLevel.IDLE && esc != EscalationLevel.RESOLVED
+    if (!escalating && !sosActive) return
+    Log.i(TAG, "data collection: standing down ${if (sosActive) "SOS" else "escalation ${esc?.let { escalationName(it) }}"}")
+    if (escalating) resetIncidents()
+    if (sosActive) {   // engine already idle but the SOS flag stuck: clear it the same way the Resolved handler does
+      sosActive = false
+      emit("sos", mapOf("active" to false))
+      scope.launch { resolveIncident() }
+    }
+    alerts.cancelCheckIn(); alerts.cancelEscalated(); AlarmReceiver.cancelCheckTimeout(app)
+  }
+
+  fun setCollectLabel(label: String) {
+    if (!collecting) return
+    collectLabel = label.trim().take(40).ifEmpty { null }
+    alerts.showCollecting(collectLabel, collectUntilMs)
+  }
+
+  /**
+   * End the session: rules and learning back to normal, and the incident log is emptied so staged falls and stumbles
+   * do not stay in it (or reach the friends' monitor as real ones).
+   */
+  @Synchronized
+  fun stopCollect(reason: String) {
+    if (!collecting) return
+    collectUntilMs = 0L
+    collectStartedMs = 0L
+    collectLabel = null
+    engine.collecting = false
+    engine.get().setCollecting(false, now().toULong())
+    resetIncidents()
+    alerts.cancelCollecting()
+    sensing?.onStreamingChanged()
+    syncTelemetryPublisher()
+    emitStatus()
+    Log.i(TAG, "data collection off ($reason)")
+  }
+
+  /** Settings switch. Turning it off ends a running session. */
+  fun setCollectAllowed(on: Boolean) {
+    prefs.collectAllowed = on
+    if (!on) stopCollect("not allowed any more")
+    emitStatus()
   }
 
   /** User reset (personal dashboard): empty the incident log, rest sensing, persist, and tick so its events go out now. */

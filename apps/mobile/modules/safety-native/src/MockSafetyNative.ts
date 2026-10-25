@@ -15,6 +15,7 @@ import type {
   SafetyNativeModuleType,
   Status,
   Subscription,
+  TelemetryCollect,
   TelemetryStatus,
 } from './SafetyNative.types';
 
@@ -258,6 +259,15 @@ export class MockSafetyNative implements SafetyNativeModuleType {
   async getDemoSensitivity() {
     return this.demoSensitivity;
   }
+  private collectAllowed = false;
+  async setCollectAllowed(on: boolean) {
+    this.collectAllowed = on;
+  }
+  async getCollect(): Promise<TelemetryCollect> {
+    // The mock publishes nothing, so a /collect page can never start a session on it.
+    return { allowed: this.collectAllowed, on: false, startedMs: 0, untilMs: 0, label: null, demo: this.demoSensitivity };
+  }
+  async stopCollect() {}
   private liveIncidents() {
     const cutoff = Date.now() - INCIDENT_TTL_MS;
     this.incidents = this.incidents.filter((r) => r.tMs >= cutoff);

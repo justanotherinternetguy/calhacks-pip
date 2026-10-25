@@ -45,7 +45,7 @@ android {
 }
 
 // Keep assets/model-*.toml in sync with core/config (model-v1 = bundled fallback, model-demo = demo-sensitivity override).
-def modelConfigDir = file("${rootProject.projectDir}/../../core/config")
+def modelConfigDir = file("${rootProject.projectDir}/../../../core/config")
 tasks.register("copyModelConfig", Copy) {
   onlyIf { modelConfigDir.isDirectory() }
   from(modelConfigDir) { include "model-*.toml" }

@@ -226,6 +226,25 @@ impl Baseline {
         [p.cadence, p.step_cv, p.regularity, p.harmonic_ratio, p.sway_rms, p.wobble, p.jerk, p.rotation, p.peak_g]
     }
 
+    /// `priors` with the placement's overrides (`[baseline.placement_priors.<placement>]`) applied.
+    pub fn priors_for(cfg: &BaselineCfg, placement: Placement) -> [[f32; 2]; GAIT_FEATURES] {
+        let mut out = Self::priors(cfg);
+        let pp = &cfg.placement_priors;
+        let o = match placement {
+            Placement::Unknown => &pp.unknown,
+            Placement::Pocket => &pp.pocket,
+            Placement::Hand => &pp.hand,
+            Placement::Bag => &pp.bag,
+        };
+        let over = [o.cadence, o.step_cv, o.regularity, o.harmonic_ratio, o.sway_rms, o.wobble, o.jerk, o.rotation, o.peak_g];
+        for (i, v) in over.into_iter().enumerate() {
+            if let Some(v) = v {
+                out[i] = v;
+            }
+        }
+        out
+    }
+
     /// Learn one walking window, weighted by `hop_s` (the seconds of walking it stands for). `session` =
     /// buffer into the pending night session instead of committing.
     pub fn learn(&mut self, cfg: &BaselineCfg, placement: Placement, f: &GaitFeatures, hop_s: f32, day: i64, session: bool) {
@@ -288,7 +307,7 @@ impl Baseline {
     /// (mean, sd) for one feature: personal pooled stats once trusted (sd floored at a fraction of
     /// the prior sd), population priors otherwise.
     pub fn band_stats(&self, cfg: &BaselineCfg, placement: Placement, i: usize) -> (f32, f32) {
-        let pr = Self::priors(cfg)[i];
+        let pr = Self::priors_for(cfg, placement)[i];
         if self.trusted(cfg, placement) {
             if let Some((m, sd)) = self.gait_days[placement.index()].mean_sd(i) {
                 return (m, sd.max(pr[1] * cfg.sd_floor_frac).max(1e-4));
