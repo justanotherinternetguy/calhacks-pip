@@ -1,64 +1,60 @@
-import React from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, TextInputProps, View, ViewProps } from 'react-native';
+// The shared kit for the plainer screens (settings, groups, history, onboarding, incident): cream ground, paper
+// cards, Fredoka headings, ledge buttons. Thin wrappers over components/pip/kit so every screen speaks one language.
+import React, { useState } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, TextInput, TextInputProps, View, ViewProps } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { colors, radius } from '@/lib/theme';
+import { Btn, Card as KitCard, Chip, D, Switch, T, type BtnKind } from '@/components/pip/kit';
+import { fontFor, ht, ui } from '@/lib/theme';
 
-export function Screen({ children, scroll = true, style }: { children: React.ReactNode; scroll?: boolean; style?: ViewProps['style'] }) {
-  const inner = <View style={[styles.inner, style]}>{children}</View>;
+export function Screen({ children, scroll = true, style, testID }: { children: React.ReactNode; scroll?: boolean; style?: ViewProps['style']; testID?: string }) {
+  const inner = <View testID={testID} style={[styles.inner, style]}>{children}</View>;
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
-      {scroll ? <ScrollView contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">{inner}</ScrollView> : inner}
+      {scroll ? <ScrollView contentContainerStyle={{ paddingBottom: 48 }} keyboardShouldPersistTaps="handled">{inner}</ScrollView> : inner}
     </SafeAreaView>
   );
 }
-export const H1 = ({ children }: { children: React.ReactNode }) => <Text style={styles.h1}>{children}</Text>;
-export const H2 = ({ children }: { children: React.ReactNode }) => <Text style={styles.h2}>{children}</Text>;
-export const P = ({ children, muted, style, testID }: { children: React.ReactNode; muted?: boolean; style?: any; testID?: string }) => (
-  <Text testID={testID} style={[styles.p, muted && { color: colors.muted }, style]}>{children}</Text>
+export const H1 = ({ children, style }: { children: React.ReactNode; style?: any }) => <D accessibilityRole="header" style={[styles.h1, style]}>{children}</D>;
+export const H2 = ({ children, style }: { children: React.ReactNode; style?: any }) => <D accessibilityRole="header" style={[styles.h2, style]}>{children}</D>;
+export const P = ({ children, muted, style, testID, numberOfLines }: { children: React.ReactNode; muted?: boolean; style?: any; testID?: string; numberOfLines?: number }) => (
+  <T testID={testID} numberOfLines={numberOfLines} style={[styles.p, muted && { color: ui.quiet }, style]}>{children}</T>
 );
-export const Card = ({ children, style, tint }: { children: React.ReactNode; style?: ViewProps['style']; tint?: string }) => (
-  <View style={[styles.card, tint ? { borderColor: tint } : null, style]}>{children}</View>
+export const Card = ({ children, style, tint, padded }: { children: React.ReactNode; style?: ViewProps['style']; tint?: string; padded?: boolean }) => (
+  <KitCard tint={tint} style={style} padded={padded}>{children}</KitCard>
 );
 export const Row = ({ children, style }: { children: React.ReactNode; style?: ViewProps['style'] }) => <View style={[styles.row, style]}>{children}</View>;
 
-export function Button({ title, onPress, kind = 'primary', disabled, loading, style, testID }: {
-  title: string; onPress: () => void; kind?: 'primary' | 'danger' | 'ghost' | 'ok'; disabled?: boolean; loading?: boolean; style?: ViewProps['style']; testID?: string;
+const KIND: Record<'primary' | 'danger' | 'ghost' | 'ok', BtnKind> = { primary: 'main', danger: 'coral', ghost: 'paper', ok: 'mint' };
+
+/** Ledge buttons: `primary` is ink, `danger` coral, `ok` mint, `ghost` paper. */
+export function Button({ title, onPress, kind = 'primary', disabled, loading, style, testID, icon }: {
+  title: string; onPress: () => void; kind?: keyof typeof KIND; disabled?: boolean; loading?: boolean; style?: ViewProps['style']; testID?: string; icon?: React.ReactNode;
 }) {
-  const bg = { primary: colors.accent, danger: colors.danger, ghost: 'transparent', ok: colors.ok }[kind];
   return (
-    <Pressable testID={testID} onPress={onPress} disabled={disabled || loading}
-      style={({ pressed }) => [styles.btn, { backgroundColor: bg, opacity: disabled ? 0.4 : pressed ? 0.7 : 1 }, kind === 'ghost' && { borderWidth: 1, borderColor: colors.border }, style]}>
-      {loading ? <ActivityIndicator color="white" /> : <Text style={[styles.btnText, kind === 'ghost' && { color: colors.text }]}>{title}</Text>}
-    </Pressable>
+    <Btn title={title} onPress={onPress} kind={KIND[kind]} disabled={disabled} testID={testID} style={style} icon={icon}
+      iconRight={loading ? <ActivityIndicator size="small" color={KIND[kind] === 'main' ? ht.cream : ht.ink} /> : undefined} />
   );
 }
-export const Input = (props: TextInputProps) => <TextInput placeholderTextColor={colors.muted} {...props} style={[styles.input, props.style]} />;
-export const Pill = ({ text, color }: { text: string; color: string }) => (
-  <View style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: color + '33', borderWidth: 1, borderColor: color }}>
-    <Text style={{ color, fontWeight: '600', fontSize: 12 }}>{text}</Text>
-  </View>
-);
-export const Toggle = ({ label, value, onChange, hint }: { label: string; value: boolean; onChange: (v: boolean) => void; hint?: string }) => (
-  <Pressable onPress={() => onChange(!value)} style={[styles.row, { justifyContent: 'space-between', paddingVertical: 10 }]}>
-    <View style={{ flex: 1 }}>
-      <Text style={styles.p}>{label}</Text>
-      {hint && <Text style={[styles.p, { color: colors.muted, fontSize: 13 }]}>{hint}</Text>}
-    </View>
-    <View style={{ width: 48, height: 28, borderRadius: 14, backgroundColor: value ? colors.ok : colors.border, padding: 3, alignItems: value ? 'flex-end' : 'flex-start' }}>
-      <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: 'white' }} />
-    </View>
-  </Pressable>
+export const Input = (props: TextInputProps) => {
+  const [focus, setFocus] = useState(false);
+  return (
+    <TextInput placeholderTextColor={ui.muted} selectionColor={ht.sky} cursorColor={ht.ink} {...props}
+      onFocus={(e) => { setFocus(true); props.onFocus?.(e); }} onBlur={(e) => { setFocus(false); props.onBlur?.(e); }}
+      style={[styles.input, fontFor('400'), focus && { borderColor: ht.ink }, props.style]} />
+  );
+};
+/** A small outlined tag in the given colour (status words). */
+export const Pill = ({ text, color }: { text: string; color: string }) => <Chip small fill={ui.panel} color={color} style={{ borderColor: color }}>{text}</Chip>;
+export const Toggle = ({ label, value, onChange, hint, testID }: { label: string; value: boolean; onChange: (v: boolean) => void; hint?: string; testID?: string }) => (
+  <Switch label={label} hint={hint} value={value} onChange={onChange} testID={testID} />
 );
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+  screen: { flex: 1, backgroundColor: ui.ground },
   inner: { padding: 20, gap: 14, flex: 1 },
-  h1: { color: colors.text, fontSize: 30, fontWeight: '800', letterSpacing: -0.5 },
-  h2: { color: colors.text, fontSize: 18, fontWeight: '700', marginTop: 6 },
-  p: { color: colors.text, fontSize: 16, lineHeight: 22 },
-  card: { backgroundColor: colors.card, borderRadius: radius, padding: 16, gap: 8, borderWidth: 1, borderColor: colors.border },
+  h1: { color: ui.text, fontSize: 38, lineHeight: 42 },
+  h2: { color: ui.text, fontSize: 21, lineHeight: 26, marginTop: 2 },
+  p: { color: ui.text, fontSize: 16, lineHeight: 24 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  btn: { paddingVertical: 14, paddingHorizontal: 18, borderRadius: 12, alignItems: 'center', justifyContent: 'center', minHeight: 50 },
-  btnText: { color: 'white', fontWeight: '700', fontSize: 16 },
-  input: { backgroundColor: colors.card, color: colors.text, borderRadius: 12, padding: 14, fontSize: 16, borderWidth: 1, borderColor: colors.border },
+  input: { backgroundColor: ui.panel, color: ui.text, borderRadius: 16, paddingHorizontal: 16, paddingVertical: 13, fontSize: 16, borderWidth: 2, borderColor: ui.line },
 });

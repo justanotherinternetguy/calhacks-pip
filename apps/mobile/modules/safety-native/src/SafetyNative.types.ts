@@ -150,7 +150,10 @@ export type TelemetryState = {
   checkSummary?: string;
   /** @deprecated sent by phones before checkPending; read only through `isCheckPending` */
   checkPhrase?: string;
+  /** last location fix (friends' map); absent until the phone has one */
+  loc?: TelemetryLocation;
 };
+export type TelemetryLocation = { lat: number; lng: number; acc?: number; t: number };
 /**
  * Wire frame (§7 v2), 10 Hz while streaming / 1 Hz in night mode: always the raw samples since the previous frame,
  * engine events and incident deltas; `state` only when something changed or a second passed. `lib/telemetry.ts`

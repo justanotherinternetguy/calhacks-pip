@@ -3,14 +3,16 @@ import React, { useEffect, useState } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SecureStore from 'expo-secure-store';
-import { Platform } from 'react-native';
+import { Platform, View } from 'react-native';
+import { useFonts } from 'expo-font';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { supabase } from '@/lib/supabase';
 import { adoptNativeSession, onAuthSession } from '@/lib/native';
 import { hasDemoFlag, makeDemoSession } from '@/lib/demo';
 import { initNotifications } from '@/lib/notifications';
 import { useStore } from '@/lib/store';
-import { colors } from '@/lib/theme';
+import { FONT_FILES, WEB_FONTS_HREF, colors, fontFor, setNativeFontsLoaded, ui } from '@/lib/theme';
+import { useFriendsFeed } from '@/lib/friends';
 
 export const ONBOARDED_KEY = 'safe.onboarded';
 export async function readOnboarded() {
@@ -23,12 +25,37 @@ export async function writeOnboarded() {
   useStore.getState().set({ onboarded: true });
 }
 
+/** Keeps every friend's telemetry (real or simulated) flowing for the map while signed in. */
+function FriendsFeed() {
+  useFriendsFeed();
+  return null;
+}
+
+/** Fredoka, Figtree and DM Mono: bundled on the phone, linked from Google Fonts on the web. Resolves true once usable. */
+function useTypefaces(): boolean {
+  const [loaded, error] = useFonts(Platform.OS === 'web' ? {} : FONT_FILES);
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined' || document.getElementById('pip-font')) return;
+    const link = document.createElement('link');
+    link.id = 'pip-font';
+    link.rel = 'stylesheet';
+    link.href = WEB_FONTS_HREF;
+    document.head.appendChild(link);
+    document.body.style.backgroundColor = ui.ground;
+    document.body.style.color = ui.text;
+  }, []);
+  const ok = Platform.OS === 'web' || loaded;
+  setNativeFontsLoaded(Platform.OS !== 'web' && loaded && !error);
+  return ok || !!error;
+}
+
 export default function RootLayout() {
   const [ready, setReady] = useState(false);
   const session = useStore((s) => s.session);
   const onboarded = useStore((s) => s.onboarded);
   const segments = useSegments();
   const router = useRouter();
+  const fontsReady = useTypefaces();
 
   useEffect(() => {
     const off = initNotifications();
@@ -57,13 +84,23 @@ export default function RootLayout() {
     else if (session && onboarded && (top === '(auth)' || top === 'onboarding' || top === undefined)) router.replace('/home');
   }, [ready, session, onboarded, segments, router]);
 
+  if (!fontsReady) return <View style={{ flex: 1, backgroundColor: colors.bg }} />;
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
-      <StatusBar style="light" />
-      <Stack screenOptions={{ headerStyle: { backgroundColor: colors.bg }, headerTintColor: colors.text, contentStyle: { backgroundColor: colors.bg } }}>
+      <StatusBar style="dark" />
+      {session && <FriendsFeed />}
+      <Stack screenOptions={{
+        headerStyle: { backgroundColor: colors.bg }, headerTintColor: colors.text, headerShadowVisible: false,
+        headerTitleStyle: { ...fontFor('600', 'display'), fontSize: 20 }, headerBackButtonDisplayMode: 'minimal',
+        contentStyle: { backgroundColor: colors.bg },
+      }}>
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="home" options={{ headerShown: false }} />
+        <Stack.Screen name="friends" options={{ headerShown: false }} />
+        <Stack.Screen name="friend/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="groups" options={{ title: 'Groups' }} />
+        <Stack.Screen name="history" options={{ title: 'History' }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
         <Stack.Screen name="check-in" options={{ presentation: 'fullScreenModal', title: 'You okay?', headerShown: false }} />
         <Stack.Screen name="snatch" options={{ presentation: 'fullScreenModal', title: 'Snatch alert', headerShown: false }} />

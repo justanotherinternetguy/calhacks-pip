@@ -4,7 +4,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import { Button } from '@/components/ui';
 import { Map } from '@/components/Map';
-import { colors } from '@/lib/theme';
+import { colors, ht } from '@/lib/theme';
 import { listIncidentEvents } from '@/lib/db';
 import { NO_EVENTS, useStore } from '@/lib/store';
 import type { EscalationLevel, IncidentRecord } from '@/modules/safety-native';
@@ -129,11 +129,11 @@ export function EscalationDock(p: Props) {
   if (!open) {
     return (
       <Animated.View style={[styles.anchor, { bottom: p.bottom ?? 16, transform: [{ scale }] }]}>
-        <Pressable onPress={() => setOpen(true)} style={[styles.fab, { borderColor: tint, backgroundColor: overdue ? colors.danger : '#1e2433' }]} testID="escalation-dock-open">
-          <View style={[styles.dot, { backgroundColor: overdue ? '#fff' : tint }]} />
+        <Pressable onPress={() => setOpen(true)} style={[styles.fab, { borderColor: tint, backgroundColor: overdue ? colors.danger : ht.ink }]} testID="escalation-dock-open">
+          <View style={[styles.dot, { backgroundColor: overdue ? ht.cream : tint }]} />
           <View>
             <Text style={styles.fabTitle}>{overdue ? `${p.subjectName}: not resolved` : `${p.subjectName}: ${title}`}</Text>
-            <Text style={[styles.fabSub, overdue && { color: '#fff' }]}>{overdue ? `${title} · tap to act` : loc.trail.length ? 'Location shared · tap to see map & actions' : 'Escalation actions'}</Text>
+            <Text style={[styles.fabSub, overdue && { color: ht.cream }]}>{overdue ? `${title} · tap to act` : loc.trail.length ? 'Location shared · tap to see map & actions' : 'Escalation actions'}</Text>
           </View>
         </Pressable>
       </Animated.View>
@@ -221,15 +221,15 @@ export function EscalationDock(p: Props) {
 const styles = StyleSheet.create({
   anchor: { position: 'absolute', right: 16, zIndex: 60 },
   fab: {
-    flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 14, borderWidth: 1,
-    shadowColor: '#000', shadowOpacity: 0.45, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 999, borderWidth: 2,
+    shadowColor: ht.ink, shadowOpacity: 0.2, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 8,
   },
   dot: { width: 10, height: 10, borderRadius: 5 },
-  fabTitle: { color: colors.text, fontSize: 14, fontWeight: '800' },
-  fabSub: { color: colors.muted, fontSize: 12, fontVariant: ['tabular-nums'] },
+  fabTitle: { color: ht.cream, fontSize: 14, fontWeight: '800' },
+  fabSub: { color: ht.creamSoft, fontSize: 12, fontVariant: ['tabular-nums'] },
   panel: {
-    width: 380, maxWidth: '92%', backgroundColor: '#1e2433', borderRadius: 14, borderWidth: 1, padding: 14, paddingLeft: 18, gap: 10, overflow: 'hidden',
-    shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, shadowOffset: { width: 0, height: 8 }, elevation: 10,
+    width: 380, maxWidth: '92%', backgroundColor: ht.paper, borderRadius: 18, borderWidth: 2, padding: 14, paddingLeft: 18, gap: 10, overflow: 'hidden',
+    shadowColor: ht.ink, shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: 8 }, elevation: 10,
   },
   bar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4 },
   head: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },

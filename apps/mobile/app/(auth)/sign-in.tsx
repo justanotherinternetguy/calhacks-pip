@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { Alert, Platform } from 'react-native';
+import { Alert, Platform, View } from 'react-native';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
-import { Button, Card, H1, Input, P, Row, Screen } from '@/components/ui';
+import { Button, Card, Input, P, Screen } from '@/components/ui';
+import { Brand, D, Dot, T } from '@/components/pip/kit';
 import { supabase } from '@/lib/supabase';
 import { DEMO_MODE } from '@/lib/env';
 import { makeDemoSession, setDemoFlag } from '@/lib/demo';
 import { onAuthSession } from '@/lib/native';
+import { ui } from '@/lib/theme';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -57,10 +59,14 @@ export default function SignIn() {
   });
 
   return (
-    <Screen style={{ justifyContent: 'center' }}>
-      <H1>Safe</H1>
-      <P muted>Passive night-out safety. Your friends get told only when you can't tell them yourself.</P>
-      <Card>
+    <Screen style={{ justifyContent: 'center', maxWidth: 520, width: '100%', alignSelf: 'center' }}>
+      <Brand size={44} />
+      <D accessibilityRole="header" style={{ fontSize: 40, lineHeight: 44, marginTop: 6 }}>Out tonight? Your friends have your back.</D>
+      <P muted>pip watches quietly while you are out and tells your friends only when you can’t tell them yourself.</P>
+      <View style={{ flexDirection: 'row', gap: 16, marginTop: 4, flexWrap: 'wrap' }}>
+        <Legend tone="out" text="Fine" /><Legend tone="mild" text="On watch" /><Legend tone="high" text="Friends told" /><Legend tone="out" me text="You" />
+      </View>
+      <Card style={{ marginTop: 8 }}>
         {!sent ? (
           <>
             <Input placeholder="+1 555 123 4567" keyboardType="phone-pad" autoComplete="tel" value={phone} onChangeText={setPhone} />
@@ -75,10 +81,19 @@ export default function SignIn() {
           </>
         )}
       </Card>
-      <Row style={{ justifyContent: 'center' }}><P muted>or</P></Row>
+      <T style={{ textAlign: 'center', color: ui.quiet, fontSize: 14 }}>or</T>
       {Platform.OS === 'ios' && <Button title=" Sign in with Apple" kind="ghost" onPress={() => oauth('apple')} />}
       <Button title="Sign in with Google" kind="ghost" onPress={() => oauth('google')} />
       <Button title={DEMO_MODE ? 'Demo (offline)' : 'Demo (anonymous)'} kind="ghost" onPress={demo} />
     </Screen>
+  );
+}
+
+function Legend({ tone, me, text }: { tone: 'out' | 'mild' | 'high'; me?: boolean; text: string }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <Dot tone={tone} isMe={me} size={12} />
+      <T style={{ fontSize: 14, color: ui.text2, fontWeight: '500' }}>{text}</T>
+    </View>
   );
 }

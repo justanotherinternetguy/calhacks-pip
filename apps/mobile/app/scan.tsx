@@ -13,12 +13,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** The friends-tab QR (`{ v: 1, userId, fp, x, e }`). Throws a readable error for anything else, before any network call. */
 function parseQr(raw: string): QrPayload {
   let q: Partial<QrPayload>;
-  try { q = JSON.parse(raw) as Partial<QrPayload>; } catch { throw new Error('Not a Safe code'); }
-  if (!q || q.v !== 1) throw new Error('Not a Safe code');
+  try { q = JSON.parse(raw) as Partial<QrPayload>; } catch { throw new Error('Not a pip code'); }
+  if (!q || q.v !== 1) throw new Error('Not a pip code');
   if (typeof q.userId !== 'string' || !UUID_RE.test(q.userId)) {
     throw new Error('This code has no valid account id. On the other device, sign in, reopen Friends → Show QR, and scan again.');
   }
-  if (typeof q.fp !== 'string' || typeof q.x !== 'string' || typeof q.e !== 'string') throw new Error('This Safe code is incomplete');
+  if (typeof q.fp !== 'string' || typeof q.x !== 'string' || typeof q.e !== 'string') throw new Error('This pip code is incomplete');
   return q as QrPayload;
 }
 
@@ -69,7 +69,7 @@ export default function Scan() {
   return (
     <Screen scroll={false} style={{ padding: 0 }}>
       <CameraView style={{ flex: 1 }} facing="back" barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={(r) => onScan(r.data)} />
-      <P muted style={{ padding: 16, textAlign: 'center' }}>Point at your friend's QR code</P>
+      <P muted style={{ padding: 16, textAlign: 'center' }}>Point at your friend’s QR code</P>
     </Screen>
   );
 }

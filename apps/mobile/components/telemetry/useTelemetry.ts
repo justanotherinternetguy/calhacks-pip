@@ -2,7 +2,7 @@
 // member currently on screen. Fleet members that are not selected only update a "last seen" table (1 Hz sync).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { TelemetryTick } from '@/modules/safety-native';
-import { TelemetryBuffers, subscribeTelemetry, type TelemetryConnection, type TickDelta } from '@/lib/telemetry';
+import { TelemetryBuffers, isSimulatedUser, subscribeTelemetry, type TelemetryConnection, type TickDelta } from '@/lib/telemetry';
 
 export type FleetSeen = Record<string, { at: number; tick: TelemetryTick }>;
 /** A member counts as "publishing" when a tick arrived this recently. */
@@ -52,11 +52,17 @@ export function useTelemetryFleet(
         if (delta.newIncidents.length || delta.events.length) onDeltaRef.current?.(delta, tick);
       },
       (s) => setConn((prev) => ({ ...prev, [id]: s })),
+      undefined,
+      () => {
+        delete seenNow[id];
+        if (bufferedFor === id) { buffers.reset(); bufferedFor = null; setLive({ subject: null, tick: null, n: 0 }); }
+      },
     ));
     const sync = setInterval(() => {
       const now = Date.now();
       setSeen({ ...seenNow });
-      const publishing = ids.filter((id) => seenNow[id] && now - seenNow[id].at < PUBLISHING_MS).sort((a, b) => seenNow[b].at - seenNow[a].at);
+      // Auto-pick only a real phone: simulated people always "publish" and would win every time.
+      const publishing = ids.filter((id) => !isSimulatedUser(id) && seenNow[id] && now - seenNow[id].at < PUBLISHING_MS).sort((a, b) => seenNow[b].at - seenNow[a].at);
       if (!current || !publishing.includes(current)) {
         current = publishing.find((id) => id !== preferNotRef.current) ?? publishing[0] ?? null;
         setPublisher(current);

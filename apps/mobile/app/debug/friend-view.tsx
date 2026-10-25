@@ -68,7 +68,7 @@ export default function DebugFriendView() {
         <Card tint={colors.warn}>
           <H2>Escalate</H2>
           <P muted>You decide. The app never calls on its own.</P>
-          <P style={{ fontSize: 14 }}>Sam may need help. {summary}. Last location {last.lat.toFixed(5)}, {last.lng.toFixed(5)} at {format(last.tMs, 'HH:mm')}. Reported by the Safe app.</P>
+          <P style={{ fontSize: 14 }}>Sam may need help. {summary}. Last location {last.lat.toFixed(5)}, {last.lng.toFixed(5)} at {format(last.tMs, 'HH:mm')}. Reported by the pip app.</P>
           <Row>
             <Button title="Call campus safety" kind="ghost" style={{ flex: 1 }} onPress={() => add('You called campus safety')} />
             <Button title="Call 911" kind="danger" style={{ flex: 1 }} onPress={() => add('You called 911')} />

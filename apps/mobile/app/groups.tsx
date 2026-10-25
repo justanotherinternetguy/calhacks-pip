@@ -3,11 +3,12 @@ import { Alert, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
 import { Button, Card, H2, Input, P, Pill, Row, Screen } from '@/components/ui';
+import { Dot, Icon, Mono, T, Tabs } from '@/components/pip/kit';
 import { SafetyNative, type Identity } from '@/modules/safety-native';
 import { DEFAULT_THRESHOLD_K, MIN_MEMBERS_FOR_FALLBACK, useStore, useUserId } from '@/lib/store';
 import { createGroup, leaveGroup, rpc, updateGroup } from '@/lib/db';
 import { refreshAll } from '@/lib/native';
-import { colors } from '@/lib/theme';
+import { colors, ht, ui } from '@/lib/theme';
 
 export default function Friends() {
   const router = useRouter();
@@ -43,17 +44,17 @@ export default function Friends() {
   const qrPayload = identity ? JSON.stringify({ v: 1, userId: identity.userId, fp: identity.fingerprint, x: identity.x25519Pub, e: identity.ed25519Pub }) : '';
 
   return (
-    <Screen>
+    <Screen style={{ maxWidth: 640, width: '100%', alignSelf: 'center' }}>
       <Card>
         <Row style={{ justifyContent: 'space-between' }}>
           <H2>Your code</H2>
-          <Button title={showQr ? 'Hide' : 'Show QR'} kind="ghost" onPress={() => setShowQr(!showQr)} />
+          <Button title={showQr ? 'Hide' : 'Show QR'} kind="ghost" icon={Icon.qr(ui.text, 16)} onPress={() => setShowQr(!showQr)} />
         </Row>
         <P muted>Friends are added in person by scanning, so nobody can swap in a fake key.</P>
         {showQr && identity && (
-          <View style={{ alignItems: 'center', gap: 8, padding: 12, backgroundColor: 'white', borderRadius: 12 }}>
-            <QRCode value={qrPayload} size={200} />
-            <P style={{ color: '#111', fontFamily: 'monospace', fontSize: 12 }}>{identity.fingerprint}</P>
+          <View style={{ alignItems: 'center', gap: 10, padding: 16, backgroundColor: ht.paper, borderRadius: 18, borderWidth: 2, borderColor: ht.ink }}>
+            <QRCode value={qrPayload} size={200} color={ht.ink} backgroundColor={ht.paper} />
+            <Mono style={{ fontSize: 12, color: ui.quiet }}>{identity.fingerprint}</Mono>
           </View>
         )}
       </Card>
@@ -73,22 +74,21 @@ export default function Friends() {
               </View>
               {me?.status === 'invited' ? <Button title="Accept invite" kind="ok" onPress={() => accept(g.id)} /> : <Button title="Leave" kind="ghost" onPress={() => leave(g.id)} />}
             </Row>
-            {ms.map((m) => (
-              <Row key={m.user_id} style={{ justifyContent: 'space-between' }}>
-                <P>{profiles[m.user_id]?.display_name || m.user_id.slice(0, 8)}{m.user_id === userId ? ' (you)' : ''}</P>
-                <Pill text={m.status} color={m.status === 'active' ? colors.ok : colors.warn} />
-              </Row>
-            ))}
-            <Button title="Scan a friend's QR to add" onPress={() => router.push({ pathname: '/scan', params: { groupId: g.id } })} />
-            <P muted>
-              Fallback unlock needs {g.threshold_k} of {Math.max(n, 0)} friends to agree.
-              {fallbackOk ? '' : ` Fallback unlock needs at least ${MIN_MEMBERS_FOR_FALLBACK} active members — disabled until ${MIN_MEMBERS_FOR_FALLBACK - active} more join.`}
-            </P>
-            <Row>
-              {[2, 3, 4].map((k) => (
-                <Button key={k} title={`k=${k}`} kind={g.threshold_k === k ? 'primary' : 'ghost'} onPress={() => setK(g.id, k)} style={{ flex: 1 }} />
+            <View>
+              {ms.map((m, i) => (
+                <View key={m.user_id} style={[{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 }, i < ms.length - 1 && { borderBottomWidth: 1.5, borderBottomColor: ui.line }]}>
+                  <Dot tone={m.status === 'active' ? 'out' : 'home'} isMe={m.user_id === userId} size={12} />
+                  <T style={{ flex: 1, fontSize: 15, fontWeight: '500' }}>{profiles[m.user_id]?.display_name || m.user_id.slice(0, 8)}{m.user_id === userId ? ' (you)' : ''}</T>
+                  <Pill text={m.status} color={m.status === 'active' ? colors.ok : colors.warn} />
+                </View>
               ))}
-            </Row>
+            </View>
+            <Button title="Scan a friend’s QR to add" icon={Icon.camera(ht.cream, 18)} onPress={() => router.push({ pathname: '/scan', params: { groupId: g.id } })} />
+            <P muted style={{ fontSize: 14, lineHeight: 20 }}>
+              Fallback unlock needs {g.threshold_k} of {Math.max(n, 0)} friends to agree.
+              {fallbackOk ? '' : ` It needs at least ${MIN_MEMBERS_FOR_FALLBACK} active members, so it is off until ${MIN_MEMBERS_FOR_FALLBACK - active} more join.`}
+            </P>
+            <Tabs items={[2, 3, 4].map((k) => ({ key: String(k), label: `${k} friends` }))} value={String(g.threshold_k)} onChange={(k) => setK(g.id, Number(k))} />
             <Input placeholder="Campus safety number (optional)" keyboardType="phone-pad" defaultValue={g.campus_safety_number ?? ''} onEndEditing={(e) => setCampus(g.id, e.nativeEvent.text)} />
           </Card>
         );

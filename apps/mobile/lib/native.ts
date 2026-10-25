@@ -9,8 +9,9 @@ import { jwtExpMs, readStoredSession, supabase } from './supabase';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from './env';
 import { setDemoFlag } from './demo';
 import { registerPushToken, unregisterPushToken } from './push';
-import { fn, listMyGroups, getDevicesForUsers, getProfiles, getPresence, listIncidents, subscribe, upsertDevice, rpc } from './db';
+import { fn, listMyGroups, getDevicePlatforms, getDevicesForUsers, getProfiles, getPresence, listIncidents, subscribe, upsertDevice, rpc } from './db';
 import { readDashboardEnabled, useStore } from './store';
+import { markOkay, sendOkay } from './telemetry';
 import type { Incident, IncidentEvent, Presence } from './types';
 
 let configuredFor: string | null = null;
@@ -140,9 +141,20 @@ export async function refreshAll() {
   try {
     const { groups, members } = await listMyGroups(userId);
     const userIds = [...new Set(members.map((m) => m.user_id))];
-    const [profiles, presences] = await Promise.all([getProfiles(userIds), Promise.all(groups.map((g) => getPresence(g.id).catch(() => [] as Presence[])))]);
+    const [profiles, presences, platforms] = await Promise.all([
+      getProfiles(userIds),
+      Promise.all(groups.map((g) => getPresence(g.id).catch(() => [] as Presence[]))),
+      getDevicePlatforms([...new Set([...userIds, userId])]).catch(() => null),
+    ]);
     useStore.getState().set({
       groups, members,
+      // A phone counts as real sensors if it ever sent a heartbeat, however long ago: the heartbeat only runs in night
+      // mode, and a real person must never be shown a made-up night (fake incidents under their name); a quiet phone
+      // shows as "not streaming" instead. Requiring a heartbeat at all leaves out web sign-ins, whose device rows say
+      // 'android' (the schema has no 'web') but never heartbeat.
+      sensorUsers: platforms
+        ? [...new Set(platforms.filter((d) => (d.platform === 'android' || d.platform === 'ios') && d.last_heartbeat).map((d) => d.user_id))]
+        : null,
       profiles: Object.fromEntries(profiles.map((p) => [p.id, p])),
       presence: Object.fromEntries(groups.map((g, i) => [g.id, presences[i]])),
     });
@@ -174,7 +186,7 @@ function wireRealtime(userId: string) {
   teardownRealtime();
   const st = useStore.getState();
   channels = [
-    subscribe('incidents', undefined, (row: Incident) => st.upsertIncident(row)),
+    subscribe('incidents', undefined, (row: Incident, ev) => (ev === 'DELETE' ? st.removeIncident(row.id) : st.upsertIncident(row))),
     subscribe('incident_events', undefined, (row: IncidentEvent, ev) => ev === 'INSERT' && st.addEvent(row)),
     subscribe('presence', undefined, (row: Presence) =>
       useStore.setState((s) => ({ presence: { ...s.presence, [row.group_id]: [row, ...(s.presence[row.group_id] ?? []).filter((p) => p.user_id !== row.user_id)] } }))),
@@ -197,6 +209,21 @@ export async function sos() {
   for (const g of groups) {
     try { await rpc.openIncident({ group_id: g.id, level: 'sos', summary: 'Manual SOS' }); } catch (e) { console.warn('openIncident', e); }
   }
+}
+
+/**
+ * "I'm okay", said by hand with nothing going on: a timestamp to my group-mates, shown on their screens for a while.
+ * Shown here at once even if the publish fails (offline, demo); the engine is not involved. Resolves whether it left
+ * the phone.
+ */
+export async function tellFriendsOkay(): Promise<boolean> {
+  const me = useStore.getState().session?.user.id;
+  if (!me) return false;
+  const at = Date.now();
+  markOkay(me, at);
+  const r = await sendOkay(me, at);
+  if (r !== 'ok') console.warn('okay not delivered:', r);
+  return r === 'ok';
 }
 
 export async function signOut() {

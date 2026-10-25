@@ -30,7 +30,7 @@ export function TelemetryHeader({ groupName, now, subjects, subjectId, manual, o
         <View style={styles.right}>
           <Text style={styles.clock}>{fmtClock(now)}</Text>
           <Ghost label={soundOn ? 'Sound on' : 'Sound off'} on={soundOn} onPress={onToggleSound} />
-          <Ghost label="Home" onPress={onHome} />
+          <Ghost label="Map" onPress={onHome} />
         </View>
       </View>
 

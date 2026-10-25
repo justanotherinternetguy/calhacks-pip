@@ -40,6 +40,10 @@ export const getDevicesForUsers = async (ids: Uuid[]): Promise<DeviceKeys[]> =>
       ).map((d) => ({ id: d.device_id, user_id: d.user_id, x25519_pub: d.x25519_pub, ed25519_pub: d.ed25519_pub }))
     : [];
 
+/** Which of these users have a phone registered (and so real sensors), from the same `device_status` view. */
+export const getDevicePlatforms = async (ids: Uuid[]): Promise<{ user_id: Uuid; platform: Device['platform']; last_heartbeat: string | null }[]> =>
+  ids.length ? unwrap(await supabase.from('device_status').select('user_id, platform, last_heartbeat').in('user_id', ids)) : [];
+
 // ---- groups
 export async function listMyGroups(userId: Uuid) {
   const memberships = unwrap<GroupMember[]>(await supabase.from('group_members').select('*').eq('user_id', userId));
@@ -94,20 +98,23 @@ export const rpc = {
 };
 
 // ---- edge functions
-async function callFn(name: string, body: unknown) {
+/** `body` undefined = GET (the `config` function only answers GET). */
+async function callFn(name: string, body?: unknown) {
   const { data } = await supabase.auth.getSession();
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token ?? ''}` },
-    body: JSON.stringify(body),
-  });
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, body === undefined
+    ? { method: 'GET', headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}` } }
+    : {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token ?? ''}` },
+      body: JSON.stringify(body),
+    });
   if (!res.ok) throw new Error(`${name}: ${res.status} ${await res.text()}`);
   return res.json().catch(() => ({}));
 }
 export const fn = {
   push: (b: { incidentId: Uuid; kind: string; title: string; body: string; recipients?: Uuid[]; critical?: boolean; data?: Record<string, unknown> }) => callFn('push', b),
   unlock: (b: { incidentId: Uuid }) => callFn('unlock', b) as Promise<{ requestId: Uuid; k?: number }>,
-  config: () => callFn('config', {}) as Promise<{ version: string; toml: string }>,
+  config: () => callFn('config') as Promise<{ version: string; toml: string }>,
 };
 
 // ---- realtime

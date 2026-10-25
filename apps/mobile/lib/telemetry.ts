@@ -7,6 +7,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import type { IncidentRecord, TelemetryTick } from '@/modules/safety-native';
 import { FrameMerger, sampleTimes } from './telemetryFrames';
 import { supabase } from './supabase';
+import { isSimId, subscribeSimulated } from './sim';
 
 export { isTelemetryTick, isTelemetryFrame } from './telemetryFrames';
 
@@ -60,6 +61,7 @@ export type TelemetryCommand =
  */
 export async function sendTelemetryCommand(userId: string, command: TelemetryCommand | TelemetryCommand['cmd']): Promise<string> {
   const payload = typeof command === 'string' ? { cmd: command } : command;
+  if (isSimulated(userId)) return 'ok'; // simulated people have no phone to tell
   try { await supabase.realtime.setAuth(); } catch {}
   const ch = supabase.channel(`telemetry-cmd:${userId}`, { config: { private: true, broadcast: { ack: true } } });
   // Group-mates may publish on this channel but not subscribe to it (0012), so a websocket join fails for them.
@@ -85,15 +87,167 @@ export async function sendTelemetryCommand(userId: string, command: TelemetryCom
   }
 }
 
+// ---- "I'm okay" ------------------------------------------------------------------------------------------
+//
+// A person can tell their friends they are fine without anything having happened. It rides on the same private
+// channel as the phone's telemetry (`telemetry:{me}`, event `okay`): only the subject may publish there (0010), so a
+// friend cannot say it on someone's behalf, and the server sees nothing but a timestamp. Display only: it never
+// touches the engine, which still decides escalation.
+
+export const OKAY_EVENT = 'okay';
+/** How long a manual "I'm okay" is shown for. */
+export const OKAY_SHOWN_MS = 30 * 60_000;
+
+function okayPayloadTime(payload: unknown): number | null {
+  const t = (payload as { t?: unknown } | undefined)?.t;
+  return typeof t === 'number' && Number.isFinite(t) && t > 0 ? t : null;
+}
+
 /**
- * Subscribe to one subject's telemetry. `onTick(tick, receivedAtMs)` for every complete tick (v2 frames are merged
- * with the latest state block first), `onStatus` for every connection change (SUBSCRIBED / CHANNEL_ERROR / TIMED_OUT /
- * CLOSED, staleness, retry schedule). Resubscribes with exponential backoff (1 s → 30 s). Returns an unsubscribe function.
+ * Publish my "I'm okay" to my group-mates. Uses the subscription this app already holds on my own channel when there
+ * is one (the feed subscribes to everyone, me included); otherwise a one-off publish over HTTP. Resolves 'ok' or why not.
+ */
+export async function sendOkay(userId: string, atMs = Date.now()): Promise<string> {
+  const topic = telemetryTopic(userId);
+  const payload = { t: atMs, user: userId };
+  const mine = supabase.getChannels().find((c) => c.topic === `realtime:${topic}`);
+  if (mine && mine.state === 'joined') {
+    try { return await mine.send({ type: 'broadcast', event: OKAY_EVENT, payload }); } catch (e) { return e instanceof Error ? e.message : String(e); }
+  }
+  try { await supabase.realtime.setAuth(); } catch {}
+  const ch = mine ?? supabase.channel(topic, { config: { private: true, broadcast: { ack: true } } });
+  try {
+    const r = await ch.httpSend(OKAY_EVENT, payload);
+    return r.success ? 'ok' : (r.error ?? 'rejected');
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  } finally {
+    if (!mine) void supabase.removeChannel(ch).catch(() => {});
+  }
+}
+
+/** Record an "I'm okay" locally (my own, which Realtime does not echo back to me) so every screen shows it at once. */
+export function markOkay(userId: string, atMs = Date.now()) {
+  const e = hub.get(userId);
+  if (!e || (e.okayAt != null && atMs <= e.okayAt)) return;
+  e.okayAt = atMs;
+  for (const l of e.listeners) l.onOkay?.(atMs);
+}
+
+// ---- shared subscriptions ------------------------------------------------------------------------------
+//
+// The map feed and the monitor console both watch the same people, and realtime-js hands back one channel per topic,
+// so every subscriber goes through this hub: one source per person (the Realtime channel, or the simulator for people
+// without sensors), fanned out to any number of listeners. A listener that joins late gets the newest tick with the
+// whole incident log in it, since the stream itself only carries deltas.
+
+type Listener = {
+  onTick: (tick: TelemetryTick, receivedAtMs: number) => void;
+  onStatus: (s: TelemetryConnection) => void;
+  onOkay?: (atMs: number) => void;
+  /** the source switched kind (simulated ↔ real): drop everything kept from it, the incident log above all */
+  onReset?: () => void;
+};
+type HubEntry = {
+  listeners: Set<Listener>;
+  stop: () => void;
+  simulated: boolean;
+  status: TelemetryConnection | null;
+  last: { tick: TelemetryTick; at: number } | null;
+  log: Map<number, IncidentRecord>;
+  /** when this person last said "I'm okay" by hand (phone ms), if they did */
+  okayAt: number | null;
+};
+const hub = new Map<string, HubEntry>();
+let simulatedUsers = new Set<string>();
+
+const isSimulated = (userId: string) => isSimId(userId) || simulatedUsers.has(userId);
+
+function startSource(userId: string, e: HubEntry) {
+  e.simulated = isSimulated(userId);
+  e.status = null;
+  e.last = null;
+  e.log.clear();
+  const onTick = (tick: TelemetryTick, at: number) => {
+    if (tick.events.includes('incident_log_cleared')) e.log.clear();
+    for (const r of tick.incidents) e.log.set(r.id, r);
+    e.last = { tick, at };
+    for (const l of e.listeners) l.onTick(tick, at);
+  };
+  const onStatus = (s: TelemetryConnection) => {
+    e.status = s;
+    for (const l of e.listeners) l.onStatus(s);
+  };
+  const onOkay = (atMs: number) => {
+    if (e.okayAt != null && atMs <= e.okayAt) return;
+    e.okayAt = atMs;
+    for (const l of e.listeners) l.onOkay?.(atMs);
+  };
+  e.stop = e.simulated ? subscribeSimulated(userId, onTick, onStatus) : openTelemetry(userId, onTick, onStatus, onOkay);
+}
+
+/**
+ * Which real accounts have no sensors (no phone registered) and so get simulated data. Sources whose kind changes
+ * are restarted in place; their listeners stay subscribed.
+ */
+export function setSimulatedUsers(ids: string[]) {
+  const next = new Set(ids);
+  const changed = [...hub.keys()].filter((id) => !isSimId(id) && simulatedUsers.has(id) !== next.has(id));
+  simulatedUsers = next;
+  for (const id of changed) {
+    const e = hub.get(id)!;
+    e.stop();
+    // Made-up incidents must never stay in a real person's log (and the two sources' record ids overlap).
+    for (const l of e.listeners) l.onReset?.();
+    startSource(id, e);
+  }
+}
+export const isSimulatedUser = isSimulated;
+
+/**
+ * Subscribe to one subject's telemetry. `onTick(tick, receivedAtMs)` for every complete tick, `onStatus` for every
+ * connection change, `onReset` when the source switches between simulated and real. Shared: see the hub above.
+ * Returns an unsubscribe function.
  */
 export function subscribeTelemetry(
   userId: string,
   onTick: (tick: TelemetryTick, receivedAtMs: number) => void,
   onStatus: (s: TelemetryConnection) => void,
+  onOkay?: (atMs: number) => void,
+  onReset?: () => void,
+): () => void {
+  let e = hub.get(userId);
+  if (!e) {
+    e = { listeners: new Set(), stop: () => {}, simulated: false, status: null, last: null, log: new Map(), okayAt: null };
+    hub.set(userId, e);
+    startSource(userId, e);
+  } else {
+    if (e.status) onStatus({ ...e.status });
+    if (e.last) onTick({ ...e.last.tick, incidents: [...e.log.values()], events: [] }, e.last.at);
+    if (e.okayAt != null) onOkay?.(e.okayAt);
+  }
+  const l: Listener = { onTick, onStatus, onOkay, onReset };
+  e.listeners.add(l);
+  const entry = e;
+  return () => {
+    entry.listeners.delete(l);
+    if (entry.listeners.size === 0 && hub.get(userId) === entry) {
+      entry.stop();
+      hub.delete(userId);
+    }
+  };
+}
+
+/**
+ * One Realtime subscription. `onTick(tick, receivedAtMs)` for every complete tick (v2 frames are merged
+ * with the latest state block first), `onStatus` for every connection change (SUBSCRIBED / CHANNEL_ERROR / TIMED_OUT /
+ * CLOSED, staleness, retry schedule). Resubscribes with exponential backoff (1 s → 30 s). Returns an unsubscribe function.
+ */
+function openTelemetry(
+  userId: string,
+  onTick: (tick: TelemetryTick, receivedAtMs: number) => void,
+  onStatus: (s: TelemetryConnection) => void,
+  onOkay?: (atMs: number) => void,
 ): () => void {
   const topic = telemetryTopic(userId);
   const status: TelemetryConnection = { state: 'connecting', subscribedAt: null, lastTickAt: null, latencyMs: null, rttMs: null, ticksPerSec: 0, attempts: 0, nextRetryAt: null, error: null };
@@ -157,6 +311,11 @@ export function subscribeTelemetry(
       status.error = null;
       onTick(tick, now);
       emit();
+    });
+    ch.on('broadcast', { event: OKAY_EVENT }, (msg: { payload?: unknown }) => {
+      if (stopped || ch !== channel) return;
+      const t = okayPayloadTime(msg.payload);
+      if (t != null) onOkay?.(t);
     });
     ch.subscribe((st, err) => {
       if (stopped || ch !== channel) return;

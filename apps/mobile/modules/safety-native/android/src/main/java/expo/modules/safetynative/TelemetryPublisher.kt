@@ -47,6 +47,8 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
     private const val STATE_EVERY_MS = 1_000L
     private const val BATTERY_REFRESH_MS = 10_000L
     private const val LOG_REFRESH_MS = 1_000L
+    /** Re-send the whole live log this often (without raw_json) so a viewer that joined late catches up. */
+    private const val LOG_REPLAY_MS = 30_000L
     private const val RTT_EVERY_MS = 1_000L
     /** One status line a minute while publishing (rate, round trip, drops, session), for field diagnosis from logcat. */
     private const val SUMMARY_EVERY_MS = 60_000L
@@ -78,6 +80,7 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
   private val sentSignatures = HashMap<Long, Triple<Long, Boolean, Long>>()
   private var seenJoinEpoch = 0L
   private var lastStateMs = 0L
+  private var lastReplayMs = 0L
   private var lastStateTickMs = -1L
   private var batteryPct = 0
   private var batteryReadMs = 0L
@@ -251,6 +254,13 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
     }
     val sentId = lastSentIncidentId
     val fresh = cachedLog.filter { val id = it.id.toLong(); id > sentId || sentSignatures[id]?.let { s -> s != it.signature() } == true }
+    // Frames carry only new / changed records; every LOG_REPLAY_MS the rest of the live log rides along too (upserted by id
+    // on the viewer, so nothing is duplicated), slimmed down: viewers never read raw_json from the stream.
+    val replay = if (cachedLog.isNotEmpty() && now - lastReplayMs >= LOG_REPLAY_MS) {
+      lastReplayMs = now
+      val freshIds = fresh.mapTo(HashSet()) { it.id }
+      cachedLog.filter { it.id !in freshIds }
+    } else emptyList()
 
     val o = JSONObject()
       .put("v", 2)
@@ -261,7 +271,10 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
       .put("gyro", magnitudes(raw.gyro))
       .put("st", raw.lastTMs)
       .put("sampleHz", (raw.hz * 10f).roundToLong() / 10.0)
-      .put("incidents", JSONArray().also { a -> fresh.forEach { a.put(jsonOf(it.toMap())) } })
+      .put("incidents", JSONArray().also { a ->
+        fresh.forEach { a.put(jsonOf(it.toMap())) }
+        replay.forEach { a.put(jsonOf(it.toMap() - "rawJson")) }
+      })
       .put("incidentCount", cachedLog.size)
       .put("events", JSONArray(events))
     rttMs?.let { o.put("rttMs", it) }
@@ -298,6 +311,10 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
       .put("activity", metrics["activity"] ?: "unknown")
       .put("placement", metrics["placement"] ?: "unknown")
       .put("samplingFull", metrics["samplingFull"] ?: false)
+    // Last fix for the friends' map (the map UI shows every friend's position).
+    rt.lastLocation?.let { l ->
+      s.put("loc", JSONObject().put("lat", l.latitude).put("lng", l.longitude).put("acc", l.accuracy.toDouble()).put("t", l.time))
+    }
     if (snap?.escalation == EscalationLevel.CHECK) {
       // Never the phrase itself: group-mates read this stream, and the phrase is the owner's answer.
       rt.pendingCheck?.let { s.put("checkPending", true).put("checkDeadlineMs", it.deadlineMs).put("checkSummary", it.summary) }

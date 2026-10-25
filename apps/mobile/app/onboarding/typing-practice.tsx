@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
+import { View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Button, Card, H1, P, Screen } from '@/components/ui';
+import { D, Dot } from '@/components/pip/kit';
 import { CheckInInput, SafetyNative, type CheckInResult } from '@/modules/safety-native';
 import { writeOnboarded } from '../_layout';
-import { colors } from '@/lib/theme';
 
 const WORDS = ['blue', 'river', 'stone', 'lamp', 'tiger', 'maple', 'cloud', 'seven', 'piano', 'green', 'coral', 'north'];
 export const randomPhrase = () => Array.from({ length: 3 }, () => WORDS[Math.floor(Math.random() * WORDS.length)]).join(' ');
@@ -23,12 +24,15 @@ export default function TypingPractice() {
   };
 
   return (
-    <Screen style={{ justifyContent: 'center' }}>
+    <Screen style={{ justifyContent: 'center', maxWidth: 560, width: '100%', alignSelf: 'center' }}>
       <H1>Typing practice</H1>
-      <P muted>When Safe asks "you okay?", you answer by typing three words. How you type (not what) tells it whether you're yourself. Three quick rounds.</P>
+      <P muted>When pip asks “you okay?”, you answer by typing three words. How you type (not what) tells it whether you’re yourself. Three quick rounds.</P>
       <Card>
-        <P muted>Round {round + 1} of 3 — type this:</P>
-        <P style={{ fontSize: 28, fontWeight: '800', color: colors.accent }}>{phrase}</P>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {[0, 1, 2].map((i) => <Dot key={i} tone={i < round ? 'out' : 'home'} size={12} />)}
+          <P muted style={{ fontSize: 14 }}>Round {round + 1} of 3 · type this:</P>
+        </View>
+        <D style={{ fontSize: 30, lineHeight: 36 }}>{phrase}</D>
         <CheckInInput key={round} phrase={phrase} onComplete={done} />
         {last && <P muted>{last}</P>}
       </Card>

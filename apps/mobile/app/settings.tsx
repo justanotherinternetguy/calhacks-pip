@@ -4,6 +4,8 @@ import { useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Button, Card, H2, Input, P, Row, Screen, Toggle } from '@/components/ui';
+import { Icon, Tabs } from '@/components/pip/kit';
+import { ht, ui } from '@/lib/theme';
 import { SafetyNative, type TelemetryStatus } from '@/modules/safety-native';
 import { signOut } from '@/lib/native';
 import { useStore, useUserId, writeDashboardEnabled } from '@/lib/store';
@@ -15,6 +17,8 @@ export default function Settings() {
   const dashboardEnabled = useStore((s) => s.dashboardEnabled);
   const [mic, setMic] = useState(status?.permissions.microphone === 'granted');
   const [learning, setLearning] = useState(true);
+  // Native reports only whether night mode is active, not which mode was picked; remember the last choice made here.
+  const [nightChoice, setNightChoice] = useState<'auto' | 'on' | 'off' | 'paused_tonight'>('auto');
   const [start, setStart] = useState('20');
   const [end, setEnd] = useState('6');
 
@@ -77,6 +81,12 @@ export default function Settings() {
   return (
     <Screen>
       <Card>
+        <H2>Friends</H2>
+        <Button title="Groups and adding friends" kind="ghost" icon={Icon.people(ui.text, 18)} onPress={() => router.push('/groups')} />
+        <Button title="Incident history" kind="ghost" icon={Icon.clock(ui.text, 18)} onPress={() => router.push('/history')} />
+        <Button title="Live monitor console" kind="ghost" icon={Icon.list(ui.text, 18)} onPress={() => router.push('/monitor')} />
+      </Card>
+      <Card>
         <H2>Emergency contact</H2>
         <P muted style={{ fontSize: 14 }}>Your phone number, shared only with your group so they can call you from an alert.</P>
         <Input value={phone} onChangeText={setPhone} placeholder="+1 555 123 4567" keyboardType="phone-pad" testID="settings-phone" />
@@ -103,11 +113,9 @@ export default function Settings() {
       </Card>
       <Card>
         <H2>Night mode</H2>
-        <Row>
-          {(['auto', 'on', 'off', 'paused_tonight'] as const).map((m) => (
-            <Button key={m} title={m.replace('_', ' ')} kind="ghost" style={{ flex: 1, paddingHorizontal: 6 }} onPress={() => SafetyNative.setNightMode(m)} />
-          ))}
-        </Row>
+        <Tabs
+          items={[{ key: 'auto', label: 'Auto' }, { key: 'on', label: 'On' }, { key: 'off', label: 'Off' }, { key: 'paused_tonight', label: 'Paused tonight' }]}
+          value={nightChoice} onChange={(m) => { setNightChoice(m); void SafetyNative.setNightMode(m); }} />
       </Card>
       <Card>
         <H2>Personal dashboard</H2>
@@ -116,7 +124,7 @@ export default function Settings() {
       </Card>
       <Card>
         <H2>Live telemetry</H2>
-        <Toggle label="Stream telemetry to monitor" hint="Raw motion, metrics, incidents and engine events go to your group's web monitor over one live connection (10 frames/s). Keeps the sensors at full rate and the CPU awake, so it costs battery. Location is never included." value={telemetry.value} onChange={(v) => void telemetry.toggle(v)} />
+        <Toggle label="Stream telemetry to monitor" hint="Raw motion, metrics, incidents and engine events go to your group's web monitor over one live connection (10 frames/s). Keeps the sensors at full rate and the CPU awake, so it costs battery. Your last location fix goes along so friends see you on the map." value={telemetry.value} onChange={(v) => void telemetry.toggle(v)} />
         <P muted style={{ fontSize: 13 }}>{telemetryHint}</P>
       </Card>
       <Card>
@@ -149,7 +157,7 @@ export default function Settings() {
           ))}
         </Row>
       </Card>
-      <Button title="Sign out" kind="danger" onPress={signOut} />
+      <Button title="Sign out" kind="ghost" icon={Icon.signOut(ht.ink, 18)} onPress={signOut} />
     </Screen>
   );
 }

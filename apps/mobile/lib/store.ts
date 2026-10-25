@@ -27,8 +27,12 @@ type State = {
   // §6 call option (native 'callOption'); personal dashboard preference
   callOption: CallOption;
   dashboardEnabled: boolean;
+  /** users with a phone registered (real sensors); null until loaded. Everyone else gets simulated data. */
+  sensorUsers: Uuid[] | null;
   set: (patch: Partial<State>) => void;
   upsertIncident: (i: Incident) => void;
+  /** drop a deleted incident and its events */
+  removeIncident: (id: Uuid) => void;
   addEvent: (e: IncidentEvent) => void;
   reset: () => void;
 };
@@ -36,7 +40,7 @@ type State = {
 const initial = {
   session: null, profile: null, onboarded: false, status: null, pendingCheck: null, snatch: null, sosActive: false,
   groups: [], members: [], presence: {}, profiles: {}, incidents: [], events: {},
-  callOption: null, dashboardEnabled: false,
+  callOption: null, dashboardEnabled: false, sensorUsers: null as Uuid[] | null,
 };
 
 /**
@@ -50,6 +54,11 @@ export const useStore = create<State>((set) => ({
   set: (patch) => set(patch),
   upsertIncident: (i) =>
     set((s) => ({ incidents: [i, ...s.incidents.filter((x) => x.id !== i.id)].sort((a, b) => b.opened_at.localeCompare(a.opened_at)) })),
+  removeIncident: (id) =>
+    set((s) => {
+      const { [id]: _gone, ...events } = s.events;
+      return { incidents: s.incidents.filter((x) => x.id !== id), events };
+    }),
   addEvent: (e) =>
     set((s) => {
       const list = s.events[e.incident_id] ?? [];
@@ -57,7 +66,8 @@ export const useStore = create<State>((set) => ({
       return { events: { ...s.events, [e.incident_id]: [...list, e].sort((a, b) => a.created_at.localeCompare(b.created_at)) } };
     }),
   // dashboardEnabled is a device preference, not session state: keep it across sign-out.
-  reset: () => set((s) => ({ ...initial, dashboardEnabled: s.dashboardEnabled })),
+  // onboarded is a device flag (SecureStore / localStorage), not part of the session: keep it across sign-out / sign-in.
+  reset: () => set((s) => ({ ...initial, dashboardEnabled: s.dashboardEnabled, onboarded: s.onboarded })),
 }));
 
 export const useUserId = () => useStore((s) => s.session?.user.id ?? null);

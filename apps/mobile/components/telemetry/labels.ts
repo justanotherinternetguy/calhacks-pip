@@ -2,7 +2,7 @@
 // is paired with text. Metric / kind / placement labels are shared with the personal dashboard.
 import type { EscalationLevel } from '@/modules/safety-native';
 import type { TelemetryConnState } from '@/lib/telemetry';
-import { colors } from '@/lib/theme';
+import { colors, ht } from '@/lib/theme';
 
 export { ACTIVITY_LABEL, KIND_LABEL, PLACEMENT_LABEL, TIER_LABEL, fmtSd, fmtValue, kindLabel, metricLabel, tierColor } from '@/components/dashboard/labels';
 
@@ -29,7 +29,7 @@ export const connColor = (s: TelemetryConnState | undefined) =>
 export const batteryColor = (pct: number | null | undefined) => (pct == null ? colors.muted : pct <= 15 ? colors.danger : pct <= 30 ? colors.warn : colors.text);
 
 /** Distinct hues for incident sequences (sequence_id > 0) so related records read as one chain. */
-const SEQ_HUES = ['#7c9cff', '#c084fc', '#f472b6', '#fb923c', '#2dd4bf', '#a3e635'];
+const SEQ_HUES = [ht.skyDeep, ht.lilacDeep, ht.coralDeep, ht.butterDeep, ht.mintDeep, ht.inkSoft];
 export const sequenceColor = (seq: number) => SEQ_HUES[(Math.max(1, seq) - 1) % SEQ_HUES.length];
 
 export const fmtClock = (ms: number) => {

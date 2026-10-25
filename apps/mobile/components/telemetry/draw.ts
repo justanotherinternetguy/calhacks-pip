@@ -2,11 +2,11 @@
 // function of (ctx, rect, data, now). Only called from LiveCanvas.web.tsx's requestAnimationFrame loop;
 // the DOM types come from tsconfig's `lib: ["DOM"]`, so this file typechecks on native too (it is just never run there).
 import type { TelemetryBuffers, TrendPoint } from '@/lib/telemetry';
-import { colors } from '@/lib/theme';
+import { colors, ht } from '@/lib/theme';
 
 export type Rect = { x: number; y: number; w: number; h: number };
-export const FONT = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-export const SERIES = { accel: '#7c9cff', gyro: '#c084fc', danger: colors.danger, grid: '#1b2130', axis: '#2a3245' } as const;
+export const FONT = "11px 'DM Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+export const SERIES = { accel: ht.skyDeep, gyro: ht.lilacDeep, danger: colors.danger, grid: ht.sunk, axis: ht.line } as const;
 
 export const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 export const yFor = (r: Rect, v: number, lo: number, hi: number) => r.y + r.h - ((clamp(v, lo, hi) - lo) / (hi - lo)) * r.h;
@@ -186,7 +186,7 @@ export function drawSpans(ctx: CanvasRenderingContext2D, r: Rect, pts: TrendPoin
 /** One metric's signed SD distance over the last `windowSec`, with the ±2.5 SD band shaded. */
 export function drawSdSparkline(ctx: CanvasRenderingContext2D, r: Rect, pts: TrendPoint[], name: string, nowMs: number, windowSec: number, bandSd: number, out: boolean) {
   const lo = -5, hi = 5;
-  hband(ctx, r, -bandSd, bandSd, lo, hi, '#ffffff0d');
+  hband(ctx, r, -bandSd, bandSd, lo, hi, '#2F855A14');
   ctx.strokeStyle = SERIES.axis;
   ctx.lineWidth = 1;
   ctx.beginPath();

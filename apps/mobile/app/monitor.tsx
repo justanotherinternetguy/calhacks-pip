@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { isCheckPending, type TelemetryTick } from '@/modules/safety-native';
 import { Pill } from '@/components/ui';
 import { activeIncidents, useStore, useUserId } from '@/lib/store';
@@ -9,6 +9,8 @@ import { subscribe } from '@/lib/db';
 import { NO_STREAM_HINT_MS, sendTelemetryCommand, type TickDelta } from '@/lib/telemetry';
 import type { Incident, IncidentEvent } from '@/lib/types';
 import { colors, levelColor } from '@/lib/theme';
+import { SIM_FRIENDS, isSimId } from '@/lib/sim';
+import { isSimulatedUser } from '@/lib/telemetry';
 import { useNow } from '@/components/monitor/useMonitorData';
 import { AnalysisPanel } from '@/components/monitor/AnalysisPanel';
 import { ReminderToasts, toastVisible, type Toast } from '@/components/monitor/ReminderToasts';
@@ -53,9 +55,16 @@ export default function MonitorScreen() {
   const mid = !wide && width >= MID;
   const now = useNow(500);
 
-  const memberIds = useMemo(() => [...new Set(members.filter((m) => m.status === 'active').map((m) => m.user_id))], [members]);
+  // Everyone is public on the map, simulated friends included; `?subject=` picks who is on screen.
+  const params = useLocalSearchParams<{ subject?: string }>();
+  const memberIds = useMemo(
+    () => [...new Set([...(me ? [me] : []), ...members.filter((m) => m.status === 'active').map((m) => m.user_id), ...SIM_FRIENDS.map((f) => f.id)])],
+    [members, me],
+  );
   const active = useMemo(() => activeIncidents(incidents), [incidents]);
-  const name = useCallback((id: string | null | undefined) => (id ? profiles[id]?.display_name || `Friend ${id.slice(0, 6)}` : 'Nobody'), [profiles]);
+  const name = useCallback((id: string | null | undefined) => (
+    !id ? 'Nobody' : isSimId(id) ? SIM_FRIENDS.find((f) => f.id === id)?.name ?? 'Friend' : profiles[id]?.display_name || `Friend ${id.slice(0, 6)}`
+  ), [profiles]);
 
   // Sound: on by default, remembered per browser. Toggling is the user gesture that unlocks WebAudio.
   const [soundOn, setSoundOn] = useState(() => {
@@ -82,8 +91,9 @@ export default function MonitorScreen() {
   }, []);
 
   // Subject: pinned member, else whoever is publishing, else the first group-mate who is not me.
-  const [pinned, setPinned] = useState<string | null>(null);
-  const fallback = memberIds.find((id) => id !== me) ?? memberIds[0] ?? null;
+  const [picked, setPinned] = useState<string | null>(null);
+  const pinned = picked ?? (typeof params.subject === 'string' ? params.subject : null);
+  const fallback = memberIds.find((id) => id !== me && !isSimulatedUser(id)) ?? memberIds.find((id) => !isSimulatedUser(id)) ?? memberIds.find((id) => id !== me) ?? null;
   const { subjectId, manual, buffers, tick, conn, seen, publisher } = useTelemetryFleet(memberIds, { manual: pinned, fallback, preferNot: me, onDelta });
   const subjects: SubjectOption[] = memberIds.map((id) => ({ id, name: name(id), isMe: id === me, publishing: !!seen[id] && now - seen[id].at < PUBLISHING_MS }));
   const subjectName = name(subjectId);
@@ -142,7 +152,7 @@ export default function MonitorScreen() {
     if (!me) return;
     const st = useStore.getState();
     const chans = [
-      subscribe('incidents', undefined, (row: Incident) => st.upsertIncident(row)),
+      subscribe('incidents', undefined, (row: Incident, ev) => (ev === 'DELETE' ? st.removeIncident(row.id) : st.upsertIncident(row))),
       subscribe('incident_events', undefined, (row: IncidentEvent, ev) => { if (ev === 'INSERT') st.addEvent(row); }),
     ];
     return () => chans.forEach((c) => c.unsubscribe());
@@ -207,7 +217,7 @@ export default function MonitorScreen() {
     <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
       <TelemetryHeader
         groupName={groupName} now={now} subjects={subjects} subjectId={subjectId} manual={manual} onPick={setPinned}
-        conn={conn} tick={tick} soundOn={soundOn} onToggleSound={toggleSound} onHome={() => router.replace('/home')}
+        conn={conn} tick={tick} soundOn={soundOn} onToggleSound={toggleSound} onHome={() => (router.canGoBack() ? router.back() : router.replace('/home'))}
       />
       {wide ? (
         <View style={styles.columns}>

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { colors } from '@/lib/theme';
+import { colors, ht } from '@/lib/theme';
 import type { Reminder } from './useRiskAnalysis';
 import { URGENCY_COLOR } from './AnalysisPanel';
 
@@ -38,8 +38,8 @@ export function ReminderToasts({ toasts, now, width, onDismiss }: { toasts: Toas
 const styles = StyleSheet.create({
   stack: { position: 'absolute', top: 70, right: 14, gap: 8, zIndex: 50 },
   toast: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 12, borderWidth: 1, backgroundColor: '#1e2433',
-    shadowColor: '#000', shadowOpacity: 0.45, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 8,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 16, borderWidth: 1.5, backgroundColor: ht.paper,
+    shadowColor: ht.ink, shadowOpacity: 0.18, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 8,
   },
   bar: { width: 4, alignSelf: 'stretch', borderRadius: 2 },
   label: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 },

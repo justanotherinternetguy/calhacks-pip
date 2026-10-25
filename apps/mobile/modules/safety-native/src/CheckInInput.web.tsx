@@ -15,9 +15,9 @@ export function CheckInInput({ phrase, autoFocus = true, placeholder, style, onC
       autoCapitalize="none"
       autoCorrect={false}
       placeholder={placeholder ?? 'type the phrase'}
-      placeholderTextColor="#6b7280"
+      placeholderTextColor="#B8AC96"
       value={typed}
-      style={[{ color: 'white', fontSize: 20, borderWidth: 1, borderColor: '#374151', borderRadius: 12, padding: 14, minHeight: 56 }, style]}
+      style={[{ color: '#1E1B2E', backgroundColor: '#FFFCF5', fontSize: 22, borderWidth: 2, borderColor: '#E6D8BD', borderRadius: 16, paddingHorizontal: 16, minHeight: 54, fontFamily: "Figtree, system-ui, sans-serif" }, style]}
       onKeyPress={(e) => {
         const now = Date.now();
         start.current ??= now;
