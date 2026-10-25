@@ -59,6 +59,7 @@ fun LiveMetrics.toMap(): Map<String, Any?> = mapOf(
   "baselineTrusted" to baselineTrusted,
   "baselineWalkDays" to baselineWalkDays.toDouble(),
   "evidence" to evidence,
+  "calmWalkS" to calmWalkS.toDouble(),
 )
 
 fun IncidentRecord.toMap(): Map<String, Any?> = mapOf(
@@ -80,5 +81,5 @@ fun IncidentRecord.toMap(): Map<String, Any?> = mapOf(
 fun emptyMetricsMap(nowMs: Long): Map<String, Any?> = mapOf(
   "tMs" to nowMs, "placement" to "unknown", "samplingFull" to false, "activity" to "unknown",
   "bands" to emptyList<Map<String, Any?>>(), "listening" to false, "context" to emptyList<String>(),
-  "baselineTrusted" to false, "baselineWalkDays" to 0.0, "evidence" to "",
+  "baselineTrusted" to false, "baselineWalkDays" to 0.0, "evidence" to "", "calmWalkS" to 0.0,
 )

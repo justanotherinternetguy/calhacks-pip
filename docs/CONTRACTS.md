@@ -263,7 +263,10 @@ incidents; the incident log decides when to ask "You okay?". Parameters: `core/c
   ScreamShout, SnoringWhileDown, DistressWords }                          // audio
 #[derive(uniffi::Enum)] pub enum IncidentTier { Context, Watch, Danger }
 #[derive(uniffi::Record)] pub struct IncidentRecord { pub id: u32, pub t_ms: u64, pub kind: IncidentKind, pub tier: IncidentTier, pub summary: String, pub sd_distance: f32, pub placement: Placement, pub raw_json: String, pub cleared_ms: u64 /* 0 = active */, pub acknowledged: bool, pub sequence_id: u32 /* episode, 0 = none */, pub watched: bool }
-#[derive(uniffi::Record)] pub struct LiveMetrics { pub t_ms: u64, pub placement: Placement, pub sampling_full: bool, pub activity: Activity, pub bands: Vec<MetricBand>, pub listening: bool, pub context: Vec<String>, pub baseline_trusted: bool, pub baseline_walk_days: f32, pub evidence: String }
+#[derive(uniffi::Record)] pub struct LiveMetrics { pub t_ms: u64, pub placement: Placement, pub sampling_full: bool, pub activity: Activity, pub bands: Vec<MetricBand>, pub listening: bool, pub context: Vec<String>, pub baseline_trusted: bool, pub baseline_walk_days: f32, pub evidence: String, pub calm_walk_s: f32 }
+// calm_walk_s: seconds of normal walking (every unsteady metric in band, cadence not slowed, OS not stationary / in a
+// vehicle) since the newest Watch / Danger incident opened; 0 after one opens or a reset. JS `calmWalkS` (optional:
+// older phones omit it). The monitor's AI read eases faster with it.
 // Context gains `charging: bool`. AudioScores is { t_ms, scream, shout, snore, level_db, distress } (glass removed;
 // `distress` = distress-phrase confidence 0..1 from the on-device keyword spotter, 0 when it is off, see §12).
 // EngineEvent gains AudioListening { on: bool } and IncidentCleared { record: IncidentRecord }.

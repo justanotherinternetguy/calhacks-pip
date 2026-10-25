@@ -392,6 +392,11 @@ expiry). Uploads and telemetry thus survive a sleeping JS runtime, a backgrounde
     ⇒ at least high, unlocked / snatch ⇒ critical.
   - The monitor asks again only when the picture changes. It debounces the request and asks at most every
     45 s unless escalation rises. It caches the last read per person.
+  - **The score eases while things stay calm**, without a new request (`riskDecay.ts`): it halves every
+    15 calm minutes, and each minute of normal walking (the phone's `calmWalkS`: the person's usual gait,
+    every unsteadiness metric in range) counts as 3. It holds while any watch or danger incident is open,
+    a check-in is pending or an alert runs, and never goes below the engine's floor. The easing shows as a
+    "Calm for … min" step in the reasoning, and the next read is told to start from the eased score.
   - Both keys end up in the web bundle by design. Use a low spend limit or a free-tier key.
 
 ---

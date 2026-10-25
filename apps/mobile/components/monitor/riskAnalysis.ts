@@ -8,6 +8,9 @@ import type { Incident, IncidentEvent } from '@/lib/types';
 import { parseJsonObject, type ChatMessage } from '@/lib/llm';
 import { EVENT_LABEL } from './labels';
 import { buildTimeline, type Timeline } from './incidentTimeline';
+import { levelOf, RISK_BAND, RISKS, type Easing } from './riskDecay';
+
+export { RISK_BAND, RISKS } from './riskDecay';
 
 export type RiskLevel = 'low' | 'elevated' | 'high' | 'critical';
 export type Urgency = 'info' | 'warn' | 'urgent';
@@ -61,15 +64,12 @@ export type AnalysisInput = {
   shownReminders: string[];
   /** times the owner confirmed they are OK, oldest first (phone clock) */
   confirmations?: OkConfirmation[];
+  /** how far the console eased the previous read's score while things stayed calm (riskDecay.ts) */
+  easing?: Easing | null;
 };
 
 const MAX_RECORDS = 40;
 const MAX_EVENTS = 25;
-
-export const RISKS: RiskLevel[] = ['low', 'elevated', 'high', 'critical'];
-/** Score band per level, inclusive. */
-export const RISK_BAND: Record<RiskLevel, [number, number]> = { low: [0, 24], elevated: [25, 49], high: [50, 74], critical: [75, 100] };
-const levelOf = (score: number): RiskLevel => RISKS.find((l) => score <= RISK_BAND[l][1]) ?? 'critical';
 
 const SYSTEM = `You are the risk analyst on a friend-safety console. One person (the subject) carries a phone running an on-device rule engine that flags incidents on a night out. Their friends watch this console. You read the engine's incidents as a timeline and estimate how much danger the subject is in right now. You get only the incidents (kind, order, timing, duration, state), never the sensor measurements behind them, so reason from those alone.
 
@@ -103,7 +103,7 @@ HOW TO REASON
 1. Order matters. Fall then scream reads differently from scream then fall. Impairment then separated then in_vehicle late at night is the drugging / led-away pattern; the same kinds in the reverse order, or spread over hours, are not.
 2. Gaps matter. Steps seconds or a couple of minutes apart are probably one event. Gaps of an hour or more are probably unrelated, unless the thread connecting them is impairment that is still active.
 3. Duration matters. down_after_fall open for 20 s is a sit-down; open for 5+ min with no answer is an emergency. Impairment that lasted 30 min and is still active weighs more than one that cleared in 2 min.
-4. State matters. Active, unanswered danger incidents drive risk up. Answered check-ins, cleared incidents, fall_recovered and a long calm_for_s bring it down. Context tier alone is never more than low.
+4. State matters. Active, unanswered danger incidents drive risk up. Answered check-ins, cleared incidents, fall_recovered and a long calm_for_s bring it down. So does normal walking after the incidents (the user message gives the minutes: their usual gait, nothing out of band): someone walking like themselves is probably fine; weigh it as a down driver. Context tier alone is never more than low.
 5. Late night, being separated, a dying battery and being in a vehicle make the same incidents worse because friends have less reach.
 6. Always weigh the innocent reading: dancing, a dropped phone, a bus or rideshare home, a recovered stumble, a quick answer.
 7. Never claim certainty or invent facts: no measurements, places, people or causes that are not in the data. Say "consistent with", not "is". Cite incidents by #id.
@@ -176,9 +176,17 @@ export function buildMessages(input: AnalysisInput): ChatMessage[] {
     lines.push('', `${input.subjectName} confirmed they are OK ${oks.length > 1 ? `${oks.length} times, last` : ''} ${ago(last.atMs, input.phoneNow)} ago (${last.how === 'check_in' ? 'answered a check-in with fingerprint / face / PIN' : 'tapped "I\'m okay"'}).`
       + (before.length ? ` Resolved by it, 0 points: ${before.join(' ')}.` : ' No incident came before it.'));
   }
+  const walkS = input.tick?.metrics?.calmWalkS;
+  if (walkS != null) {
+    lines.push('', `Normal walking since the newest watch / danger incident opened (their usual gait, every unsteadiness metric in band): ${ago(0, walkS * 1000)}.`);
+  }
   if (input.previous) {
     const p = input.previous;
     lines.push('', `Your previous read (${ago(p.atMs, Date.now())} ago): ${p.risk}${p.score != null ? ` ${p.score}/100` : ''}: ${p.headline}`);
+    const e = input.easing;
+    if (e && e.score < e.from) {
+      lines.push(`Since then it stayed calm for ${Math.round(e.calmMin)} min${e.walkMin >= 0.5 ? ` (${Math.round(e.walkMin)} min of it walking normally)` : ''}, and the console eased the score from ${e.from} to ${e.score} (${e.risk}). Start from ${e.score}: go above it only for something new, and keep easing if nothing new matters.`);
+    }
   }
   if (input.shownReminders.length) lines.push(`Reminders already shown to the friends: ${input.shownReminders.map((r) => `"${r}"`).join(' ')}`);
 

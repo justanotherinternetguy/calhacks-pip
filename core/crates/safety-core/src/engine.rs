@@ -66,6 +66,9 @@ pub struct Engine {
     sampling_full_desired: Option<bool>,
     listening: Option<bool>,
     last_incident_ms: Option<u64>,
+    /// seconds of normal walking (every unsteady metric in band, cadence not slowed) since the newest Watch / Danger
+    /// incident opened; the monitor eases its risk read faster with it
+    calm_walk_s: f32,
     session_incident: bool,
     // ---- incident rule state ----
     fall: Option<FallWatch>,
@@ -152,6 +155,7 @@ impl Engine {
             home_hist: VecDeque::new(),
             last_fall_or_grab_ms: None,
             last_fall_ms: None,
+            calm_walk_s: 0.0,
             last_listen_ms: None,
         })
     }
@@ -328,6 +332,7 @@ impl Engine {
         self.last_fall_ms = None;
         self.last_listen_ms = None;
         self.last_incident_ms = None;
+        self.calm_walk_s = 0.0;
         self.events.push(EngineEvent::IncidentLogCleared);
         self.update_sampling(now_ms);
         self.update_listening(now_ms);
@@ -463,6 +468,7 @@ impl Engine {
         self.last_incident_ms = Some(self.last_incident_ms.map_or(t_ms, |l| l.max(t_ms)));
         if rec.tier > IncidentTier::Context {
             self.session_incident = true;
+            self.calm_walk_s = 0.0;
         }
         let id = rec.id;
         self.events.push(EngineEvent::SignalIncident { record: rec });
@@ -665,6 +671,9 @@ impl Engine {
             if os_walking && self.detecting() {
                 self.gait_incidents(&f);
             }
+            if os_walking && self.walking_normally(&f) {
+                self.calm_walk_s += g.hop_s;
+            }
         }
         if f.full {
             if let Some(gr) = self.grab.update(f.t_ms, f.is_running, self.ctx.speed_mps, self.ctx.separated) {
@@ -735,6 +744,13 @@ impl Engine {
     }
 
     /// Unsteady gait, slowed walk, stumbles (night mode, full rate, walking).
+    /// This walking window is the person's usual walk: no unsteady metric out of band and cadence not slowed.
+    fn walking_normally(&self, f: &GaitFeatures) -> bool {
+        let ic = &self.cfg.incidents;
+        let slow = self.bands.get("cadence").map(|b| f.cadence_spm < b.mean * (1.0 - ic.slowed_cadence_frac)).unwrap_or(false);
+        !slow && self.bands.unsteady_out(&ic.unsteady_metrics).0.is_empty()
+    }
+
     fn gait_incidents(&mut self, f: &GaitFeatures) {
         let ic = self.cfg.incidents.clone();
         let hop = self.cfg.gait.hop_s;
@@ -1178,6 +1194,7 @@ impl Engine {
             baseline_trusted: trusted,
             baseline_walk_days: self.baseline.walk_days(self.placement) as f32,
             evidence,
+            calm_walk_s: self.calm_walk_s,
         }
     }
 

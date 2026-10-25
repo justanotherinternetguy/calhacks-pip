@@ -336,6 +336,9 @@ pub struct LiveMetrics {
     pub baseline_trusted: bool,
     pub baseline_walk_days: f32,
     pub evidence: String,
+    /// seconds of normal walking since the newest Watch / Danger incident opened (0 after one opens or a reset)
+    #[serde(default)]
+    pub calm_walk_s: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

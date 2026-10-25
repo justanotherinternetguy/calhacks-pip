@@ -16,7 +16,8 @@ import { AnalysisPanel } from '@/components/monitor/AnalysisPanel';
 import { ReminderToasts, toastVisible, type Toast } from '@/components/monitor/ReminderToasts';
 import { EscalationDock } from '@/components/monitor/EscalationDock';
 import { escalationRank, useRiskAnalysis, type Reminder } from '@/components/monitor/useRiskAnalysis';
-import { okAnalysis, type Assessment } from '@/components/monitor/riskAnalysis';
+import { okAnalysis, riskFloor, type Assessment } from '@/components/monitor/riskAnalysis';
+import { easeRisk, lastChangeMs, withEasing } from '@/components/monitor/riskDecay';
 import { useOkConfirmations } from '@/components/monitor/okConfirmations';
 import { LinkOverlay, LinkProvider } from '@/components/monitor/ReasoningLinks';
 import { reasoningLinks } from '@/components/monitor/AnalysisPanel';
@@ -137,12 +138,18 @@ export default function MonitorScreen() {
   const recentEvent = !!lastEvent && phoneNow - lastEvent.t < EVENT_RECENT_MS;
   const quiet = !records.length && !subjectServer.length && escalationRank(escalation) === 0 && !isCheckPending(tick) && !recentEvent;
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // Normal walking the phone counted since calm began (the read, or the newest incident change, whichever is later):
+  // its counter minus the value it had then. A page opened mid-calm starts counting from now.
+  const walkNow = tick?.metrics?.calmWalkS ?? null;
+  const [walkBase, setWalkBase] = useState<{ key: string; at: number } | null>(null);
+  const easing = useRef<ReturnType<typeof easeRisk> | null>(null);
   const ai = useRiskAnalysis({
     subjectId, digest, quiet, quietConfirmed: quiet && !!tick && tick.incidentCount === 0, escalation,
     buildInput: () => ({
       subjectName, phoneNow, tick, records, events: buffers.events, serverIncidents: subjectServer,
       friendEvents: friendEvents.map((e) => ({ ...e, actorName: name(e.actor_id) })),
       confirmations,
+      easing: easing.current,
     }),
     ok: latestOk,
     // Reset to 0 only when nothing happened after the OK (an old confirmation on reload must not hide newer incidents).
@@ -152,10 +159,32 @@ export default function MonitorScreen() {
       if (Platform.OS === 'web' && soundRef.current && fresh.some((r) => r.urgency === 'urgent')) beep();
     },
   });
-  const dismissToast = useCallback((id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
+  const dismissToast = useCallback((id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)), [setToasts]);
+  // The read eases while things stay calm, faster with normal walking (riskDecay.ts); no model call.
+  const calmKey = `${subjectId}|${ai.atMs}|${lastChangeMs(records)}`;
+  if (walkNow != null && walkBase?.key !== calmKey) setWalkBase({ key: calmKey, at: walkNow });
+  const walkS = walkNow != null && walkBase?.key === calmKey ? (walkNow >= walkBase.at ? walkNow - walkBase.at : walkNow) : 0;
+  const eased = ai.analysis && !ai.analysis.okReset
+    ? easeRisk(ai.analysis, {
+      readAtMs: ai.atMs + (phoneNow - now), nowMs: phoneNow, records, walkS,
+      alertRunning: escalationRank(escalation) > 1, checkPending: escalation === 'check' || isCheckPending(tick),
+      floor: riskFloor(escalation, isCheckPending(tick))?.level ?? null,
+    })
+    : null;
+  useEffect(() => { easing.current = eased; });
+  // memoized on whole minutes so the reasoning arrows are not rebuilt every frame
+  const read = ai.analysis;
+  const eScore = eased?.score ?? null;
+  const eRisk = eased?.risk ?? null;
+  const eCalm = Math.round(eased?.calmMin ?? 0);
+  const eWalk = Math.round(eased?.walkMin ?? 0);
+  const shown = useMemo(
+    () => (read && eScore != null && eRisk ? withEasing(read, { from: read.score, score: eScore, risk: eRisk, calmMin: eCalm, walkMin: eWalk, held: null }) : read),
+    [read, eScore, eRisk, eCalm, eWalk],
+  );
   // Arrows: incident rows → the AI's reading of each → the steps that combine them → the score.
-  const links = useMemo(() => reasoningLinks(ai.analysis), [ai.analysis]);
-  const assessments = useMemo(() => new Map<number, Assessment>((ai.analysis?.assessments ?? []).map((x) => [x.id, x])), [ai.analysis]);
+  const links = useMemo(() => reasoningLinks(shown), [shown]);
+  const assessments = useMemo(() => new Map<number, Assessment>((shown?.assessments ?? []).map((x) => [x.id, x])), [shown]);
   const recordOf = useCallback((id: number) => {
     let best: (typeof records)[number] | null = null;
     for (const r of records) if (r.id === id && (!best || r.tMs > best.tMs)) best = r;
@@ -266,7 +295,7 @@ export default function MonitorScreen() {
       <EventTicker events={buffers.events} now={phoneNow} />
     </View>
   );
-  const right = <AnalysisPanel state={ai} subjectName={subjectName} now={now} onRefresh={ai.refresh} onClear={clearAi} kindOf={kindOf} timeOf={timeOf} />;
+  const right = <AnalysisPanel state={{ ...ai, analysis: shown }} subjectName={subjectName} now={now} onRefresh={ai.refresh} onClear={clearAi} kindOf={kindOf} timeOf={timeOf} />;
 
   return (
     <LinkProvider>

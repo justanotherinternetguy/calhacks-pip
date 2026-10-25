@@ -112,6 +112,8 @@ export type LiveMetrics = {
   context: string[]; // situational chips, e.g. "away from home late", "in a vehicle"
   baselineTrusted: boolean;
   baselineWalkDays: number; // distinct local days with walking (trusted at 7)
+  /** seconds of normal walking since the newest watch / danger incident opened (older phones: absent) */
+  calmWalkS?: number;
   evidence: string;
 };
 export type IncidentRecord = {

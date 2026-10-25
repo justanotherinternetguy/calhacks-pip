@@ -998,6 +998,30 @@ fn distress_words_are_not_listened_for_after_a_grab_or_drop_and_never_ask_alone(
 }
 
 #[test]
+fn normal_walking_counts_up_and_an_incident_resets_it() {
+    let mut g = Gen::new(0, 83);
+    g.walk(120.0, G_POCKET);
+    let mut e = engine();
+    synth::replay(&mut e, &motion_trace(g.out.clone(), 83));
+    let walked = e.metrics().calm_walk_s;
+    assert!(walked > 90.0 && walked <= 120.0, "two minutes of usual walking: {walked}");
+    // drunk walking (no incident yet: under the 35 s it needs) adds little or nothing
+    let mut g = Gen::new(0, 85);
+    g.drunk_walk(30.0, G_POCKET);
+    let mut e = engine();
+    synth::replay(&mut e, &motion_trace(g.out, 85));
+    assert!(e.metrics().calm_walk_s < 10.0, "unsteady: {}", e.metrics().calm_walk_s);
+    // a fall resets it
+    let mut g = Gen::new(0, 84);
+    g.walk(60.0, G_POCKET);
+    g.fall(G_POCKET, 20.0);
+    let mut e = engine();
+    let evs = synth::replay(&mut e, &motion_trace(g.out, 84));
+    assert!(!incidents(&evs, IncidentKind::PossibleFall).is_empty(), "{:?}", kinds(&evs));
+    assert_eq!(e.metrics().calm_walk_s, 0.0);
+}
+
+#[test]
 fn snoring_while_down_after_a_missed_check_in() {
     let mut g = Gen::new(0, 79);
     g.walk(30.0, G_POCKET);

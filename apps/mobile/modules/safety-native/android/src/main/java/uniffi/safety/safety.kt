@@ -2253,7 +2253,11 @@ data class LiveMetrics (
     var `context`: List<kotlin.String>, 
     var `baselineTrusted`: kotlin.Boolean, 
     var `baselineWalkDays`: kotlin.Float, 
-    var `evidence`: kotlin.String
+    var `evidence`: kotlin.String, 
+    /**
+     * seconds of normal walking since the newest Watch / Danger incident opened
+     */
+    var `calmWalkS`: kotlin.Float
 ) {
     
     companion object
@@ -2275,6 +2279,7 @@ public object FfiConverterTypeLiveMetrics: FfiConverterRustBuffer<LiveMetrics> {
             FfiConverterBoolean.read(buf),
             FfiConverterFloat.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterFloat.read(buf),
         )
     }
 
@@ -2288,7 +2293,8 @@ public object FfiConverterTypeLiveMetrics: FfiConverterRustBuffer<LiveMetrics> {
             FfiConverterSequenceString.allocationSize(value.`context`) +
             FfiConverterBoolean.allocationSize(value.`baselineTrusted`) +
             FfiConverterFloat.allocationSize(value.`baselineWalkDays`) +
-            FfiConverterString.allocationSize(value.`evidence`)
+            FfiConverterString.allocationSize(value.`evidence`) +
+            FfiConverterFloat.allocationSize(value.`calmWalkS`)
     )
 
     override fun write(value: LiveMetrics, buf: ByteBuffer) {
@@ -2302,6 +2308,7 @@ public object FfiConverterTypeLiveMetrics: FfiConverterRustBuffer<LiveMetrics> {
             FfiConverterBoolean.write(value.`baselineTrusted`, buf)
             FfiConverterFloat.write(value.`baselineWalkDays`, buf)
             FfiConverterString.write(value.`evidence`, buf)
+            FfiConverterFloat.write(value.`calmWalkS`, buf)
     }
 }
 

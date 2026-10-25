@@ -79,6 +79,9 @@ export class MockSafetyNative implements SafetyNativeModuleType {
   private nextIncidentId = 1;
   private nextSequenceId = 1;
   private lastMetrics: LiveMetrics | null = null;
+  /** seconds of normal walking since the newest watch / danger incident (the engine's LiveMetrics.calm_walk_s) */
+  private calmWalkS = 0;
+  private calmWalkAt = 0;
   // §7 telemetry: the mock never publishes (no sensing here); it only remembers the preference (default on, like native).
   private telemetryOn = true;
   /** Demo sensitivity: the mock has no engine to re-configure; it only remembers the switch (default off, like native). */
@@ -301,6 +304,10 @@ export class MockSafetyNative implements SafetyNativeModuleType {
       return { name: b.name, value, mean: b.mean, sd: b.sd, sdDistance, inBand: Math.abs(sdDistance) <= bandSd };
     });
     const activity = stillAfterFall || sc === 'still' ? 'stationary' : sc === 'snatch' ? 'running' : 'walking';
+    const now = Date.now();
+    const usual = activity === 'walking' && bands.every((b) => !['regularity', 'sway', 'wobble'].includes(b.name) || b.inBand);
+    if (usual && this.calmWalkAt) this.calmWalkS += Math.min(2, (now - this.calmWalkAt) / 1000);
+    this.calmWalkAt = now;
     const m: LiveMetrics = {
       tMs: Date.now(),
       placement: this.status.engine.placement,
@@ -312,6 +319,7 @@ export class MockSafetyNative implements SafetyNativeModuleType {
       baselineTrusted,
       baselineWalkDays,
       evidence: this.status.engine.evidence,
+      calmWalkS: this.calmWalkS,
     };
     this.lastMetrics = m;
     return m;
@@ -324,6 +332,7 @@ export class MockSafetyNative implements SafetyNativeModuleType {
     const m = this.lastMetrics ?? this.computeMetrics();
     const now = Date.now();
     const tier = TIER[kind];
+    if (tier !== 'context') this.calmWalkS = 0;
     const point = kind === 'stumble' || kind === 'fall_recovered';
     const rec: IncidentRecord = {
       id: this.nextIncidentId++,

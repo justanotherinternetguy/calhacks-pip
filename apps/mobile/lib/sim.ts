@@ -228,6 +228,17 @@ function rng(seed: number) {
 }
 
 /** Full simulated state for `id` at `nowMs` (no waveform). Also used by the friends feed for a quick read. */
+/** Seconds of plain walking since the newest watch / danger record opened (the engine's LiveMetrics.calm_walk_s). */
+function calmWalkAt(script: Script, s: number): number {
+  const since = Math.max(0, ...script.records.filter((r) => r.tier !== 'context' && r.at <= s).map((r) => r.at));
+  let total = 0;
+  script.motion.forEach(([t, m], i) => {
+    const end = Math.min(s, script.motion[i + 1]?.[0] ?? Infinity);
+    if (m === 'walking') total += Math.max(0, end - Math.max(t, since));
+  });
+  return total;
+}
+
 export function simState(id: string, nowMs: number) {
   const script = scriptFor(id);
   const { cycle, s, startMs } = phaseOf(script, nowMs);
@@ -239,7 +250,7 @@ export function simState(id: string, nowMs: number) {
   const nightMode = at(script.night, s);
   const records = recordsAt(script, cycle, s, startMs);
   const battery = Math.round(script.battery[0] + (script.battery[1] - script.battery[0]) * (s / CYCLE_S));
-  return { script, cycle, s, startMs, motion, motionStartS: segStart(script.motion, s), escalation, check, loc, nightMode, records, battery };
+  return { script, cycle, s, startMs, motion, motionStartS: segStart(script.motion, s), escalation, check, loc, nightMode, records, battery, calmWalkS: calmWalkAt(script, s) };
 }
 
 /**
@@ -291,7 +302,7 @@ export function subscribeSimulated(
       escalation: st.escalation, listening, nightMode: st.nightMode, battery: st.battery, activity, placement: 'pocket', samplingFull: true,
       metrics: {
         tMs: now, placement: 'pocket', samplingFull: true, activity, bands: bands(st.motion, rnd), listening,
-        context: st.nightMode ? ['away from home late'] : [], baselineTrusted: true, baselineWalkDays: 9,
+        context: st.nightMode ? ['away from home late'] : [], baselineTrusted: true, baselineWalkDays: 9, calmWalkS: st.calmWalkS,
         evidence: st.motion === 'unsteady' ? 'gait outside baseline: stride variability and sway high' : st.motion === 'fall' ? 'free fall then impact' : `${activity} · within baseline`,
       },
       loc: { ...st.loc, acc: 12, t: now },

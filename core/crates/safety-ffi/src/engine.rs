@@ -53,6 +53,8 @@ pub struct LiveMetrics {
     /// context that holds right now: "away from home late", "in a vehicle", "loud venue", "phone set down"
     pub context: Vec<String>,
     pub baseline_trusted: bool, pub baseline_walk_days: f32, pub evidence: String,
+    /// seconds of normal walking since the newest Watch / Danger incident opened
+    pub calm_walk_s: f32,
 }
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct IncidentRecord {
@@ -199,7 +201,7 @@ impl From<core::LiveMetrics> for LiveMetrics {
             t_ms: m.t_ms, placement: m.placement.into(), sampling_full: m.sampling_full, activity: m.activity.into(),
             bands: m.bands.into_iter().map(Into::into).collect(),
             listening: m.listening, context: m.context,
-            baseline_trusted: m.baseline_trusted, baseline_walk_days: m.baseline_walk_days, evidence: m.evidence,
+            baseline_trusted: m.baseline_trusted, baseline_walk_days: m.baseline_walk_days, evidence: m.evidence, calm_walk_s: m.calm_walk_s,
         }
     }
 }
