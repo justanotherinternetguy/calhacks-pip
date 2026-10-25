@@ -1,4 +1,4 @@
-# Safe: mobile app (Expo)
+# pip: mobile app (Expo)
 
 UI only. The native module (`modules/safety-native`, Swift/Kotlin + Rust `safety-core`) runs all sensing,
 detection, escalation, crypto, and Supabase uploads from the device. JS renders status and handles

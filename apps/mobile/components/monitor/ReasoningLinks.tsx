@@ -123,7 +123,6 @@ export function LinkOverlay({ links }: { links: LinkSpec[] }) {
   const [paths, setPaths] = useState<Drawn[]>([]);
   const sig = useRef('');
   const inputs = useRef({ links, focus });
-  inputs.current = { links, focus };
 
   useEffect(() => {
     if (Platform.OS !== 'web' || !reg) return;
@@ -149,6 +148,7 @@ export function LinkOverlay({ links }: { links: LinkSpec[] }) {
   }, [reg]);
   // links / focus changed: redraw on the next frame
   useEffect(() => {
+    inputs.current = { links, focus };
     if (Platform.OS !== 'web' || !reg) return;
     const f = requestAnimationFrame(() => {
       const next = draw(links, reg, focus);

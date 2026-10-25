@@ -3,7 +3,7 @@ name = "safety-crypto"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Escrow, sealed-share and proximity crypto for the safe night-out app"
+description = "Escrow, sealed-share and proximity crypto for the pip night-out app"
 
 [dependencies]
 x25519-dalek = { version = "3.0", features = ["static_secrets", "zeroize", "getrandom"] }

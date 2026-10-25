@@ -14,7 +14,7 @@ export function makeDemoSession(): Session {
     expires_in: 365 * 24 * 3600,
     expires_at: now + 365 * 24 * 3600,
     user: {
-      id: DEMO_USER_ID, aud: 'authenticated', role: 'authenticated', email: 'demo@safe.local',
+      id: DEMO_USER_ID, aud: 'authenticated', role: 'authenticated', email: 'demo@pip.local',
       app_metadata: { provider: 'demo' }, user_metadata: { display_name: 'Demo' }, created_at: new Date(now * 1000).toISOString(),
     },
   } as Session;

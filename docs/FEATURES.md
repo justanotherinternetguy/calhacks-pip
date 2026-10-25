@@ -7,7 +7,7 @@ This is a complete feature list, checked against the code on 2026-10-24 (commit 
 
 ## 1. What it is
 
-**safe** is a passive night-out safety system for a group of friends. The person under protection (the
+**pip** is a passive night-out safety system for a group of friends. The person under protection (the
 *subject*) carries an Android phone and does nothing special. The phone watches how the subject moves. It
 notices when the subject may not be able to ask for help. Examples are unsteady walking, a hard fall with
 no movement after it, a scream, or a snatched phone. It **asks the subject first** ("You okay?") and tells their

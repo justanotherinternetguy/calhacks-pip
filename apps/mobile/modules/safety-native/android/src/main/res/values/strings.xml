@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="safety_sos_tile_label">SOS</string>
-    <string name="safety_sos_widget_label">Safety SOS</string>
+    <string name="safety_sos_widget_label">pip SOS</string>
     <string name="safety_sos_widget_text">Hold for SOS</string>
 </resources>

@@ -1,4 +1,4 @@
-//! Escrow and proximity cryptography for the safe night-out app (PLAN.md §5).
+//! Escrow and proximity cryptography for the pip night-out app (PLAN.md §5).
 //!
 //! Modules:
 //! - [`identity`]  — per-device X25519 (HPKE) + Ed25519 (signing) keys and the QR fingerprint.

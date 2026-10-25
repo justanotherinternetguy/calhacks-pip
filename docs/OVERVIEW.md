@@ -1,6 +1,6 @@
-# Safe: what the software does
+# pip: what the software does
 
-Safe is a passive night-out safety system. The person under protection (the *subject*) carries an Android
+pip is a passive night-out safety system. The person under protection (the *subject*) carries an Android
 phone and never has to do anything. The phone watches how the subject moves and notices when they can no
 longer ask for help. It gives them a chance to say "I'm fine", and only then tells their friends. Friends
 watch from a web dashboard.

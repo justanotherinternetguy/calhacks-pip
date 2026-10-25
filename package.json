@@ -1,5 +1,5 @@
 {
-  "name": "safe",
+  "name": "pip",
   "private": true,
   "scripts": {
     "mobile": "pnpm --filter mobile start",

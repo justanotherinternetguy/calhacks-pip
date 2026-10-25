@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Consented data-collection export + labeling for the safe sim harness",
+  "description": "Consented data-collection export + labeling for the pip sim harness",
   "bin": {
-    "safe-export": "./src/export.ts",
-    "safe-label": "./src/label.ts"
+    "pip-export": "./src/export.ts",
+    "pip-label": "./src/label.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

@@ -63,7 +63,7 @@ and destroyed after the study. Participants can withdraw and have their files de
 > I agree to carry a study phone that records motion sensors, step and activity data, screen
 > on/off events, and sound *category scores* (not recordings) while I perform the listed
 > activities. No location, contacts, or microphone audio are stored. The data is labeled with an
-> anonymous ID, used only to tune the safe app's detection thresholds, and may be published in
+> anonymous ID, used only to tune the pip app's detection thresholds, and may be published in
 > anonymized aggregate form. I am 18 or older, I understand that padded falls carry a small risk
 > of injury and will be spotted, and I can stop at any time and ask for my data to be deleted
 > by emailing the study contact.

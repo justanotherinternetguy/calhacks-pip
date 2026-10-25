@@ -1,6 +1,6 @@
-# safe: passive night-out safety
+# pip: passive night-out safety
 
-**safe** is a safety app for a night out. It runs passively and notices when a person *cannot* ask
+**pip** is a safety app for a night out. It runs passively and notices when a person *cannot* ask
 for help: gait that drifts badly, a hard fall with no movement after it, commotion, or a snatched
 phone. It asks *the person* first ("You okay? type the 3 words"). Only after that does it tell their
 friends.

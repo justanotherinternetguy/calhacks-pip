@@ -26,7 +26,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   // The product is "pip"; slug, scheme and package stay as they were so deep links, OAuth redirects and the installed
   // app keep working.
-  name: 'Pip',
+  name: 'pip',
   slug: 'safe',
   version: '0.1.0',
   scheme: 'safe',

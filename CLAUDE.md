@@ -1,4 +1,4 @@
-# safe — passive night-out safety app
+# pip (repo: safe) — passive night-out safety app
 
 Monorepo: pnpm workspace (apps/, tools/) + Cargo workspace (core/). See PLAN.md for the full design.
 

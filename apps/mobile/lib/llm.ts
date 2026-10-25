@@ -74,12 +74,12 @@ async function chatOpenRouter(messages: ChatMessage[], opts: ChatOpts): Promise<
   const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   opts.signal?.addEventListener('abort', () => ctl.abort());
   const models = [OPENROUTER_MODEL, ...FREE_FALLBACKS.filter((m) => m !== OPENROUTER_MODEL)];
-  const referer = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://safe.app';
+  const referer = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://pip.app';
   try {
     const res = await fetch(ENDPOINT, {
       method: 'POST',
       signal: ctl.signal,
-      headers: { Authorization: `Bearer ${OPENROUTER_API_KEY}`, 'Content-Type': 'application/json', 'HTTP-Referer': referer, 'X-Title': 'Safe monitor' },
+      headers: { Authorization: `Bearer ${OPENROUTER_API_KEY}`, 'Content-Type': 'application/json', 'HTTP-Referer': referer, 'X-Title': 'pip monitor' },
       body: JSON.stringify({
         model: models[0],
         models,
