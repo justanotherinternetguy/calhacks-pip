@@ -26,7 +26,7 @@ export default function BaselineWalk() {
   return (
     <Screen style={{ justifyContent: 'center', maxWidth: 560, width: '100%', alignSelf: 'center' }}>
       <H1>Baseline walk</H1>
-      <P muted>Put the phone in your pocket and walk normally for a minute or two. pip learns your usual rhythm so it can notice when it changes. It keeps learning on normal days too.</P>
+      <P muted>Put the phone in your pocket and walk at your usual pace for a minute or two. pip learns your rhythm so it can spot changes, and keeps learning on ordinary days.</P>
       <Card style={{ alignItems: 'center', paddingVertical: 32, backgroundColor: running ? ht.mint : ui.panel }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           {Icon.walk(ui.text, 28)}
@@ -35,7 +35,7 @@ export default function BaselineWalk() {
         <T style={{ color: running ? ui.text2 : ui.quiet }}>{total ? `${total}s collected` : 'nothing collected yet'}</T>
       </Card>
       <Button title={running ? 'Stop' : 'Start walking'} kind={running ? 'danger' : 'primary'} onPress={toggle} />
-      <Button title={total >= 60 ? 'Continue' : 'Skip (uses population baseline)'} kind="ghost" onPress={() => router.push('/onboarding/typing-practice')} disabled={running} />
+      <Button title={total >= 60 ? 'Continue' : 'Skip (use an average baseline)'} kind="ghost" onPress={() => router.push('/onboarding/typing-practice')} disabled={running} />
     </Screen>
   );
 }

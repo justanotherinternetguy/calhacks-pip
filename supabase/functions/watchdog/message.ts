@@ -18,7 +18,7 @@ export function watchdogMessage(inc: IncidentRow, displayName: string | null | u
   const name = displayName && displayName.trim() ? displayName.trim() : "Your friend";
   switch (inc.level) {
     case "offline":
-      return { title: `${name}'s phone went offline`, body: inc.summary || `${name}'s phone stopped checking in.`, critical: true };
+      return { title: `${name}'s phone went offline`, body: inc.summary || `${name}'s phone stopped sending updates.`, critical: true };
     case "battery_dying":
       return { title: `${name}'s phone is about to die`, body: inc.summary || `${name}'s battery is almost empty.`, critical: true };
     default:

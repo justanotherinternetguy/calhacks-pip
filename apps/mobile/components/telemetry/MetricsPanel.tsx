@@ -29,7 +29,7 @@ export function MetricsPanel({ tick, buffers, now }: { tick: TelemetryTick | nul
           {m && <Pill text={m.baselineTrusted ? 'baseline trusted' : `baseline ${m.baselineWalkDays.toFixed(1).replace(/\.0$/, '')} / 7 days`} color={m.baselineTrusted ? colors.ok : colors.muted} />}
           {tick && <Text style={styles.meta}>seq {tick.seq}</Text>}
         </View>
-        <Text style={styles.evidenceText}>{m?.evidence || 'Evidence line: what the engine currently believes and why.'}</Text>
+        <Text style={styles.evidenceText}>{m?.evidence || 'Evidence line: the engine’s current read and its reasons.'}</Text>
       </View>
     </View>
   );

@@ -354,8 +354,7 @@ class SafetyRuntime private constructor(val app: Context) {
         emit("checkRequested", mapOf("phrase" to ev.phrase, "deadlineMs" to ev.deadlineMs.toLong(), "summary" to ev.summary))
       }
       is EngineEvent.HeadsUp -> {
-        // Also emitted immediately on a grab (v1.1). Deliberately NO key release and NO location here:
-        // the engine follows up with UnlockLocation after 2 min unless PhoneUnlocked/BiometricDismiss.
+        // The amber step: no key release and no location. A grab never emits it (SnatchDetected is the alert).
         alerts.cancelCheckIn()
         escalationSummary = ev.summary
         if (escalationLevel() != EscalationLevel.SNATCH) alerts.showEscalated("heads_up", ev.summary)
@@ -378,7 +377,9 @@ class SafetyRuntime private constructor(val app: Context) {
         emit("escalation", mapOf("level" to "unlocked", "summary" to ev.summary))
       }
       is EngineEvent.SnatchDetected -> {
+        // The red alert, raised at once: keys, location and a critical push now. A pending "You okay?" is moot.
         val loc = lastLocation
+        alerts.cancelCheckIn()
         escalationSummary = ev.summary
         alerts.showEscalated("snatch", ev.summary)
         scope.launch {
@@ -387,7 +388,7 @@ class SafetyRuntime private constructor(val app: Context) {
           locationUploader.uploadNow()
           alerts.pushToGroup(
             id, "heads_up", "${displayName()}'s phone may have been snatched",
-            "${ev.summary}. ${displayName()} may be without a phone. Don't chase.", critical = true,
+            "${ev.summary}. ${displayName()} may not have their phone. Don't chase.", critical = true,
           )
         }
         emit("snatch", mapOf("summary" to ev.summary, "lat" to loc?.latitude, "lng" to loc?.longitude))
@@ -501,7 +502,7 @@ class SafetyRuntime private constructor(val app: Context) {
     currentIncidentId = null   // already resolved on the server: Resolved must not PATCH it again
     pushAction(UserAction.FRIEND_MARKED_SAFE)
     alerts.cancelEscalated()
-    alerts.showInfo("${byName ?: "A friend"} marked you safe", "The alert is over. Night mode keeps watching.")
+    alerts.showInfo("${byName ?: "A friend"} marked you safe", "The alert is over. Night mode is still on.")
   }
 
   /**
@@ -524,7 +525,7 @@ class SafetyRuntime private constructor(val app: Context) {
     locationUploader.setIntervalSeconds(60)
     locationUploader.uploadNow()
     alerts.pushToGroup(incidentId, "release", "${displayName()}'s location is shared", "Requested by ${byName ?: "a friend"}", critical = false)
-    alerts.showInfo("Your location was shared with your group", "Asked for by ${byName ?: "a friend"} during an alert. Tap I'm OK on the alert if you're fine.")
+    alerts.showInfo("Your group can see your location", "${byName ?: "A friend"} asked for it during an alert. Tap I'm OK on the alert if you're fine.")
   }
 
   /**

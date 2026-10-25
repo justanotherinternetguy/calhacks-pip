@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { isCheckPending, type TelemetryTick } from '@/modules/safety-native';
 import { Pill } from '@/components/ui';
 import { activeIncidents, useStore, useUserId } from '@/lib/store';
-import { subscribe } from '@/lib/db';
+import { rpc, subscribe } from '@/lib/db';
 import { NO_STREAM_HINT_MS, sendTelemetryCommand, type TickDelta } from '@/lib/telemetry';
 import type { Incident, IncidentEvent } from '@/lib/types';
 import { colors, levelColor } from '@/lib/theme';
@@ -32,6 +32,8 @@ const WIDE = 1100; // three columns
 const MID = 760; // two columns: telemetry stacked | incident + rail
 const RIGHT_W = 380;
 const BEEP_RECORD_AGE_MS = 30_000;
+/** An engine event this recent keeps the AI read on, even with an empty incident log. */
+const EVENT_RECENT_MS = 15 * 60_000;
 
 /**
  * /monitor — the friend's desktop telemetry console (laptop browser). The subject's Android phone broadcasts
@@ -102,8 +104,9 @@ export default function MonitorScreen() {
   // Newest unresolved escalation, preferring the subject's: colours the left edge.
   const newest = active.find((i) => i.user_id === subjectId) ?? active[0] ?? null;
 
-  // AI read of the subject's incident log. `digest` lists only what changes the picture, so the model is not
-  // re-asked on every 10 Hz frame; timeBucket adds how long things have been open (or calm) in coarse steps.
+  // AI read of the subject's incident log. `digest` lists what changes the picture (every engine event included),
+  // so the model re-reads after each logged event but not on every 10 Hz frame; timeBucket adds how long things have
+  // been open (or calm) in coarse steps.
   const records = buffers.incidentList();
   const subjectServer = useMemo(() => active.filter((i) => i.user_id === subjectId), [active, subjectId]);
   const friendEvents = useMemo(
@@ -111,14 +114,20 @@ export default function MonitorScreen() {
     [subjectServer, storeEvents],
   );
   const escalation = tick?.escalation ?? null;
+  // The events of the frame that reset the log (log cleared, resolved, a sampling change) are its housekeeping,
+  // not something to analyze: only what comes after them counts.
+  const resetSeq = buffers.events.find((e) => e.name === 'incident_log_cleared')?.seq;
+  const lastEvent = buffers.events.filter((e) => e.seq !== resetSeq).at(-1) ?? null;
   const digest = [
-    subjectId, escalation ?? '-', isCheckPending(tick) ? 'check' : '',
+    subjectId, escalation ?? '-', isCheckPending(tick) ? 'check' : '', lastEvent?.key ?? '-',
     records.map((r) => `${r.id}:${r.clearedMs > 0 ? 1 : 0}${r.acknowledged ? 1 : 0}${r.watched ? 1 : 0}:${r.sequenceId}`).join(','),
     subjectServer.map((i) => `${i.id}:${i.level}`).join(','),
     friendEvents.map((e) => e.id).join(','),
     timeBucket(records, phoneNow),
   ].join('|');
-  const quiet = !records.length && !subjectServer.length && escalationRank(escalation) === 0 && !isCheckPending(tick);
+  // A recent engine event is worth a read even with an empty log (a mic window, a dying battery…).
+  const recentEvent = !!lastEvent && phoneNow - lastEvent.t < EVENT_RECENT_MS;
+  const quiet = !records.length && !subjectServer.length && escalationRank(escalation) === 0 && !isCheckPending(tick) && !recentEvent;
   const [toasts, setToasts] = useState<Toast[]>([]);
   const ai = useRiskAnalysis({
     subjectId, digest, quiet, quietConfirmed: quiet && !!tick && tick.incidentCount === 0, escalation,
@@ -168,31 +177,53 @@ export default function MonitorScreen() {
   const hints = (
     <>
       {!me && <Banner color={colors.warn} label="signed out" text="Sign in on this browser as a group member to watch." />}
-      {me && !memberIds.length && <Banner color={colors.muted} label="no group" text="Join a group on your phone first; the console lists its members here." />}
+      {me && !memberIds.length && <Banner color={colors.muted} label="no group" text="Join a group on your phone first. The console lists its members here." />}
       {notStreaming && (
         <Banner color={colors.warn} label={conn?.state === 'stale' ? 'stream stopped' : 'not streaming'}
-          text={`${subjectName}'s phone is not streaming: open the app, Settings → Stream telemetry to monitor. Frames go out at 10 Hz while on (1 Hz in night mode otherwise).`} />
+          text={`${subjectName}'s phone isn't streaming. On that phone, turn on Settings → Stream telemetry. It sends 10 Hz frames with that on, and 1 Hz frames in night mode without it.`} />
       )}
       {rejected && <Banner color={colors.danger} label="channel refused" text={`Could not join telemetry:${subjectId?.slice(0, 8)}… (${conn?.error ?? 'unknown'}). Only the subject and their group-mates may read it.`} />}
       {publisher && subjectId !== publisher && !manual && (
-        <Banner color={colors.accent} label="publishing" text={`${name(publisher)}'s phone is streaming; the console will switch to it.`} />
+        <Banner color={colors.accent} label="publishing" text={`${name(publisher)}'s phone is streaming. The console will switch to it.`} />
       )}
       {isCheckPending(tick) && <CheckInBanner summary={tick?.checkSummary} deadlineMs={tick?.checkDeadlineMs} phoneNow={phoneNow} subjectName={subjectName} />}
     </>
   );
 
   // motion waveforms with the metrics-vs-baseline tiles right underneath
-  // Clear incidents: any group member can clear the shown member's log (the phone resets its log + sensing too).
+  // Delete all: any group member can wipe the shown member's incidents. It deletes the server rows for good
+  // (purge_incidents), empties the phone's log and resets its sensing, and drops the AI read and its reminders.
   const [clearNote, setClearNote] = useState<string | null>(null);
+  const clearAi = () => { ai.clear(); setToasts([]); };
   const clearIncidents = async () => {
     if (!subjectId) return;
-    const ok = Platform.OS !== 'web' || globalThis.confirm?.(`Clear every incident record of ${subjectName}, including earlier ones, and reset sensing on their phone?`);
+    const ok = Platform.OS !== 'web' || globalThis.confirm?.(
+      `Delete all of ${subjectName}'s incidents and the AI read for good? This removes them from the server, empties the log on their phone and resets its sensing. You can't undo it.`,
+    );
     if (!ok) return;
     buffers.clearIncidents();
-    setClearNote('Clearing…');
-    const status = await sendTelemetryCommand(subjectId, 'reset_incidents').catch((e: unknown) => (e instanceof Error ? e.message : 'error'));
-    setClearNote(status === 'ok' ? `Cleared here; ${subjectName}'s phone resets its log and sensing.` : `Cleared here, but the phone did not get the command (${status}).`);
-    setTimeout(() => setClearNote(null), 6_000);
+    clearAi();
+    setClearNote('Deleting…');
+    const why = (e: unknown) => (e instanceof Error ? e.message : 'error');
+    const [server, phone] = await Promise.all([
+      isSimId(subjectId)
+        ? Promise.resolve<number | string>(0)
+        : rpc.purgeIncidents(subjectId).then(
+          (n) => {
+            const st = useStore.getState();
+            st.incidents.filter((i) => i.user_id === subjectId).forEach((i) => st.removeIncident(i.id));
+            return n;
+          },
+          why,
+        ),
+      sendTelemetryCommand(subjectId, 'reset_incidents').catch(why),
+    ]);
+    const parts = [
+      typeof server === 'number' ? `Deleted ${server} incident${server === 1 ? '' : 's'} from the server.` : `Server delete failed (${server}).`,
+      phone === 'ok' ? `${subjectName}'s phone empties its log and resets sensing.` : `The phone did not get the reset (${phone}).`,
+    ];
+    setClearNote(parts.join(' '));
+    setTimeout(() => setClearNote(null), 8_000);
   };
   const left = (
     <View style={{ gap: 8 }}>
@@ -210,7 +241,6 @@ export default function MonitorScreen() {
       <EventTicker events={buffers.events} />
     </View>
   );
-  const clearAi = () => { ai.clear(); setToasts([]); };
   const right = <AnalysisPanel state={ai} subjectName={subjectName} now={now} onRefresh={ai.refresh} onClear={clearAi} />;
 
   return (

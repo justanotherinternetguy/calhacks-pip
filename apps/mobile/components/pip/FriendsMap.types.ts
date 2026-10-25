@@ -64,5 +64,5 @@ export function describe(people: MapPerson[]): string {
   const pts = placed(people).filter((p) => !p.isMe);
   const me = people.find((p) => p.isMe);
   if (!me?.loc) return 'Map. Waiting for your position.';
-  return pts.length ? `Map. ${pts.map((p) => p.name).join(', ')} on the map around you.` : 'Map. Just you on the map.';
+  return pts.length ? `Map. ${pts.map((p) => p.name).join(', ')} on the map around you.` : 'Map. Only you on the map.';
 }

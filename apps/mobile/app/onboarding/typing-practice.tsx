@@ -17,7 +17,7 @@ export default function TypingPractice() {
 
   const done = async (r: CheckInResult) => {
     await SafetyNative.recordTypingPractice(r);
-    setLast(r.typed.trim() === phrase ? 'Nice.' : 'Typo, that still counts as practice.');
+    setLast(r.typed.trim() === phrase ? 'Nice.' : 'Typo. It still counts.');
     if (round + 1 >= 3) { await writeOnboarded(); router.replace('/home'); return; }
     setRound(round + 1);
     setPhrase(randomPhrase());
@@ -26,7 +26,7 @@ export default function TypingPractice() {
   return (
     <Screen style={{ justifyContent: 'center', maxWidth: 560, width: '100%', alignSelf: 'center' }}>
       <H1>Typing practice</H1>
-      <P muted>When pip asks “you okay?”, you answer by typing three words. How you type (not what) tells it whether you’re yourself. Three quick rounds.</P>
+      <P muted>To answer pip’s “you okay?”, you type three words. pip learns your typing rhythm in these three rounds and checks it later to tell it’s you.</P>
       <Card>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           {[0, 1, 2].map((i) => <Dot key={i} tone={i < round ? 'out' : 'home'} size={12} />)}

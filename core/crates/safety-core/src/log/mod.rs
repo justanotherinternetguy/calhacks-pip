@@ -55,7 +55,7 @@ pub fn phrase(rec: &IncidentRecord) -> String {
         UnsteadyGait => "unsteady walking".into(),
         Stumble => "a stumble".into(), // never in a summary (see join_phrases)
         RepeatedStumbles => "repeated stumbling".into(),
-        SlowedWalk => "walking unusually slowly".into(),
+        SlowedWalk => "slow walking".into(),
         PhoneLeftBehind => format!("the phone left behind for {} min", mins("set_down_s")),
         Grab => "phone grabbed".into(),
         Separated => "separated from the group".into(),
@@ -275,11 +275,11 @@ impl IncidentLog {
         join_phrases(&recs)
     }
 
-    /// Active incidents, most serious first ("Possible fall (3.4 g); separated from the group").
+    /// Active incidents, most serious first ("Possible fall (3.4 g). Separated from the group for 12 min").
     pub fn active_summary(&self) -> String {
         let mut act: Vec<&IncidentRecord> = self.active().filter(|r| r.tier > IncidentTier::Context).collect();
         act.sort_by(|a, b| b.tier.cmp(&a.tier).then(b.t_ms.cmp(&a.t_ms)));
-        act.iter().map(|r| r.summary.as_str()).collect::<Vec<_>>().join("; ")
+        act.iter().map(|r| r.summary.as_str()).collect::<Vec<_>>().join(". ")
     }
 }
 

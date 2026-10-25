@@ -1,12 +1,14 @@
-# safe — passive night-out safety
+# safe: passive night-out safety
 
-Every safety app needs the person in danger to act. **safe** runs passively on a night out: it
-notices when someone *can't* ask for help (gait drifting badly, a hard fall then no movement,
-commotion, a snatched phone), asks *them* first ("You okay? type the 3 words"), and only then tells
-their friends. Location stays end-to-end encrypted until a check-in goes unanswered, and no single
-party — not one friend, not the company — can unlock it. Friends decide what to do; **the app never
-calls police itself.** Detection runs in Rust on the device; the server only ever sees ciphertext,
-proximity tokens and coarse status.
+**safe** is a safety app for a night out. It runs passively and notices when a person *cannot* ask
+for help: gait that drifts badly, a hard fall with no movement after it, commotion, or a snatched
+phone. It asks *the person* first ("You okay? type the 3 words"). Only after that does it tell their
+friends.
+
+Location stays end-to-end encrypted until a check-in goes unanswered. No single party can unlock it,
+not one friend and not the company. Friends decide what to do. **The app never calls the police
+itself.** Detection runs in Rust on the device. The server only sees ciphertext, proximity tokens,
+and coarse status.
 
 > **Not an emergency service.** Detection is heuristic and alerts can fail or be false. If you
 > are in danger, call your local emergency number. 18+ only. See [docs/PRIVACY.md](docs/PRIVACY.md).
@@ -33,14 +35,18 @@ proximity tokens and coarse status.
 └───────────────────────────────────────────────────────┘
 ```
 
-Pipeline: 50 Hz motion, context and (in listening windows only) audio labels → gait / impact / grab /
-stillness signals against the user's own baseline per placement → rule-based incidents (possible fall,
-down after fall, unsteady gait, stumbles, separated, stopped on the way home, phone left behind, scream,
-…), each with a tier and a clearing rule → escalation state machine (Check → Heads-up → Unlock) when a
-danger incident is active or two independent kinds of evidence coincide. No probability model.
-Escrow: daily key `K_day` split k-of-n (Shamir) to friends, hourly `K_h = HKDF(K_day, hour)`,
-locations XChaCha20-Poly1305 under `K_h`, shares HPKE-sealed + Ed25519-signed. Interfaces are fixed
-in [docs/CONTRACTS.md](docs/CONTRACTS.md); the full design is [PLAN.md](PLAN.md).
+Pipeline: the input is 50 Hz motion, context, and audio labels (audio in listening windows only).
+The core turns this input into gait, impact, grab, and stillness signals. It compares each signal
+with the user's own baseline for each phone placement. Rules then raise incidents: possible fall,
+down after fall, unsteady gait, stumbles, separated, stopped on the way home, phone left behind,
+scream, and others. Each incident has a tier and a clearing rule. The incidents feed the escalation
+state machine (Check → Heads-up → Unlock). It escalates when a danger incident is active, or when
+two independent kinds of evidence coincide. There is no probability model.
+
+Escrow: the phone splits a daily key `K_day` k-of-n (Shamir) among friends. The hourly key is
+`K_h = HKDF(K_day, hour)`. The phone encrypts locations with XChaCha20-Poly1305 under `K_h`. It
+seals each share with HPKE and signs it with Ed25519. [docs/CONTRACTS.md](docs/CONTRACTS.md) fixes
+the interfaces. [PLAN.md](PLAN.md) has the full design.
 
 ## Repo layout
 
@@ -65,8 +71,8 @@ safe/
 
 ## Quickstart
 
-Prereqs: Rust 1.99 (rustup), pnpm 12, Node 26, Deno 2, Supabase CLI; optional Android SDK + NDK
-r27 (`cargo install cargo-ndk`).
+Prerequisites: Rust 1.99 (rustup), pnpm 12, Node 26, Deno 2, and the Supabase CLI. Optional: the
+Android SDK and NDK r27 (`cargo install cargo-ndk`).
 
 ```bash
 pnpm install
@@ -78,58 +84,64 @@ core/build-mobile.sh                                          # android .so + ko
 pnpm --filter mobile android                                  # debug dev-build with inject-trace enabled
 ```
 
-Backend locally: `cd supabase && supabase start && supabase db reset && supabase functions serve`.
-Copy the URL + anon key into `apps/mobile/.env`.
+To run the backend locally: `cd supabase && supabase start && supabase db reset && supabase functions serve`.
+Then copy the URL and the anon key into `apps/mobile/.env`.
 
 ## Demo for judges
 
-Full script: [docs/DEMO.md](docs/DEMO.md). Short version, one phone/emulator + web mock friend:
+Full script: [docs/DEMO.md](docs/DEMO.md). Short version, with one phone or emulator and a web mock
+friend:
 
-1. `pnpm --filter mobile web` → open with `?mock=friend&subject=<user-id>` as the friend screen.
-2. On the device/emulator: `adb shell am start -a android.intent.action.VIEW -d 'safe://debug/inject?trace=checkin-dismiss'`
+1. Run `pnpm --filter mobile web`. Open it with `?mock=friend&subject=<user-id>` to get the friend screen.
+2. On the device or emulator, run `adb shell am start -a android.intent.action.VIEW -d 'safe://debug/inject?trace=checkin-dismiss'`
    (iOS: `xcrun simctl openurl booted 'safe://debug/inject?trace=checkin-dismiss'`). Type the
-   3 words → dismissed, friend sees nothing.
-3. Inject `heads-up`, ignore the check-in → friend gets "might not be okay" **without location** →
-   2 min later, still down → friend's map appears. Show `location_blobs.ciphertext` in Studio.
-4. Inject `snatch` → immediate "don't chase" alert with the snatch-moment pin; biometric-only dismiss.
-5. Hold the SOS button → `manual-sos`. Headless: `maestro test e2e/`.
+   3 words. The app dismisses the check-in, and the friend sees nothing.
+3. Inject `heads-up` and ignore the check-in. The friend gets "might not be okay" **without location**.
+   2 min later, if the user is still down, the friend's map appears. Show `location_blobs.ciphertext` in Studio.
+4. Inject `snatch`. An immediate "don't chase" alert appears with the snatch-moment pin. Only
+   biometrics can dismiss it.
+5. Hold the SOS button to start `manual-sos`. To run the flows headless: `maestro test e2e/`.
 
-Trace names (`checkin-dismiss`, `heads-up`, `unlock-map`, `snatch`, `manual-sos`) are shared by
-`core/traces/`, `e2e/`, and the app's bundled debug traces.
+`core/traces/`, `e2e/`, and the app's bundled debug traces use the same trace names
+(`checkin-dismiss`, `heads-up`, `unlock-map`, `snatch`, `manual-sos`).
 
 ## Privacy in one paragraph
 
-Home places, baselines and keys never leave the phone. The microphone only listens after a fall, drop,
-grab, missed check-in or unsteady walking; audio is classified in memory into scream / shout / snoring
-labels and discarded. Location uploads are ciphertext under an hourly key; the server
-keeps 6 h and cannot decrypt. Friends learn only together/separated (HMAC'd geohash tokens) and a coarse
-status (night mode, battery, escalation level), until a check-in is missed, the user taps "I need help"/SOS, or the phone goes
-offline and ≥ 2 friends approve a fallback unlock. Every unlock is logged and shown to the subject
-and the whole group. Accepted risks and adversary table: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+Home places, baselines, and keys never leave the phone. The microphone only listens after a fall,
+drop, grab, missed check-in, or unsteady walking. The phone classifies the audio in memory into
+scream, shout, or snoring labels, then discards it. Location uploads are ciphertext under an hourly
+key. The server keeps 6 h of them and cannot decrypt them.
+
+Friends learn only together/separated (HMAC geohash tokens) and a coarse status (night mode,
+battery, escalation level). They learn more only when the user misses a check-in, the user taps
+"I need help"/SOS, or the phone goes offline and ≥ 2 friends approve a fallback unlock. The app
+logs every unlock and shows it to the subject and the whole group. Accepted risks and the adversary
+table: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ## Status (PLAN §8 milestones)
 
 | Milestone | Status | Notes |
 |---|---|---|
-| M0 spikes (locked-phone 50 Hz, iOS bg mic, battery, EAS build, Critical Alerts) | todo | hardware spikes need real phones; Apple entitlement deliberately out of hackathon scope |
-| M1 foundation (monorepo, CI, schema + RLS, auth, onboarding, QR friends, groups) | done (unverified on device) | workspaces, CI, contracts, 4 migrations (pgTAP 25/25 on Postgres 17), OTP/OAuth sign-in, onboarding, QR add, groups screens; typecheck passes |
-| M2 sensing (native services, night-mode controller, Rust features, baselines, trace recorder) | code complete, uncompiled natively | Swift + Kotlin services written against generated uniffi bindings (no Xcode/SDK here); `safety-core` signal/baseline tested |
-| M3 reasoning (incident rules, escalation, typing check-in, replayed traces) | done | v2 engine: rule-based incidents with tiers (HMM / P(danger) removed), live signal bands, gyro, grab + stumble detectors, listening windows; 59 core tests, `sim batch` 6/6 (fall trace: check at 3:15, unlock at 7:15; story B quiet) |
-| M4 escrow (epochs, Shamir, HPKE, blobs, normal + fallback unlock, proximity, push, watchdog) | done (push unverified live) | `safety-crypto` 19 tests; shared conventions in CONTRACTS §5; APNs/FCM builders unit-tested, no live credentials |
+| M0 spikes (locked-phone 50 Hz, iOS bg mic, battery, EAS build, Critical Alerts) | todo | hardware spikes need real phones. Apple entitlement deliberately out of hackathon scope |
+| M1 foundation (monorepo, CI, schema + RLS, auth, onboarding, QR friends, groups) | done (unverified on device) | workspaces, CI, contracts, 4 migrations (pgTAP 25/25 on Postgres 17), OTP/OAuth sign-in, onboarding, QR add, groups screens. Typecheck passes |
+| M2 sensing (native services, night-mode controller, Rust features, baselines, trace recorder) | code complete, uncompiled natively | Swift + Kotlin services written against generated uniffi bindings (no Xcode/SDK here). `safety-core` signal/baseline tested |
+| M3 reasoning (incident rules, escalation, typing check-in, replayed traces) | done | v2 engine: rule-based incidents with tiers (HMM / P(danger) removed), live signal bands, gyro, grab + stumble detectors, listening windows. 59 core tests, `sim batch` 6/6 (fall trace: check at 3:15, unlock at 7:15, story B quiet) |
+| M4 escrow (epochs, Shamir, HPKE, blobs, normal + fallback unlock, proximity, push, watchdog) | done (push unverified live) | `safety-crypto` 19 tests. Shared conventions in CONTRACTS §5. APNs/FCM builders unit-tested, no live credentials |
 | M5 friend response (incident screens, ring/call/en-route/resolve, escalate card, audit log) | done (web mock verified only) | incident timeline, map after unlock, fallback-unlock approval flow, history + audit screens |
-| M6 extra paths (audio classifier, snatch, manual SOS / intents / widgets / QS tile) | code complete | snatch detector tested in Rust; YAMNet wrappers, App Intent, widget, QS tile written; `yamnet.tflite` asset not bundled |
-| M7 data + tuning (collection study, threshold tuning in sim) | partial | `tools/collect` + sim gate + protocol/consent written; no study data yet |
-| M8 hardening + launch (crypto review, threat model, store compliance, privacy/terms, a11y, beta) | partial | THREAT_MODEL / PRIVACY / STORE_COMPLIANCE drafted; external review, a11y, beta todo |
+| M6 extra paths (audio classifier, snatch, manual SOS / intents / widgets / QS tile) | code complete | snatch detector tested in Rust. YAMNet wrappers, App Intent, widget, QS tile written. `yamnet.tflite` asset not bundled |
+| M7 data + tuning (collection study, threshold tuning in sim) | partial | `tools/collect` + sim gate + protocol/consent written. No study data yet |
+| M8 hardening + launch (crypto review, threat model, store compliance, privacy/terms, a11y, beta) | partial | THREAT_MODEL / PRIVACY / STORE_COMPLIANCE drafted. External review, a11y, beta todo |
 
 Update this table at the end of the hackathon.
 
 ## Development notes
 
 - All detection logic lives in Rust + native, never JS (`CLAUDE.md`).
-- Owners per path are in [docs/CONTRACTS.md §4](docs/CONTRACTS.md); do not cross-write.
-- CI: `.github/workflows/ci.yml` runs on every PR; `eas.yml` is manual (`EXPO_TOKEN` secret).
-- Live telemetry (phone → `/monitor`) is one WebSocket to Supabase Realtime at 10 frames/s; the phone measures its own
-  server round trip. Watch it with `adb logcat -s Telemetry:V SensingService:V Session:V` (one summary line a minute).
-  The native service keeps the JWT alive itself (CONTRACTS §8), so the stream and uploads survive a backgrounded app,
-  a screen-off / unplugged phone and a reboot; it needs no USB or Metro — only a dev-client build needs Metro for the UI.
+- [docs/CONTRACTS.md §4](docs/CONTRACTS.md) lists the owner of each path. Do not write to paths that you do not own.
+- CI: `.github/workflows/ci.yml` runs on every PR. `eas.yml` runs only when started manually (`EXPO_TOKEN` secret).
+- Live telemetry (phone → `/monitor`) is one WebSocket to Supabase Realtime at 10 frames/s. The phone measures
+  its own server round trip. Watch it with `adb logcat -s Telemetry:V SensingService:V Session:V` (one summary line a minute).
+- The native service keeps the JWT alive itself (CONTRACTS §8). The stream and uploads continue when the app is in
+  the background, when the screen is off or the phone is unplugged, and after a reboot. The service needs no USB or
+  Metro. Only a dev-client build needs Metro for the UI.
 - License: MIT.

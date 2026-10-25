@@ -11,10 +11,10 @@ const CORE_OUT = path.join(__dirname, '..', '..', '..', '..', '..', 'core', 'tar
 const IOS_BG_MODES = ['location', 'audio', 'processing', 'fetch'];
 const IOS_STRINGS = {
   NSLocationAlwaysAndWhenInUseUsageDescription:
-    'Safe needs location in the background so it can notice when you are out at night and release an encrypted location to friends only if you may be in danger.',
-  NSMotionUsageDescription: 'Motion data is analysed on your phone to notice unsteady walking, falls and long stillness.',
-  NSMicrophoneUsageDescription: 'The mic is sampled briefly during night mode to detect screams or breaking glass. Audio never leaves the device.',
-  NSFaceIDUsageDescription: 'Face ID confirms that it is really you dismissing an alert.',
+    'pip uses your location in the background to know when you\'re out at night. It shares your encrypted location with friends only if you may be in danger.',
+  NSMotionUsageDescription: 'pip checks motion data on your phone for unsteady walking, falls and long stillness.',
+  NSMicrophoneUsageDescription: 'During night mode, pip listens in short bursts for screams or breaking glass. Audio never leaves your phone.',
+  NSFaceIDUsageDescription: 'Face ID confirms it\'s you when you dismiss an alert.',
 };
 
 function copyDir(src, dst) {

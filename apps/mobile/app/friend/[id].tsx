@@ -64,7 +64,7 @@ export default function FriendScreen() {
             : c.saidOkay ? `${f.name} says they’re okay.` : `${f.name} is out.`;
   const where = whereIs(p);
   const sub = f.isMe
-    ? f.nightMode ? 'Location sealed on this phone.' : 'Night mode starts by itself when you leave home in the evening.'
+    ? f.nightMode ? 'Your location stays sealed on this phone.' : 'Night mode turns on when you leave home in the evening.'
     : [c.headline, where ? `${where}${p.distM != null ? ` · ${walkMinutes(p.distM)} min walk` : ''}` : null, f.simulated ? 'simulated' : null].filter(Boolean).join(' · ');
 
   return (

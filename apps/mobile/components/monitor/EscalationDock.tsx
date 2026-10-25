@@ -161,7 +161,7 @@ export function EscalationDock(p: Props) {
             {p.subjectName}'s phone · last fix {fmtClock(loc.last!.tMs)} ({fmtCountdown(Math.max(0, p.now - loc.last!.tMs))} ago) · ±{Math.round(loc.last!.accuracyM)} m · {loc.trail.length} points
           </Text>
         </View>
-      ) : loc.error ? <Text style={styles.meta}>Location keys arrived but could not be opened in this browser: {loc.error}</Text> : null}
+      ) : loc.error ? <Text style={styles.meta}>The location keys arrived, but this browser could not open them: {loc.error}</Text> : null}
 
       {incident && ctx && (
         <ScrollView style={{ maxHeight: 520 }} contentContainerStyle={{ gap: 10 }}>
@@ -173,7 +173,7 @@ export function EscalationDock(p: Props) {
             ) : null}
           </View>
           <View style={styles.infoBox}>
-            <Text style={styles.meta}>What to tell them</Text>
+            <Text style={styles.meta}>Tell the dispatcher</Text>
             <Text style={styles.info} selectable>{info}</Text>
             <Pressable onPress={() => void Clipboard.setStringAsync(info).then(() => setNotice('Copied.'))}><Text style={styles.link}>Copy</Text></Pressable>
           </View>
@@ -195,7 +195,7 @@ export function EscalationDock(p: Props) {
                 onPress={run('loc', async () => {
                   const sent = await actions.requestLocation(ctx);
                   setAsked(true);
-                  if (sent !== 'ok') setNotice(`Request logged; their phone picks it up within ~2 min (live channel: ${sent}).`);
+                  if (sent !== 'ok') setNotice(`Request logged. Their phone picks it up within ~2 min (live channel: ${sent}).`);
                 })}
                 loading={busy === 'loc'} style={styles.btnFull}
               />

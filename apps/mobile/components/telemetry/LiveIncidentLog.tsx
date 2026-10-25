@@ -15,7 +15,7 @@ const FRESH_MS = 10_000;
  */
 export function LiveIncidentLog({ records, onPhone, phoneNow, onClear, clearNote }: {
   records: IncidentRecord[]; onPhone: number; phoneNow: number;
-  /** clears this list and resets the phone's log + sensing; absent = not allowed (someone else's phone) */
+  /** deletes the subject's incidents for good (server, phone log, AI read); absent = no subject */
   onClear?: () => void;
   clearNote?: string;
 }) {
@@ -26,7 +26,7 @@ export function LiveIncidentLog({ records, onPhone, phoneNow, onClear, clearNote
         <Text style={styles.title}>Incident log</Text>
         <Text style={styles.meta}>{records.length} received{gap ? ` · ${onPhone} on phone (earlier records predate this session)` : ''}</Text>
         <View style={{ flex: 1 }} />
-        <Button title="Clear incidents" kind="ghost" onPress={() => onClear?.()} disabled={!onClear} style={styles.clear} testID="monitor-clear-incidents" />
+        <Button title="Delete all" kind="ghost" onPress={() => onClear?.()} disabled={!onClear} style={styles.clear} testID="monitor-clear-incidents" />
       </View>
       {clearNote ? <Text style={styles.meta}>{clearNote}</Text> : null}
       {records.length === 0 && <View style={styles.empty}><Text style={styles.emptyText}>No signals flagged since this console connected.</Text></View>}

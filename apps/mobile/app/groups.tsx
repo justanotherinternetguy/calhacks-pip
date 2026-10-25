@@ -38,7 +38,7 @@ export default function Friends() {
   };
   const setK = (groupId: string, k: number) => updateGroup(groupId, { threshold_k: k }).then(refreshAll);
   const setCampus = (groupId: string, n: string) => updateGroup(groupId, { campus_safety_number: n || null }).then(refreshAll);
-  const accept = (groupId: string) => rpc.acceptInvite(groupId).then(refreshAll).catch((e) => Alert.alert('Failed', e.message));
+  const accept = (groupId: string) => rpc.acceptInvite(groupId).then(refreshAll).catch((e) => Alert.alert('Could not accept invite', e.message));
   const leave = (groupId: string) => userId && leaveGroup(groupId, userId).then(refreshAll);
 
   const qrPayload = identity ? JSON.stringify({ v: 1, userId: identity.userId, fp: identity.fingerprint, x: identity.x25519Pub, e: identity.ed25519Pub }) : '';
@@ -50,7 +50,7 @@ export default function Friends() {
           <H2>Your code</H2>
           <Button title={showQr ? 'Hide' : 'Show QR'} kind="ghost" icon={Icon.qr(ui.text, 16)} onPress={() => setShowQr(!showQr)} />
         </Row>
-        <P muted>Friends are added in person by scanning, so nobody can swap in a fake key.</P>
+        <P muted>You add friends in person by scanning, so nobody can swap in a fake key.</P>
         {showQr && identity && (
           <View style={{ alignItems: 'center', gap: 10, padding: 16, backgroundColor: ht.paper, borderRadius: 18, borderWidth: 2, borderColor: ht.ink }}>
             <QRCode value={qrPayload} size={200} color={ht.ink} backgroundColor={ht.paper} />

@@ -174,7 +174,7 @@ Edge functions (Deno, `supabase/functions/<name>/index.ts`): `push`, `watchdog`,
   - `SamplingRateChanged { hz: u32, gyro: bool }` — native must reconfigure sensors (10 Hz/no gyro by default; 50 Hz + gyro when away from home 21:00–06:00 or after any incident).
   - `SignalIncident { record: IncidentRecord }` — an incident opened (kinds and rules in §9). Native appends to its own notification/dashboard stream; the engine keeps the log itself.
   - `CallOptionAvailable { summary: String }` — 10 min with no response: friends get the one-tap campus safety / 911 option (native posts `incident_events.kind='call_option'`).
-  - `HeadsUp` is now emitted immediately on a grab (no location); `UnlockLocation` follows after 2 min unless `PhoneUnlocked`/`BiometricDismiss`.
+  - A grab emits `SnatchDetected` immediately and no `HeadsUp` (the heads-up is the amber step and would downgrade the snatch). The phone releases the hour keys, uploads a fix and sends a critical push on `SnatchDetected`. `UnlockLocation` follows after 2 min unless `PhoneUnlocked`/`BiometricDismiss`.
 - New records/enums:
 ```rust
 // IncidentKind, IncidentTier, LiveMetrics and IncidentRecord were redefined in v2: see §9.
@@ -299,8 +299,8 @@ Private broadcast channel `telemetry-cmd:{subjectUserId}`, event `command`, payl
 RLS: the subject **or any active group-mate** may publish; only the subject may subscribe (their phone). The phone
 joins it next to `telemetry:{uid}` whenever the publisher runs and on `reset_incidents` empties the incident log and
 rests sensing (`SafetyEngine.reset_incidents`). Kept apart from `telemetry:{uid}` because Realtime authorizes publishing
-per channel, so group-mates must never get write access to the tick stream. The web monitor's "Clear incidents" button
-sends it (acked) and empties its own list.
+per channel, so group-mates must never get write access to the tick stream. The web monitor's "Delete all" button
+sends it (acked), empties its own list and calls `purge_incidents` (migration 0014) to delete the server rows.
 
 
 ## 10. v3: automatic escalation, owner-verified check-ins, friend actions (migration 0013)

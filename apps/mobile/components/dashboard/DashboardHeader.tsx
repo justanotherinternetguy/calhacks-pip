@@ -24,7 +24,7 @@ export function DashboardHeader({ m, live }: { m: LiveMetrics | null; live: bool
           <Text style={styles.muted}>{live ? 'live · 1 s' : 'paused'}</Text>
         </Row>
       </Row>
-      {!m.baselineTrusted && <Text style={styles.hint}>Until 7 walking days are learned, bands use population defaults at ±3.5 SD.</Text>}
+      {!m.baselineTrusted && <Text style={styles.hint}>Until the engine learns 7 walking days, bands use population defaults at ±3.5 SD.</Text>}
     </View>
   );
 }

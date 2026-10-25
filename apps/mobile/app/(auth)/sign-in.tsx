@@ -61,8 +61,8 @@ export default function SignIn() {
   return (
     <Screen style={{ justifyContent: 'center', maxWidth: 520, width: '100%', alignSelf: 'center' }}>
       <Brand size={44} />
-      <D accessibilityRole="header" style={{ fontSize: 40, lineHeight: 44, marginTop: 6 }}>Out tonight? Your friends have your back.</D>
-      <P muted>pip watches quietly while you are out and tells your friends only when you can’t tell them yourself.</P>
+      <D accessibilityRole="header" style={{ fontSize: 40, lineHeight: 44, marginTop: 6 }}>pip looks out for you at night.</D>
+      <P muted>pip watches for falls and unsteady walking while you’re out, and tells your friends only when you can’t tell them yourself.</P>
       <View style={{ flexDirection: 'row', gap: 16, marginTop: 4, flexWrap: 'wrap' }}>
         <Legend tone="out" text="Fine" /><Legend tone="mild" text="On watch" /><Legend tone="high" text="Friends told" /><Legend tone="out" me text="You" />
       </View>

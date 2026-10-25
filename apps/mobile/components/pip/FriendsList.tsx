@@ -38,7 +38,7 @@ export function FriendsList({ me, others, onOpen, onGroups, onHistory, onSetting
       {home.map((p, i) => <PersonRow key={p.f.id} p={p} onOpen={() => onOpen(p.f.id)} last={i === home.length - 1} />)}
       {!others.length && (
         <T style={{ fontSize: 14, lineHeight: 20, color: ui.quiet, marginTop: 12 }}>
-          Just you so far. Friends are added in person: one of you scans the other’s code.
+          No friends yet. Add them in person: one of you scans the other’s code.
         </T>
       )}
       <View style={{ height: 22 }} />

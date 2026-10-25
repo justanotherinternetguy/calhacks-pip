@@ -52,8 +52,6 @@ export type AnalysisInput = {
 
 const MAX_RECORDS = 40;
 const MAX_EVENTS = 25;
-/** Engine events that are reports in their own right (escalation steps); the rest repeat the log or are sensor housekeeping. */
-const REPORT_EVENTS = new Set(['check_requested', 'heads_up', 'unlock_location', 'snatch_detected', 'call_option', 'resolved', 'incident_log_cleared']);
 
 export const RISKS: RiskLevel[] = ['low', 'elevated', 'high', 'critical'];
 /** Score band per level, inclusive. */
@@ -79,6 +77,8 @@ THE TIMELINE (JSON, all times on the phone clock, all durations in seconds)
 - overlaps[]: pairs open at the same time (e.g. down_after_fall while separated), with how long they overlapped.
 - chains[]: ordered patterns matched in the log, each with its gaps, steps matched (e.g. "2/4"), concern (reassuring / moderate / high / critical), and for an unfinished chain either next (what would come next, and how long its window stays open) or stalled (the window passed without it). Chains are hints from fixed rules, not verdicts: confirm them against the timing and states, and look for combinations they miss.
 - trend: weighted load (watch 1, danger 3) of incidents that started in the last 15 min vs the 15 min before. calm_for_s: time since the last incident cleared when nothing is open.
+- engine_events[] oldest first: the phone engine's recent event log. Escalation steps: check_requested, heads_up, unlock_location, snatch_detected, call_option (no response for 10 min), resolved. signal_incident / incident_cleared mirror incidents[] opening and closing. battery_dying. audio_listening: the mic window opened or closed. sampling_rate_changed / location_interval_changed: the engine changed sensor mode (housekeeping, not evidence of danger on their own). incident_log_cleared: the log was reset.
+You are asked again after every new engine event, incident or friend action, and the user message names the newest engine event. Update your previous read: keep the score steady when the new event changes nothing, and say so in the analysis.
 
 HOW TO REASON
 1. Order matters. Fall then scream reads differently from scream then fall. Impairment then separated then in_vehicle late at night is the drugging / led-away pattern; the same kinds in the reverse order, or spread over hours, are not.
@@ -129,7 +129,7 @@ export function timelineFor(input: Pick<AnalysisInput, 'records' | 'phoneNow' | 
     nowMs: input.phoneNow,
     escalation: input.tick?.escalation ?? null,
     checkDeadlineMs: isCheckPending(input.tick) ? input.tick?.checkDeadlineMs ?? null : null,
-    events: input.events.filter((e) => REPORT_EVENTS.has(e.name)).slice(-MAX_EVENTS),
+    events: input.events.slice(-MAX_EVENTS),
     maxIncidents: MAX_RECORDS,
   });
 }
@@ -138,6 +138,8 @@ export function buildMessages(input: AnalysisInput): ChatMessage[] {
   const timeline = timelineFor(input);
   const lines: string[] = [`Subject: ${input.subjectName}.`];
   if (!input.tick) lines.push('No live engine state (the phone is not streaming right now): escalation is unknown, only the log is known.');
+  const last = input.events.at(-1);
+  if (last) lines.push(`Newest engine event: ${last.name}, ${ago(last.t, input.phoneNow)} ago.`);
   lines.push('', 'Timeline:', JSON.stringify(timeline));
 
   if (input.serverIncidents.length) {
@@ -186,7 +188,7 @@ export function parseAnalysis(text: string, floor: { level: RiskLevel; reason: s
   if (!o) {
     const risk = floor && RISKS.indexOf(floor.level) > 1 ? floor.level : 'elevated';
     return {
-      risk, score: RISK_BAND[risk][0], trajectory: 'steady', confidence: 'low', headline: 'AI answer was not structured',
+      risk, score: RISK_BAND[risk][0], trajectory: 'steady', confidence: 'low', headline: 'The AI answered in free text',
       analysis: text.slice(0, 1500), chain: [], drivers: [], benign: '', watchFor: '', reminders: [], floor: floor && risk === floor.level ? floor.reason : null,
     };
   }

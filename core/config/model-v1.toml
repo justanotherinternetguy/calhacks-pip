@@ -20,7 +20,7 @@ auto_escalate = true
 check_deadline_s = 120         # "You okay?" unanswered this long ⇒ CheckInMissed + heads-up to friends (no location)
 unlock_no_response_s = 240     # since the check (2 min after the heads-up), trigger still holding ⇒ location unlock
 call_option_s = 600            # since the check ⇒ friends get the one-tap campus safety / 911 option
-grab_unlock_s = 120            # grab: heads-up at once, location after this unless the owner unlocks the phone
+grab_unlock_s = 120            # grab: snatch alert at once, unlock step after this unless the owner unlocks the phone
 check_repeat_cooldown_s = 300
 check_min_families = 2
 # Encrypted location upload interval: normally, and once friends were alerted (heads-up / unlock / grab / SOS)

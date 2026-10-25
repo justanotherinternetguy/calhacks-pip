@@ -47,7 +47,7 @@ export default function DebugFriendView() {
         <Pill text={resolved ? 'resolved' : level} color={levelColor(resolved ? 'resolved' : level)} />
       </Row>
       <P muted>{summary} · opened {formatDistanceToNow(openedAt, { addSuffix: true })}</P>
-      {level === 'snatch' && <Card tint={colors.danger}><P style={{ fontWeight: '700' }}>Possible phone snatch. Do not chase. Sam may be without a phone.</P></Card>}
+      {level === 'snatch' && <Card tint={colors.danger}><P style={{ fontWeight: '700' }}>Possible phone snatch. Sam may not have their phone. Don't chase.</P></Card>}
       <P style={{ fontWeight: '700' }}>Location shared with your friends</P>
 
       <View testID="incident-map" accessible={false}>
@@ -67,7 +67,7 @@ export default function DebugFriendView() {
       {!resolved && (
         <Card tint={colors.warn}>
           <H2>Escalate</H2>
-          <P muted>You decide. The app never calls on its own.</P>
+          <P muted>pip won't call anyone for you.</P>
           <P style={{ fontSize: 14 }}>Sam may need help. {summary}. Last location {last.lat.toFixed(5)}, {last.lng.toFixed(5)} at {format(last.tMs, 'HH:mm')}. Reported by the pip app.</P>
           <Row>
             <Button title="Call campus safety" kind="ghost" style={{ flex: 1 }} onPress={() => add('You called campus safety')} />
@@ -84,7 +84,7 @@ export default function DebugFriendView() {
           <P style={{ flex: 1 }}>{e.text}</P>
         </Row>
       ))}
-      <P muted style={{ fontSize: 13 }}>Debug friend view — on a second phone open the incident from the home tab instead.</P>
+      <P muted style={{ fontSize: 13 }}>Debug friend view. On a second phone, open the incident from the home tab instead.</P>
     </Screen>
   );
 }

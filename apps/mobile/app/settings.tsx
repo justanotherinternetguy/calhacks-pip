@@ -88,18 +88,18 @@ export default function Settings() {
       </Card>
       <Card>
         <H2>Emergency contact</H2>
-        <P muted style={{ fontSize: 14 }}>Your phone number, shared only with your group so they can call you from an alert.</P>
+        <P muted style={{ fontSize: 14 }}>Only your group sees this number, so they can call you from an alert.</P>
         <Input value={phone} onChangeText={setPhone} placeholder="+1 555 123 4567" keyboardType="phone-pad" testID="settings-phone" />
         <Button title="Save number" kind="ghost" onPress={savePhone} />
         {!!phoneNote && <P muted style={{ fontSize: 13 }}>{phoneNote}</P>}
       </Card>
       <Card>
         <H2>Sensors</H2>
-        <Toggle label="Sound detection" hint="Mic sampled briefly in night mode; audio never stored." value={mic} onChange={async (v) => {
+        <Toggle label="Sound detection" hint="Listens for a few minutes after a fall, a grab or a missed check-in. Never stores audio." value={mic} onChange={async (v) => {
           setMic(v);
           if (v) await SafetyNative.requestPermission('microphone');
         }} />
-        <Toggle label="Learn my walking on normal days" hint="Keeps your baseline fresh. On-device only." value={learning} onChange={setLearning} />
+        <Toggle label="Learn my walking on normal days" hint="Updates your walking baseline. Stays on this phone." value={learning} onChange={setLearning} />
       </Card>
       <Card>
         <H2>Evening window</H2>
@@ -119,30 +119,30 @@ export default function Settings() {
       </Card>
       <Card>
         <H2>Personal dashboard</H2>
-        <Toggle label="Personal dashboard" hint="Live metrics vs your baseline and the engine's incident log. Only you can see it; friends get a one-line summary at most." value={dashboardEnabled} onChange={(v) => void writeDashboardEnabled(v)} />
+        <Toggle label="Personal dashboard" hint="Live metrics vs your baseline and the engine's incident log. Only you can see it. Friends get a one-line summary at most." value={dashboardEnabled} onChange={(v) => void writeDashboardEnabled(v)} />
         {dashboardEnabled && <Button title="Open dashboard" onPress={() => router.push('/dashboard')} />}
       </Card>
       <Card>
         <H2>Live telemetry</H2>
-        <Toggle label="Stream telemetry to monitor" hint="Raw motion, metrics, incidents and engine events go to your group's web monitor over one live connection (10 frames/s). Keeps the sensors at full rate and the CPU awake, so it costs battery. Your last location fix goes along so friends see you on the map." value={telemetry.value} onChange={(v) => void telemetry.toggle(v)} />
+        <Toggle label="Stream telemetry to monitor" hint="Sends raw motion, metrics, incidents and engine events to your group's web monitor over one live connection (10 frames/s), plus your last location fix so friends see you on the map. The sensors run at full rate and the CPU stays awake, so this drains battery." value={telemetry.value} onChange={(v) => void telemetry.toggle(v)} />
         <P muted style={{ fontSize: 13 }}>{telemetryHint}</P>
       </Card>
       <Card>
         <H2>Demo sensitivity</H2>
-        <Toggle label="Demo sensitivity" hint="Lenient thresholds so incidents can be triggered by hand in a room. Trades false alarms for reproducibility; turn off after the demo." value={demo.value} onChange={(v) => void demo.toggle(v)} />
+        <Toggle label="Demo sensitivity" hint="Lowers thresholds so you can trigger incidents by hand in a room. Expect more false alarms. Turn it off after the demo." value={demo.value} onChange={(v) => void demo.toggle(v)} />
         {demo.error ? <P muted style={{ fontSize: 13 }}>Unavailable: {demo.error}</P> : (
           <P muted style={{ fontSize: 13 }}>
-            Lower thresholds and shorter timers, taken from the bundled demo config; the trigger guide below lists them. Your server model stays saved and comes back when this is off.
+            Uses the lower thresholds and shorter timers from the bundled demo config, listed in the guide below. pip keeps your server model and switches back to it when you turn this off.
           </P>
         )}
         <Button title={demoHelp ? 'Hide: how to trigger' : 'How to trigger'} kind="ghost" onPress={() => setDemoHelp((h) => !h)} />
         {demoHelp && (
           <>
             <P style={{ fontSize: 14 }}>Possible fall: phone in a pocket, drop onto a couch or bed (a firm hit with a tilt is enough). "High-g impact" appears at once, "Possible fall" about 2 s later. Don't touch it for 15 s → down after fall (red). Walk again → fall recovered.</P>
-            <P style={{ fontSize: 14 }}>Grab: screen on, phone in hand; yank it away sharply with a twist, then jog for 2 to 3 s.</P>
-            <P style={{ fontSize: 14 }}>Unsteady gait: stagger or sway while walking for 10 s. Slowed walk: walk very slowly for 15 s. Stumble: trip mid-stride and keep walking (3 in 5 min → repeated stumbles).</P>
+            <P style={{ fontSize: 14 }}>Grab: screen on, phone in hand. Yank it away hard with a twist, then jog for 2 to 3 s.</P>
+            <P style={{ fontSize: 14 }}>Unsteady gait: stagger or sway while walking for 10 s. Slowed walk: walk at a crawl for 15 s. Stumble: trip mid-stride and keep walking (3 in 5 min → repeated stumbles).</P>
             <P style={{ fontSize: 14 }}>Phone left behind: leave it flat on a table, untouched, for 2 min while night mode is on.</P>
-            <P style={{ fontSize: 14 }}>A possible fall, hard impact or scream asks "You okay?" after 5 s (milder incidents need two kinds at once). Unanswered, friends get a heads-up, then the location. Confirm with fingerprint or PIN, then type the phrase, to dismiss.</P>
+            <P style={{ fontSize: 14 }}>pip asks "You okay?" 5 s after a possible fall, hard impact or scream (milder incidents need two kinds at once). If you don't answer, friends get a heads-up, then your location. To dismiss, confirm with fingerprint or PIN and type the phrase.</P>
           </>
         )}
       </Card>

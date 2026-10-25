@@ -20,7 +20,7 @@ export default function History() {
   return (
     <Screen style={{ maxWidth: 640, width: '100%', alignSelf: 'center' }}>
       <H2>Incidents</H2>
-      {!incidents.length && <P muted>Nothing yet. Good.</P>}
+      {!incidents.length && <P muted>No incidents yet.</P>}
       {incidents.map((i) => {
         const level = i.resolved_at ? 'resolved' : i.level;
         return (
@@ -35,7 +35,7 @@ export default function History() {
         );
       })}
       <H2>Audit log</H2>
-      <P muted>Everything that touched your location or keys. Every unlock is shown here and to your whole group.</P>
+      <P muted>Each time someone opened your location or used your keys. Your group sees every unlock too.</P>
       {audit.length > 0 && (
         <Card padded={false} style={{ paddingHorizontal: 18 }}>
           {audit.map((a, idx) => (

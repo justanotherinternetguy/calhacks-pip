@@ -79,8 +79,8 @@ class AlertManager(private val ctx: Context, private val rt: SafetyRuntime) {
   fun serviceNotification(night: Boolean): Notification =
     NotificationCompat.Builder(ctx, CH_SENSING)
       .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-      .setContentTitle(if (night) "Night mode on" else "Safety is on standby")
-      .setContentText(if (night) "Watching out for you tonight" else "Starts automatically when you head out")
+      .setContentTitle(if (night) "Night mode on" else "Night mode is ready")
+      .setContentText(if (night) "Watching for falls and check-ins" else "It starts when you leave home in the evening")
       .setOngoing(true).setSilent(true).setContentIntent(launcherIntent())
       .setCategory(NotificationCompat.CATEGORY_SERVICE).build()
 
@@ -97,8 +97,8 @@ class AlertManager(private val ctx: Context, private val rt: SafetyRuntime) {
     val b = NotificationCompat.Builder(ctx, CH_CHECKIN)
       .setSmallIcon(android.R.drawable.ic_dialog_info)
       .setContentTitle("You okay?")
-      .setContentText("$what. Answer by $by or your friends will be told.")
-      .setStyle(NotificationCompat.BigTextStyle().bigText("$what. Answer by $by or your friends will be told."))
+      .setContentText("$what. Answer by $by or your friends get a heads-up.")
+      .setStyle(NotificationCompat.BigTextStyle().bigText("$what. Answer by $by or your friends get a heads-up."))
       .setPriority(NotificationCompat.PRIORITY_MAX)
       .setCategory(NotificationCompat.CATEGORY_ALARM)
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -124,7 +124,7 @@ class AlertManager(private val ctx: Context, private val rt: SafetyRuntime) {
     val title = when (level) {
       "unlocked" -> "Your friends can see your location"
       "snatch" -> "Phone grab detected"
-      else -> "Your friends were told"
+      else -> "Your friends got a heads-up"
     }
     val text = (if (summary.isNotBlank()) "$summary. " else "") + "Tap if you're OK."
     val n = NotificationCompat.Builder(ctx, CH_CHECKIN)

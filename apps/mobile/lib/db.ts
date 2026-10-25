@@ -95,6 +95,8 @@ export const rpc = {
     unwrap<Uuid>(await supabase.rpc('add_incident_event', { payload: {}, ...a })),
   acceptInvite: async (group_id: Uuid) => unwrap(await supabase.rpc('accept_invite', { group_id })),
   openUnlockRequest: async (incident_id: Uuid) => unwrap<Uuid>(await supabase.rpc('open_unlock_request', { incident_id })),
+  /** Deletes the subject's incidents (with their events, unlock requests and released keys) for good; returns how many. */
+  purgeIncidents: async (subject: Uuid) => unwrap<number>(await supabase.rpc('purge_incidents', { subject })),
 };
 
 // ---- edge functions

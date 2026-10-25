@@ -537,7 +537,7 @@ fn fall_vs_drop_discrimination_and_drop_needs_60s_without_pickup() {
 // ---------------- grab ----------------
 
 #[test]
-fn grab_heads_up_immediately_then_unlock_at_120s_unless_phone_unlocked() {
+fn grab_snatch_alert_immediately_then_unlock_at_120s_unless_phone_unlocked() {
     let tr = synth::trace(Scenario::Snatch, 5, 31);
     let incident = tr.meta.incident_t_ms.unwrap();
     let mut no_actions = tr.clone();
@@ -545,10 +545,9 @@ fn grab_heads_up_immediately_then_unlock_at_120s_unless_phone_unlocked() {
     let mut e = engine();
     let evs = synth::replay(&mut e, &no_actions);
     let t_snatch = first(&evs, |e| matches!(e, EngineEvent::SnatchDetected { .. })).expect("snatch");
-    let t_heads = first(&evs, is_heads_up).expect("heads-up");
     let t_unlock = first(&evs, is_unlock).expect("unlock");
     assert!(t_snatch - incident < 20_000, "grab detection delay {}", t_snatch - incident);
-    assert_eq!(t_heads, t_snatch, "heads-up is immediate");
+    assert!(first(&evs, is_heads_up).is_none(), "a grab raises the snatch alert, never the amber heads-up");
     assert!(t_unlock >= t_snatch + 120_000 && t_unlock < t_snatch + 123_000, "unlock {} after grab {}", t_unlock - t_snatch, t_snatch);
     assert!(first(&evs, is_check).is_none(), "a grab never asks the victim to type a phrase");
     let grabs = incidents(&evs, IncidentKind::Grab);
@@ -559,7 +558,7 @@ fn grab_heads_up_immediately_then_unlock_at_120s_unless_phone_unlocked() {
     assert_eq!(incidents(&evs, IncidentKind::HardImpact).len(), cleared(&evs, IncidentKind::HardImpact).len());
     assert_eq!(e.snapshot().escalation, EscalationLevel::Unlocked);
     assert!(e.listening(), "still listening while friends are alerted");
-    assert_eq!(summary_of(&evs, |e| if let EngineEvent::HeadsUp { summary } = e { Some(summary) } else { None }), "Phone grabbed");
+    assert_eq!(summary_of(&evs, |e| if let EngineEvent::SnatchDetected { summary } = e { Some(summary) } else { None }), "Phone grabbed");
     assert!(e.listening(), "a grab opens the listening window");
 
     // owner unlocks the phone 30 s after the grab: no unlock, episode resolved, Grab cleared
@@ -567,7 +566,7 @@ fn grab_heads_up_immediately_then_unlock_at_120s_unless_phone_unlocked() {
     let mut unlocked_by_owner = tr.clone();
     unlocked_by_owner.actions = vec![synth::TimedAction { t_ms: t_snatch + 30_000, action: UserAction::PhoneUnlocked }];
     let evs = synth::replay(&mut e, &unlocked_by_owner);
-    assert!(first(&evs, is_heads_up).is_some());
+    assert!(first(&evs, |e| matches!(e, EngineEvent::SnatchDetected { .. })).is_some());
     assert!(first(&evs, is_unlock).is_none(), "{evs:?}");
     assert!(matches!(e.snapshot().escalation, EscalationLevel::Idle | EscalationLevel::Resolved));
     assert_eq!(cleared(&evs, IncidentKind::Grab).len(), 1);

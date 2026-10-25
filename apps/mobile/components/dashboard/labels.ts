@@ -23,7 +23,7 @@ export const fmtSd = (sd: number) => `${sd > 0 ? '+' : ''}${sd.toFixed(1)} SD`;
 export const KIND_LABEL: Record<IncidentKind, string> = {
   phone_drop: 'Phone dropped', possible_fall: 'Possible fall', fall_recovered: 'Got up after fall', down_after_fall: 'Down after fall',
   hard_impact: 'Hard impact', unsteady_gait: 'Unsteady walking', stumble: 'Stumble', repeated_stumbles: 'Repeated stumbles',
-  slowed_walk: 'Walking slowly', phone_left_behind: 'Phone left behind', grab: 'Phone grabbed', separated: 'Separated from group',
+  slowed_walk: 'Slow walking', phone_left_behind: 'Phone left behind', grab: 'Phone grabbed', separated: 'Separated from group',
   stopped_on_way_home: 'Stopped on the way home', in_vehicle: 'In a vehicle', battery_critical: 'Battery critical',
   check_in_missed: 'Check-in missed', typing_off: 'Typing off', scream_shout: 'Scream / shout', snoring_while_down: 'Snoring while down',
 };

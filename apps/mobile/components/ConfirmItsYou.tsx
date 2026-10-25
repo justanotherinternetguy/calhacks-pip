@@ -38,7 +38,7 @@ export function ConfirmItsYou({ state, what }: { state: ConfirmState; what: stri
         {state === 'pending' && <ActivityIndicator color={colors.accent} />}
       </Row>
       <P muted>
-        {state === 'pending' ? `Use your face or fingerprint to ${what}.` : state === 'ok' ? `${what[0].toUpperCase()}${what.slice(1)} — done.` : `Biometric check failed. ${what[0].toUpperCase()}${what.slice(1)} did not happen.`}
+        {state === 'pending' ? `Use your face or fingerprint to ${what}.` : state === 'ok' ? `${what[0].toUpperCase()}${what.slice(1)}. Done.` : `Biometric check failed. ${what[0].toUpperCase()}${what.slice(1)} did not happen.`}
       </P>
     </Card>
   );

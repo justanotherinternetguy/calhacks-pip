@@ -78,5 +78,5 @@ export function dispatcherText(c: Pick<IncidentActionContext, 'subjectName' | 'i
   const where = last
     ? `Last location ${last.lat.toFixed(5)}, ${last.lng.toFixed(5)} (±${Math.round(last.accuracyM)} m) at ${format(last.tMs, 'HH:mm')}.`
     : 'Location not available yet.';
-  return `${c.subjectName} may need help. ${c.incident.summary ?? 'No response to a safety check-in'}. ${where} Reported by the Safe app.`;
+  return `${c.subjectName} may need help. ${c.incident.summary ?? 'No response to a safety check-in'}. ${where} Reported by the Pip app.`;
 }

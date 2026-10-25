@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(40);
+select plan(48);
 
 -- ------------------------------------------------------------ fixtures
 -- alice = subject (group owner), bob + carol = active group-mates, dave = outsider
@@ -216,6 +216,30 @@ select is(public.telemetry_topic_subject('incidents'), null::uuid, 'unrelated to
 select pg_temp.login('00000000-0000-0000-0000-00000000000d');
 select lives_ok($$select public.telemetry_topic_subject('telemetry:zzz')$$,
                 'authenticated role may execute the parser (policies call it)');
+reset role;
+
+-- ------------------------------------------------------------ 6. purge_incidents (0014)
+select pg_temp.login('00000000-0000-0000-0000-00000000000d');
+select throws_ok($$select public.purge_incidents('00000000-0000-0000-0000-00000000000a')$$,
+                 '42501', null, 'outsider cannot purge another user''s incidents');
+reset role;
+select pg_temp.login('00000000-0000-0000-0000-00000000000b');
+select throws_ok($$select public.purge_incidents('00000000-0000-0000-0000-00000000000e')$$,
+                 '42501', null, 'cannot purge a user from a group you are not in');
+select is(public.purge_incidents('00000000-0000-0000-0000-00000000000a'), 2,
+          'group-mate purges both of the subject''s incidents');
+reset role;
+select is((select count(*) from public.incidents where user_id = '00000000-0000-0000-0000-00000000000a'), 0::bigint,
+          'the subject''s incidents are gone');
+select is((select count(*) from public.incident_events e left join public.incidents i on i.id = e.incident_id where i.id is null)
+          + (select count(*) from public.unlock_requests r left join public.incidents i on i.id = r.incident_id where i.id is null),
+          0::bigint, 'events and unlock requests went with them (cascade)');
+select ok((select count(*) from public.audit_log where subject_user_id = '00000000-0000-0000-0000-00000000000a') > 0,
+          'a group-mate''s purge keeps the subject''s audit log');
+select pg_temp.login('00000000-0000-0000-0000-00000000000a');
+select is(public.purge_incidents('00000000-0000-0000-0000-00000000000a'), 0, 'subject purge with nothing left deletes 0 incidents');
+select is((select count(*) from public.audit_log where payload ? 'incident_id'), 0::bigint,
+          'the subject''s own purge clears their incident audit rows');
 reset role;
 
 select * from finish();

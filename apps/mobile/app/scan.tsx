@@ -16,7 +16,7 @@ function parseQr(raw: string): QrPayload {
   try { q = JSON.parse(raw) as Partial<QrPayload>; } catch { throw new Error('Not a pip code'); }
   if (!q || q.v !== 1) throw new Error('Not a pip code');
   if (typeof q.userId !== 'string' || !UUID_RE.test(q.userId)) {
-    throw new Error('This code has no valid account id. On the other device, sign in, reopen Friends → Show QR, and scan again.');
+    throw new Error('This code has no valid account id. On the other device, sign in, reopen Groups → Show QR, and scan again.');
   }
   if (typeof q.fp !== 'string' || typeof q.x !== 'string' || typeof q.e !== 'string') throw new Error('This pip code is incomplete');
   return q as QrPayload;
@@ -61,7 +61,7 @@ export default function Scan() {
     return (
       <Screen style={{ justifyContent: 'center' }}>
         <H2>Camera needed</H2>
-        <P muted>Only used to read your friend's QR code.</P>
+        <P muted>pip only uses it to read your friend's QR code.</P>
         <Button title="Allow camera" onPress={() => requestPerm()} />
       </Screen>
     );

@@ -110,7 +110,7 @@ export const pip = {
  */
 export type Tone = 'high' | 'mild' | 'out' | 'home' | 'offline';
 export const tones: Record<Tone, { ring: string; bg: string; text: string; dot: string; dotOff: string; hollow: boolean; glow: string | null; label: string }> = {
-  high: { ring: ht.coral, bg: ui.dangerWash, text: ht.coralDeep, dot: ht.coral, dotOff: 'rgba(255,107,92,0.3)', hollow: false, glow: 'rgba(255,107,92,0.7)', label: 'Friends were told' },
+  high: { ring: ht.coral, bg: ui.dangerWash, text: ht.coralDeep, dot: ht.coral, dotOff: 'rgba(255,107,92,0.3)', hollow: false, glow: 'rgba(255,107,92,0.7)', label: 'Friends alerted' },
   mild: { ring: ht.butter, bg: 'rgba(255,211,90,0.22)', text: ht.butterDeep, dot: ht.butter, dotOff: 'rgba(255,211,90,0.3)', hollow: false, glow: 'rgba(255,211,90,0.7)', label: 'On watch' },
   out: { ring: ht.mint, bg: 'rgba(61,214,163,0.16)', text: ui.text, dot: ht.mint, dotOff: 'rgba(61,214,163,0.3)', hollow: false, glow: null, label: 'Out tonight' },
   home: { ring: ht.line, bg: 'transparent', text: ui.quiet, dot: ht.paper, dotOff: 'rgba(230,216,189,0.5)', hollow: true, glow: null, label: 'Home' },

@@ -33,7 +33,7 @@ export default function HomePlaces() {
   return (
     <Screen style={{ maxWidth: 560, width: '100%', alignSelf: 'center' }}>
       <H1>Home places</H1>
-      <P muted>Night mode turns on when you’re away from these during your evening window. Tap the map to add one. Stored only on this phone.</P>
+      <P muted>Night mode turns on when you’re away from these places in the evening. Tap the map to add one. Your places stay on this phone.</P>
       <Input placeholder="Label (Home, Dorm, …)" value={label} onChangeText={setLabel} />
       <Map center={center} places={places} onPress={add} style={{ height: 300 }} />
       <Row>

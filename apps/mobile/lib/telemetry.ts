@@ -7,6 +7,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import type { IncidentRecord, TelemetryTick } from '@/modules/safety-native';
 import { FrameMerger, sampleTimes } from './telemetryFrames';
 import { supabase } from './supabase';
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from './env';
 import { isSimId, subscribeSimulated } from './sim';
 
 export { isTelemetryTick, isTelemetryFrame } from './telemetryFrames';
@@ -56,22 +57,33 @@ export type TelemetryCommand =
 
 /**
  * Send a command to a member's phone on `telemetry-cmd:{userId}` (migration 0012: the subject or any group-mate may
- * publish, only the phone reads). Joins the channel just for this send (acked), then leaves. Resolves to 'ok' when
- * the server accepted it, otherwise the reason.
+ * publish, only the phone reads). Resolves to 'ok' when the server accepted it, otherwise the reason.
+ *
+ * It posts to the batch endpoint `POST /realtime/v1/api/broadcast` itself, not `channel.httpSend()`: httpSend uses the
+ * per-topic endpoint, which delivers the message as a binary frame, and the phone's RealtimeSocket only reads text
+ * frames, so it dropped every command. The batch endpoint delivers an ordinary JSON broadcast.
  */
 export async function sendTelemetryCommand(userId: string, command: TelemetryCommand | TelemetryCommand['cmd']): Promise<string> {
   const payload = typeof command === 'string' ? { cmd: command } : command;
   if (isSimulated(userId)) return 'ok'; // simulated people have no phone to tell
-  try { await supabase.realtime.setAuth(); } catch {}
-  const ch = supabase.channel(`telemetry-cmd:${userId}`, { config: { private: true, broadcast: { ack: true } } });
+  const topic = `telemetry-cmd:${userId}`;
   // Group-mates may publish on this channel but not subscribe to it (0012), so a websocket join fails for them.
   // The HTTP broadcast endpoint needs only the publish (insert) policy.
   try {
-    const r = await ch.httpSend('command', { ...payload, t: Date.now() });
-    if (r.success) { void supabase.removeChannel(ch).catch(() => {}); return 'ok'; }
+    const token = (await supabase.auth.getSession()).data.session?.access_token;
+    if (!token) return 'signed out';
+    const res = await fetch(`${SUPABASE_URL}/realtime/v1/api/broadcast`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ topic, event: 'command', payload: { ...payload, t: Date.now() }, private: true }] }),
+    });
+    if (res.status === 202) return 'ok';
+    console.warn('telemetry command over HTTP refused; trying the socket', res.status, await res.text().catch(() => ''));
   } catch (e) {
     console.warn('telemetry command over HTTP failed; trying the socket', e);
   }
+  try { await supabase.realtime.setAuth(); } catch {}
+  const ch = supabase.channel(topic, { config: { private: true, broadcast: { ack: true } } });
   try {
     const joined = await new Promise<string>((resolve) => {
       const timer = setTimeout(() => resolve('join timed out'), COMMAND_JOIN_MS);
@@ -407,9 +419,10 @@ export class TelemetryBuffers {
   /** `incidentCount` from the newest tick: the phone's live log size */
   incidentCountOnPhone = 0;
 
-  /** Forget every incident record held here (the phone is told to reset its log separately). */
+  /** Forget every incident record and engine event held here (the phone is told to reset its log separately). */
   clearIncidents() {
     this.incidents.clear();
+    this.events = [];
     this.incidentCountOnPhone = 0;
   }
   ticks = 0;
@@ -456,8 +469,8 @@ export class TelemetryBuffers {
     while (drop < this.trend.length && this.trend[drop].at < cutoff) drop++;
     if (drop) this.trend.splice(0, drop);
 
-    // The phone's log was reset: drop what we hold before taking this frame's records.
-    if (tick.events.includes('incident_log_cleared')) this.incidents.clear();
+    // The phone's log was reset: drop the records and events we hold before taking this frame's.
+    if (tick.events.includes('incident_log_cleared')) { this.incidents.clear(); this.events = []; }
     // Upsert by id: records are re-sent when they clear / are acknowledged; only a first sighting counts as new.
     const newIncidents: IncidentRecord[] = [];
     for (const r of tick.incidents) {

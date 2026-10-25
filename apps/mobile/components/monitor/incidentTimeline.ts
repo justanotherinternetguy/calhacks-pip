@@ -109,7 +109,8 @@ export type Timeline = {
   bursts: Burst[];
   overlaps: Overlap[];
   chains: ChainMatch[];
-  escalation_steps: { at: string; ago_s: number; step: string }[];
+  /** the phone engine's recent events, oldest first (escalation steps, mic windows, sensor mode changes, …) */
+  engine_events: { at: string; ago_s: number; event: string }[];
   /** older incidents left out to keep the prompt small */
   omitted?: number;
 };
@@ -120,7 +121,7 @@ export type TimelineInput = {
   nowMs: number;
   escalation?: EscalationLevel | null;
   checkDeadlineMs?: number | null;
-  /** escalation steps (check_requested, heads_up, …), any order */
+  /** engine events (check_requested, heads_up, audio_listening, …), any order */
   events?: { t: number; name: string }[];
   maxIncidents?: number;
 };
@@ -430,7 +431,7 @@ export function buildTimeline(input: TimelineInput): Timeline {
   const prev15 = load(900, 1800);
   const lastCleared = notable.filter((r) => r.clearedMs > 0).reduce((m, r) => Math.max(m, r.clearedMs), 0);
 
-  const steps = (input.events ?? []).slice().sort((a, b) => a.t - b.t).map((e) => ({ at: clock(e.t), ago_s: secs(nowMs - e.t), step: e.name }));
+  const steps = (input.events ?? []).slice().sort((a, b) => a.t - b.t).map((e) => ({ at: clock(e.t), ago_s: secs(nowMs - e.t), event: e.name }));
 
   const t: Timeline = {
     now: { at: clock(nowMs), local_hour: new Date(nowMs).getHours(), late_night: isLate(nowMs) },
@@ -454,7 +455,7 @@ export function buildTimeline(input: TimelineInput): Timeline {
     bursts,
     overlaps: overlaps.slice(0, MAX_OVERLAPS),
     chains: matchChains(recs, nowMs),
-    escalation_steps: steps,
+    engine_events: steps,
   };
   if (sorted.length > recs.length) t.omitted = sorted.length - recs.length;
   return t;

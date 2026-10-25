@@ -424,7 +424,7 @@ export class MockSafetyNative implements SafetyNativeModuleType {
           return this.runCheckChain({ evidence: 'mock: hard fall, no movement 4 min', deadlineMs: 9_000, stopAt: 'unlocked', unlockAfterMs: 6_000 });
         case 'fall':
           this.fallSignals();
-          return this.runCheckChain({ evidence: 'mock: fall trace — impact 3.1 g then still', deadlineMs: 9_000, stopAt: 'unlocked', unlockAfterMs: 8_000 });
+          return this.runCheckChain({ evidence: 'mock: fall trace, impact 3.1 g then still', deadlineMs: 9_000, stopAt: 'unlocked', unlockAfterMs: 8_000 });
         case 'drunk': {
           this.setMetricScenario('drunk');
           const seq = this.nextSequenceId++;
@@ -440,7 +440,7 @@ export class MockSafetyNative implements SafetyNativeModuleType {
         case 'still': {
           this.setMetricScenario('still');
           this.signal('phone_left_behind', 'phone set down and untouched 3 min while away from home', -8, { raw: { still_s: 180, no_touch_s: 180 } });
-          return this.runCheckChain({ evidence: 'mock: still trace — no movement, no touch 3 min', deadlineMs: 9_000, stopAt: 'unlocked', unlockAfterMs: 8_000 });
+          return this.runCheckChain({ evidence: 'mock: still trace, no movement, no touch 3 min', deadlineMs: 9_000, stopAt: 'unlocked', unlockAfterMs: 8_000 });
         }
         case 'snatch': {
           const summary = 'mock: jerk in hand, running cadence, separated from group';

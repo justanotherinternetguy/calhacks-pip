@@ -672,7 +672,7 @@ impl Engine {
         match self.slowed.push_walking(&rule, hop, f.t_ms, oob, sd) {
             DriftStep::Open => {
                 let mean = self.bands.get("cadence").map(|b| b.mean).unwrap_or(0.0);
-                let summary = format!("Walking slowly: {:.0} steps/min vs usual {:.0} for {:.0} s", f.cadence_spm, mean, self.slowed.persist_s(hop));
+                let summary = format!("Slow walking: {:.0} steps/min vs usual {:.0} for {:.0} s", f.cadence_spm, mean, self.slowed.persist_s(hop));
                 let raw = format!("{{\"cadence\":{:.1},\"baseline_mean\":{:.1}}}", f.cadence_spm, mean);
                 self.open(IncidentKind::SlowedWalk, f.t_ms, summary, sd, raw);
             }

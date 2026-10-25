@@ -20,7 +20,7 @@ if (!env.EXPO_PUBLIC_OPENROUTER_API_KEY && env.OPENROUTER_API_KEY) env.EXPO_PUBL
 if (!env.EXPO_PUBLIC_OPENROUTER_MODEL && env.OPENROUTER_MODEL) env.EXPO_PUBLIC_OPENROUTER_MODEL = env.OPENROUTER_MODEL;
 
 const LOCATION_WHY =
-  'pip watches for signs that you cannot ask for help while you are out at night. Location is encrypted on your phone and is only released to your friends if you may be in danger.';
+  'pip checks for signs that you can\'t ask for help when you\'re out at night. Your phone encrypts your location. Your friends see it only if you may be in danger.';
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,

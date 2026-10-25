@@ -54,17 +54,17 @@ export function HoldForHelp({ active, pending, onTrigger, onStandDown, style, te
     Animated.timing(progress, { toValue: 0, duration: 160, useNativeDriver: true }).start();
   };
 
-  const title = active ? 'Friends were told.' : holding ? 'Calling friends…' : 'Hold for help';
+  const title = active ? 'Your friends know.' : holding ? 'Calling friends…' : 'Hold for help';
   const sub = active
     ? pending ? 'Confirm it’s you…' : 'Your location is open to them. Tap to stand down · needs your fingerprint.'
-    : holding ? 'Let go to cancel.' : 'Two seconds. Alerts your friends and opens your location to them.';
+    : holding ? 'Let go to cancel.' : 'Hold two seconds to alert your friends and open your location to them.';
   const fg = active ? ht.cream : ht.ink;
 
   return (
     <Pressable
       testID={testID}
       accessibilityRole="button"
-      accessibilityLabel={active ? 'Friends were told. Tap to stand down with your fingerprint' : 'Hold for two seconds to call your friends'}
+      accessibilityLabel={active ? 'Your friends know. Tap to stand down with your fingerprint' : 'Hold for two seconds to call your friends'}
       onPressIn={start}
       onPressOut={stop}
       onPress={tap}

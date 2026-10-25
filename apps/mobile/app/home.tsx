@@ -165,11 +165,11 @@ export default function Home() {
 type Line = { tag?: { text: string; fill: string }; title: string; sub: string; onPress?: string };
 
 const MINE: Record<string, { title: string; sub: string; tag: string }> = {
-  check: { title: 'You okay?', sub: 'Nobody has been told yet. Answer the check-in so your friends know you’re good.', tag: 'Check-in' },
-  heads_up: { title: 'Your friends got a heads-up.', sub: 'No location shared yet. Answer the check-in if you’re fine.', tag: 'No answer' },
+  check: { title: 'You okay?', sub: 'pip hasn’t told anyone yet. Answer the check-in so your friends know you’re good.', tag: 'Check-in' },
+  heads_up: { title: 'Your friends got a heads-up.', sub: 'pip hasn’t shared your location yet. Answer the check-in if you’re fine.', tag: 'No answer' },
   unlocked: { title: 'Your location is open.', sub: 'Your friends can see where you are and decide what to do.', tag: 'Location opened' },
-  snatch: { title: 'Phone may have been snatched.', sub: 'Don’t chase. Your friends have been told.', tag: 'Snatch' },
-  sos: { title: 'Friends were told.', sub: 'Your location is open to them right now.', tag: 'Help called' },
+  snatch: { title: 'Someone may have snatched your phone.', sub: 'Don’t chase. pip told your friends.', tag: 'Snatch' },
+  sos: { title: 'pip told your friends.', sub: 'They can see your location now.', tag: 'Help called' },
 };
 
 function headline(a: {
@@ -194,7 +194,7 @@ function headline(a: {
       onPress: f.id,
     };
   }
-  if (!a.others.length) return { title: 'Just you so far.', sub: 'Add friends in person: one of you scans the other’s code.', onPress: 'groups' };
+  if (!a.others.length) return { title: 'No friends yet.', sub: 'Add friends in person: one of you scans the other’s code.', onPress: 'groups' };
   const okay = a.others.filter((p) => p.c.saidOkay).map((p) => p.f.name);
   return {
     tag: { text: 'All quiet', fill: ht.mint },

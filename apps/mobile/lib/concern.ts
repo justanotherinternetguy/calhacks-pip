@@ -19,7 +19,7 @@ const TITLE: Partial<Record<IncidentKind, string>> = {
   stumble: 'Stumbled',
   check_in_missed: 'Typing check-in missed',
   in_vehicle: 'In a car',
-  slowed_walk: 'Walking slowly',
+  slowed_walk: 'Slow walking',
 };
 export const recordTitle = (k: IncidentKind | string) => TITLE[k as IncidentKind] ?? KIND_LABEL[k as IncidentKind] ?? String(k).replace(/_/g, ' ');
 /** Short form for the one-line headline under a name. */

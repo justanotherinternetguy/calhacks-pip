@@ -1,12 +1,16 @@
-// Drives the AI read on the monitor. Free OpenRouter models allow few requests a day (and Claude costs per call), so the model is only asked
-// when the incident picture changes (new / cleared / answered record, escalation step, check-in, friend action),
-// debounced, at most once per MIN_GAP_MS unless the escalation went up, and never while the log is empty.
-// The last answer is cached per subject so a page refresh does not spend a request.
+// Drives the AI read on the monitor. With Claude answering, the model re-reads after every new logged event:
+// each engine event, incident change, escalation step, check-in or friend action changes the digest, and events
+// that land while a read is running are covered by the next one. Free OpenRouter models allow few requests a day,
+// so when they answer, reads are debounced and spaced at least MIN_GAP_MS apart unless the escalation went up.
+// Nothing is sent while there is nothing to analyze. The last answer is cached per subject so a page refresh
+// does not spend a request.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isCheckPending, type EscalationLevel } from '@/modules/safety-native';
-import { chat, llmConfigured, LlmError } from '@/lib/llm';
+import { chat, claudeConfigured, llmConfigured, LlmError } from '@/lib/llm';
 import { ANALYSIS_SCHEMA, buildMessages, parseAnalysis, riskFloor, type Analysis, type AnalysisInput, type Urgency } from './riskAnalysis';
 
+/** Claude: coalesces the events of one burst (an incident and its check-in often land in the same frame). */
+const EVENT_DEBOUNCE_MS = 800;
 const DEBOUNCE_MS = 4_000;
 const URGENT_DEBOUNCE_MS = 1_500;
 const MIN_GAP_MS = 45_000;
@@ -154,9 +158,12 @@ export function useRiskAnalysis(opts: {
     const now = Date.now();
     const escalated = escalationRank(escalation) > lastRank.current;
     const retryAt = innerRef.current.retryAt ?? 0;
+    // Per-event reads only while Claude answers; an OpenRouter answer (Claude down) falls back to the spaced schedule.
+    const lastModel = innerRef.current.model;
+    const perEvent = claudeConfigured() && (!lastModel || lastModel.startsWith('claude'));
     const wait = Math.max(
-      escalated ? URGENT_DEBOUNCE_MS : DEBOUNCE_MS,
-      escalated ? 0 : lastCallAt.current + MIN_GAP_MS - now,
+      perEvent ? EVENT_DEBOUNCE_MS : escalated ? URGENT_DEBOUNCE_MS : DEBOUNCE_MS,
+      perEvent || escalated ? 0 : lastCallAt.current + MIN_GAP_MS - now,
       retryAt - now,
     );
     const t = setTimeout(() => void run(), wait);

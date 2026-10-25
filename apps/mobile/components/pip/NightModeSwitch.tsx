@@ -14,6 +14,6 @@ export function NightModeSwitch({ style }: { style?: StyleProp<ViewStyle> }) {
   return (
     <Switch testID="night-mode-switch" value={nightOn} onChange={toggle} style={style}
       label={`Night mode ${nightOn ? 'on' : 'off'}`}
-      hint={nightOn ? 'Watching for falls and check-ins · tap to pause for tonight' : 'Falls and check-ins are not watched · tap to turn on now'} />
+      hint={nightOn ? 'Watching for falls and check-ins · tap to pause for tonight' : 'Not watching for falls or check-ins · tap to turn on now'} />
   );
 }

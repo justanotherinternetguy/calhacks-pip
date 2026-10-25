@@ -56,7 +56,7 @@ export default function DashboardScreen() {
     }
   };
   const confirmReset = () => {
-    const msg = 'Clears every logged incident and puts sensing back to rest (rule timers, mic, extra full-rate sampling). Your walking and typing baselines stay.';
+    const msg = 'Clears every logged incident and resets sensing: rule timers, mic, and extra full-rate sampling. Your walking and typing baselines stay.';
     if (Platform.OS === 'web') {
       if (globalThis.confirm?.(`Reset incidents?\n\n${msg}`)) void doReset();
       return;
@@ -84,7 +84,7 @@ export default function DashboardScreen() {
         </View>
 
         <Text style={styles.section}>Incident log</Text>
-        <Text style={styles.hint}>Everything the engine flagged in the last 8 h, newest first. Tap to see the raw record. Friends only ever see the one-line summary that triggered an unlock.</Text>
+        <Text style={styles.hint}>Incidents the engine flagged in the last 8 h, newest first. Tap one to see the raw record. Friends see only the one-line summary behind an unlock.</Text>
         <Button title="Reset incidents + sensing" kind="ghost" loading={resetting} onPress={confirmReset} testID="reset-incidents" />
         <IncidentLog records={dash?.incidents ?? []} />
       </Screen>

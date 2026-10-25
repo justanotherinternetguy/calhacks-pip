@@ -3,8 +3,8 @@
 //! families) → HeadsUp to friends (no location) once the check deadline passes with the trigger still holding →
 //! UnlockLocation after `unlock_no_response_s` (since the check) if it still holds → CallOptionAvailable after
 //! `call_option_s`. If the trigger stops holding (got up and walked, back with the group) the episode resolves.
-//! Grab: HeadsUp (+ SnatchDetected) immediately, UnlockLocation after `grab_unlock_s` unless the owner unlocks the
-//! phone (PhoneUnlocked / BiometricDismiss). NeedHelp / ManualSos unlock immediately.
+//! Grab: SnatchDetected immediately (the red alert: friends are told and get the location at once), UnlockLocation
+//! after `grab_unlock_s` unless the owner unlocks the phone (PhoneUnlocked / BiometricDismiss). NeedHelp / ManualSos unlock immediately.
 use crate::config::ThresholdCfg;
 use crate::types::{EngineEvent, EscalationLevel, UserAction};
 use rand::rngs::StdRng;
@@ -233,8 +233,9 @@ impl Escalation {
         Vec::new()
     }
 
-    /// Grab detected: HeadsUp (no location) + SnatchDetected immediately; UnlockLocation follows after
-    /// `grab_unlock_s` unless PhoneUnlocked / BiometricDismiss.
+    /// Grab detected: SnatchDetected immediately. No HeadsUp alongside it: a heads-up is the amber step, and the
+    /// platforms handle it after SnatchDetected, so it would downgrade the red alert friends just got.
+    /// UnlockLocation follows after `grab_unlock_s` unless PhoneUnlocked / BiometricDismiss.
     pub fn grab(&mut self, now_ms: u64, summary: String) -> Vec<EngineEvent> {
         if matches!(self.level, EscalationLevel::Snatch | EscalationLevel::Unlocked) {
             return Vec::new();
@@ -244,7 +245,7 @@ impl Escalation {
         self.grab_at = Some(now_ms);
         self.call_option_fired = false;
         self.summary = summary.clone();
-        let mut ev = vec![EngineEvent::SnatchDetected { summary: summary.clone() }, EngineEvent::HeadsUp { summary }];
+        let mut ev = vec![EngineEvent::SnatchDetected { summary }];
         ev.extend(self.sync_interval());
         ev
     }
@@ -371,12 +372,12 @@ mod tests {
     }
 
     #[test]
-    fn grab_heads_up_then_unlock_unless_owner_unlocks() {
+    fn grab_snatch_alert_then_unlock_unless_owner_unlocks() {
         let cfg = Config::default_v1().thresholds;
         let mut e = Escalation::new(&cfg, 1);
         let ev = e.grab(10_000, "jerk".into());
         assert!(matches!(ev[0], EngineEvent::SnatchDetected { .. }));
-        assert!(matches!(ev[1], EngineEvent::HeadsUp { .. }));
+        assert!(!has(&ev, |e| matches!(e, EngineEvent::HeadsUp { .. })), "a heads-up would downgrade the snatch alert");
         assert!(!has(&ev, |e| matches!(e, EngineEvent::UnlockLocation { .. })));
         e.apply_action(UserAction::DismissOk, 11_000);
         assert_eq!(e.level(), EscalationLevel::Snatch);

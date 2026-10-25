@@ -68,7 +68,7 @@ function JsCheckIn() {
     try {
       const v = await SafetyNative.submitCheckIn(r);
       if (v.accepted) { setAccepted(true); setTimeout(finish, GLAD_MS); }
-      else setResult(`Hmm — ${v.reason}. Try once more, or tap "I need help".`);
+      else setResult(`Not accepted: ${v.reason}. Try once more, or tap "Need help".`);
     } finally { setBusy(false); }
   };
   const onChange = (t: string) => {
@@ -130,7 +130,7 @@ function JsCheckIn() {
         <View style={{ gap: 10, marginTop: 8 }}>
           <Btn kind="main" size={56} title={busy ? 'Checking…' : 'Okay'} onPress={done} disabled={busy} />
           <Btn kind="coral" title="Need help" onPress={help} />
-          <T style={{ fontSize: 12.5, lineHeight: 17, color: ui.quiet, textAlign: 'center', marginTop: -4 }}>Tells friends now and opens location to them.</T>
+          <T style={{ fontSize: 12.5, lineHeight: 17, color: ui.quiet, textAlign: 'center', marginTop: -4 }}>Alerts your friends now and shares your location with them.</T>
         </View>
       </ScrollView>
     </View>

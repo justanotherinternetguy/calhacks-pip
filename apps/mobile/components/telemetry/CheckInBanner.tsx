@@ -20,12 +20,12 @@ export function CheckInBanner({ summary, deadlineMs, phoneNow, subjectName }: { 
     <View style={[styles.box, { borderColor: tint }]}>
       <View style={styles.row}>
         <Pill text="check-in pending" color={tint} />
-        <Text style={styles.title}>{subjectName} is being asked "You okay?"{summary ? ` · ${summary}` : ''}</Text>
+        <Text style={styles.title}>{subjectName}'s phone is asking "You okay?"{summary ? ` · ${summary}` : ''}</Text>
         <View style={{ flex: 1 }} />
         <Text style={[styles.count, { color: tint }]}>{remaining == null ? '—' : remaining <= 0 ? 'overdue' : fmtCountdown(remaining)}</Text>
       </View>
       <View style={styles.track}><View style={[styles.fill, { width: `${frac * 100}%`, backgroundColor: tint }]} /></View>
-      <Text style={styles.meta}>No answer by the deadline logs a missed check-in and sends the group a heads-up (no location); location unlocks 2 min later if the trigger still holds.</Text>
+      <Text style={styles.meta}>If {subjectName} misses the deadline, the engine logs a missed check-in and sends the group a heads-up without location. If the trigger still holds 2 min later, the phone unlocks the location.</Text>
     </View>
   );
 }

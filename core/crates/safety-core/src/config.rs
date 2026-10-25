@@ -34,7 +34,7 @@ pub struct ThresholdCfg {
     pub unlock_no_response_s: u32,
     /// no response for this long => CallOptionAvailable (once per episode)
     pub call_option_s: u32,
-    /// grab: UnlockLocation this long after the immediate HeadsUp unless PhoneUnlocked/BiometricDismiss
+    /// grab: UnlockLocation this long after the immediate SnatchDetected unless PhoneUnlocked/BiometricDismiss
     pub grab_unlock_s: u32,
     /// minimum gap between two Check prompts
     pub check_repeat_cooldown_s: u32,

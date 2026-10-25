@@ -124,7 +124,7 @@ export default function IncidentScreen() {
         <P style={{ fontSize: 17, fontWeight: '600', lineHeight: 23 }}>{incident.summary ?? 'No details from the phone yet.'}</P>
         <P muted style={{ fontSize: 13 }}>opened {formatDistanceToNow(new Date(incident.opened_at), { addSuffix: true })}</P>
       </Card>
-      {incident.level === 'snatch' && <Card tint={colors.danger}><P style={{ fontWeight: '700' }}>Possible phone snatch. Do not chase. {subjectName} may be without a phone.</P></Card>}
+      {incident.level === 'snatch' && <Card tint={colors.danger}><P style={{ fontWeight: '700' }}>Possible phone snatch. {subjectName} may not have their phone. Don't chase.</P></Card>}
 
       {trail.length ? (
         <>
@@ -134,21 +134,21 @@ export default function IncidentScreen() {
       ) : (
         <Card>
           <P style={{ fontWeight: '700' }}>Location locked</P>
-          <P muted>{offlineLevel ? `Their phone is offline. ${group?.threshold_k ?? 2} friends can unlock the last known location together.` : 'Unlocks automatically if things look serious, or ask their phone for it now.'}</P>
+          <P muted>{offlineLevel ? `Their phone is offline. ${group?.threshold_k ?? 2} friends can unlock the last known location together.` : 'Their phone shares it if things look serious. You can also ask for it now.'}</P>
           {!offlineLevel && !isSubject && !resolved && (
             <Button title="Get location now" kind="danger" onPress={act('location', () => actions.requestLocation(ctx!), 'Asked their phone for its location. It appears here in a few seconds.')} loading={busy === 'location'} />
           )}
           {offlineLevel && !req && !isSubject && (
             <>
               <Button title="Request location" kind="danger" onPress={requestUnlock} loading={busy === 'unlock'} disabled={!fallbackAllowed} />
-              {!fallbackAllowed && <P muted style={{ fontSize: 13 }}>Fallback unlock needs at least {MIN_MEMBERS_FOR_FALLBACK} members — this group has {activeMembers} active.</P>}
+              {!fallbackAllowed && <P muted style={{ fontSize: 13 }}>Fallback unlock needs at least {MIN_MEMBERS_FOR_FALLBACK} members. This group has {activeMembers} active.</P>}
             </>
           )}
           {req && (
             <>
               <P>Unlock approvals: {approvals.length} / {k}</P>
               <View style={{ height: 8, backgroundColor: colors.border, borderRadius: 4 }}><View style={{ height: 8, width: `${Math.min(100, (approvals.length / k) * 100)}%`, backgroundColor: colors.accent, borderRadius: 4 }} /></View>
-              <P muted>Every unlock is logged and visible to {subjectName} and the whole group.</P>
+              <P muted>pip logs every unlock and shows it to {subjectName} and the group.</P>
             </>
           )}
         </Card>
@@ -162,13 +162,13 @@ export default function IncidentScreen() {
           <Button title="Found / safe" kind="ok" onPress={found} loading={busy === 'found'} style={{ flex: 1, minWidth: 140 }} />
         </Row>
       )}
-      {isSubject && !resolved && <Button title="I'm safe — resolve" kind="ok" onPress={found} loading={busy === 'found'} />}
+      {isSubject && !resolved && <Button title="I'm safe · resolve" kind="ok" onPress={found} loading={busy === 'found'} />}
       {!!notice && <P muted testID="incident-notice">{notice}</P>}
 
       {!isSubject && !resolved && (
         <Card tint={colors.warn}>
           <H2>Escalate</H2>
-          <P muted>You decide. The app never calls on its own. Read or paste this:</P>
+          <P muted>pip won't call anyone for you. Read or paste this:</P>
           <P style={{ fontSize: 14 }}>{infoText}</P>
           <Button title="Copy info" kind="ghost" onPress={copyInfo} />
           <Row>

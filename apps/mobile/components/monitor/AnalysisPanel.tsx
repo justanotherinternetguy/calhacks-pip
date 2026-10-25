@@ -32,7 +32,7 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
   const a = state.analysis;
   const status =
     state.status === 'running' ? 'analyzing…'
-    : state.status === 'waiting' ? 'new incidents · analyzing shortly'
+    : state.status === 'waiting' ? 'new incidents · analysis starts soon'
     : state.status === 'error' && state.retryAt ? `retrying in ${Math.max(0, Math.ceil((state.retryAt - now) / 1000))} s`
     : a ? `updated ${ago(state.atMs, now)}`
     : '';
@@ -53,7 +53,7 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
         <Card>
           <Text style={styles.body}>AI analysis is off. Add a key to <Text style={styles.code}>apps/mobile/.env</Text>:</Text>
           <Text style={styles.code}>EXPO_PUBLIC_ANTHROPIC_API_KEY=sk-ant-…</Text>
-          <Text style={styles.meta}>Claude Haiku 5.5 by default (EXPO_PUBLIC_ANTHROPIC_MODEL overrides). Or a free OpenRouter key (OPENROUTER_API_KEY), which is also the fallback. Restart Metro after editing.</Text>
+          <Text style={styles.meta}>The default model is Claude Haiku 5.5. Set EXPO_PUBLIC_ANTHROPIC_MODEL to pick another. A free OpenRouter key (OPENROUTER_API_KEY) also works and acts as the fallback. Restart Metro after you edit the file.</Text>
         </Card>
       )}
 
@@ -66,7 +66,7 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
       {state.status === 'cleared' && !state.error && (
         <Card style={styles.quiet}>
           <Text style={styles.quietTitle}>Messages cleared</Text>
-          <Text style={[styles.meta, { textAlign: 'center' }]}>A new analysis appears when {subjectName}'s incidents change, or press Re-analyze.</Text>
+          <Text style={[styles.meta, { textAlign: 'center' }]}>The console runs a new analysis after each new event on {subjectName}'s phone. Press Re-analyze to run one now.</Text>
         </Card>
       )}
 
@@ -74,7 +74,7 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
         <Card tint={colors.ok} style={styles.quiet}>
           <View style={styles.okDot} />
           <Text style={styles.quietTitle}>Nothing to analyze</Text>
-          <Text style={[styles.meta, { textAlign: 'center' }]}>The engine has not flagged anything for {subjectName}. The analysis starts as soon as an incident is logged.</Text>
+          <Text style={[styles.meta, { textAlign: 'center' }]}>The engine has not flagged anything for {subjectName}. Analysis starts with the first logged incident.</Text>
         </Card>
       )}
 
@@ -100,7 +100,7 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
 
           {a.chain.length > 0 && (
             <View style={{ gap: 6 }}>
-              <Text style={styles.h3}>How it adds up</Text>
+              <Text style={styles.h3}>Chain of events</Text>
               <View style={styles.box}>
                 {a.chain.map((c, i) => (
                   <View key={i} style={styles.step}>
@@ -120,7 +120,7 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
 
           {a.drivers.length > 0 && (
             <View style={{ gap: 6 }}>
-              <Text style={styles.h3}>What moves the score</Text>
+              <Text style={styles.h3}>Score drivers</Text>
               {a.drivers.map((d, i) => (
                 <View key={i} style={styles.driver}>
                   <Text style={[styles.driverSign, { color: d.effect === 'up' ? colors.danger : colors.ok }]}>{d.effect === 'up' ? '▲' : '▼'}</Text>
@@ -141,7 +141,7 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
           )}
           {!!a.watchFor && (
             <View style={{ gap: 4 }}>
-              <Text style={styles.h3}>What would change this read</Text>
+              <Text style={styles.h3}>Signs that would change this read</Text>
               <Text style={styles.body}>{a.watchFor}</Text>
             </View>
           )}
@@ -162,9 +162,9 @@ export function AnalysisPanel({ state, subjectName, now, onRefresh, onClear }: {
 
       {state.configured && (
         <Text style={styles.foot}>
-          An AI reading of the incident timeline (kinds, order, gaps and durations only, no measurements, location or
-          audio), sent from this browser to the model provider (Claude, or OpenRouter as fallback). It can be wrong:
-          the engine's escalation and your own call come first.
+          This browser sends the incident timeline to the model provider (Claude, or OpenRouter as fallback) for an AI
+          reading. It sends kinds, order, gaps and durations, with no measurements, location or audio. The AI can be
+          wrong. Trust the engine's escalation and your own judgment first.
         </Text>
       )}
     </View>

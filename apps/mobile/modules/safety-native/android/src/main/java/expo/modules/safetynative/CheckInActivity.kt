@@ -36,7 +36,8 @@ import uniffi.safety.TypingSample
  *
  *  1. What was detected + a countdown, and two buttons. "I need help" works for anyone, locked or not.
  *  2. "I'm OK" proves the owner first: unlocking a secure lock screen (fingerprint / PIN / pattern), or, when the
- *     phone is already unlocked, a BiometricPrompt (strong biometric or device credential). A thief cannot pass it.
+ *     phone is already unlocked, a BiometricPrompt: face or fingerprint (any biometric Android rates weak or
+ *     stronger) or the device credential. A thief cannot pass it.
  *  3. Then the 3-word phrase, typed and compared with the owner's typing rhythm by the engine: accepted → dismissed;
  *     far off their rhythm → friends are told "answered, but may be impaired".
  *     Once friends hold the location (unlocked) or a grab is running, the phrase is skipped and step 2 dismisses.
@@ -155,7 +156,7 @@ class CheckInActivity : AppCompatActivity() {
     val check = rt.pendingCheck
     title.text = when (l) {
       EscalationLevel.CHECK -> "You okay?"
-      EscalationLevel.HEADS_UP -> "Your friends were told"
+      EscalationLevel.HEADS_UP -> "Your friends got a heads-up"
       EscalationLevel.UNLOCKED -> "Your friends can see your location"
       else -> "Phone grab detected"
     }
@@ -163,7 +164,7 @@ class CheckInActivity : AppCompatActivity() {
       ?.ifBlank { null } ?: "Something looked wrong."
     countdown.text = if (l == EscalationLevel.CHECK && check != null) {
       val s = ((check.deadlineMs - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
-      "Answer in %d:%02d or your friends will be told".format(s / 60, s % 60)
+      "Answer in %d:%02d or your friends get a heads-up".format(s / 60, s % 60)
     } else "Tell them you're OK, or ask for help."
     if (phraseShown && !phraseLevel(l)) { phraseShown = false; phraseBox.visibility = View.GONE; okBtn.visibility = View.VISIBLE }
   }
@@ -192,7 +193,9 @@ class CheckInActivity : AppCompatActivity() {
   }
 
   private fun biometric() {
-    val auth = BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+    // WEAK admits face unlock (most phones rate it class 2); fingerprint is STRONG, which WEAK includes. The snatch /
+    // SOS stand-down (SosManager) stays STRONG-only: someone holding the phone up to the owner must not stop it.
+    val auth = BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL
     if (BiometricManager.from(this).canAuthenticate(auth) != BiometricManager.BIOMETRIC_SUCCESS) {
       busy = false; status.text = "Can't confirm it's you on this phone. Ask a friend to mark you safe."; return
     }
@@ -201,7 +204,7 @@ class CheckInActivity : AppCompatActivity() {
       override fun onAuthenticationError(code: Int, msg: CharSequence) { busy = false; status.text = "Not confirmed. Your check-in is still open." }
       override fun onAuthenticationFailed() { /* the prompt lets them retry */ }
     }).authenticate(
-      BiometricPrompt.PromptInfo.Builder().setTitle("Confirm it's you").setSubtitle("Before telling your friends you're OK")
+      BiometricPrompt.PromptInfo.Builder().setTitle("Confirm it's you").setSubtitle("Use your face, fingerprint or PIN before telling your friends you're OK")
         .setAllowedAuthenticators(auth).build(),
     )
   }
@@ -240,7 +243,7 @@ class CheckInActivity : AppCompatActivity() {
         status.text = when {
           reason.startsWith("wrong phrase") -> "That didn't match. Type the phrase again."
           reason.startsWith("Confirm it's you") -> reason
-          reason.isNotBlank() -> "Thanks. Your friends were told you answered but may need a hand."
+          reason.isNotBlank() -> "Thanks. Your friends know you answered but may need a hand."
           else -> "Try again."
         }
         if (reason.startsWith("Confirm it's you")) { phraseShown = false; phraseBox.visibility = View.GONE; okBtn.visibility = View.VISIBLE }

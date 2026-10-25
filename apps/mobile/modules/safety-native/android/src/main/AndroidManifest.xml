@@ -34,7 +34,7 @@
             <!-- specialUse is only used before location permission is granted (Android 14+ refuses a location-type FGS without it). -->
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Passive personal-safety monitoring until the location permission is granted" />
+                android:value="Passive personal-safety monitoring until you grant the location permission" />
         </service>
 
         <receiver
