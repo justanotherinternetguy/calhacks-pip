@@ -1,0 +1,37 @@
+WHAT'S NEW (commit 88fa3cb, 2026-11-17)
+
+The app now centers on friends checking in on each other.
+Passive detection is a backup. The AI risk score is gone.
+
+
+1. FRIEND CHECK-INS
+   - A friend taps "You okay?". You get a notification that stays
+     until you answer.
+   - Answer "I'm OK" (unlock needed) or "I need help" (starts SOS).
+   - No answer in 10 minutes: your group gets an alert.
+   - Limits: group-mates only, one open check-in at a time,
+     2-minute wait between asks.
+
+2. NOTIFICATIONS THAT STAY PUT (Android)
+   - Check-in and alert notifications come back if swiped away
+     or after a reboot.
+   - They clear on every phone once the issue is resolved.
+
+3. JOIN GROUPS IN PERSON ONLY
+   - You join by scanning a friend's QR code.
+   - Each code works once and expires after 10 minutes.
+   - Both phones confirm each other's fingerprints.
+   - Max 12 people per group.
+
+4. KEY CHECKS
+   - Each friend's key is saved the first time it's seen.
+   - If it changes, that friend is left out until you re-check
+     them in person.
+
+5. ENCRYPTED LIVE LOCATION
+   - Live location is always encrypted. Only your friends can read it.
+   - The key changes daily and whenever someone leaves the group.
+
+6. REMOVED: AI RISK ANALYSIS
+   - The AI score, its timeline and its pop-up reminders are gone.
+   - No AI keys ship in the web app anymore.
