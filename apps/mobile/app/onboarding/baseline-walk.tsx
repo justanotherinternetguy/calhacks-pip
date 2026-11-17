@@ -5,6 +5,7 @@ import { Button, Card, H1, P, Screen } from '@/components/ui';
 import { Icon, Mono, T } from '@/components/pip/kit';
 import { SafetyNative } from '@/modules/safety-native';
 import { ht, ui } from '@/lib/theme';
+import { writeOnboarded } from '../_layout';
 
 export default function BaselineWalk() {
   const router = useRouter();
@@ -36,6 +37,7 @@ export default function BaselineWalk() {
       </Card>
       <Button title={running ? 'Stop' : 'Start walking'} kind={running ? 'danger' : 'primary'} onPress={toggle} />
       <Button title={total >= 60 ? 'Continue' : 'Skip (use an average baseline)'} kind="ghost" onPress={() => router.push('/onboarding/typing-practice')} disabled={running} />
+      <Button title="Set up fall and walk detection later" kind="ghost" disabled={running} onPress={async () => { await writeOnboarded(); router.replace('/home'); }} />
     </Screen>
   );
 }

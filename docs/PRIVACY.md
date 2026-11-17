@@ -19,6 +19,8 @@ be able to ask for help. It first asks *you*. Only if you do not answer does it 
 | Data | Who can read it |
 |---|---|
 | Your location (every 1 to 5 min during night mode) | **Nobody**, until an incident. Your phone encrypts it with a key that only your phone has. Your friends get the key only in these cases:<br>• You do not respond to a check-in.<br>• You tap "I need help" / SOS.<br>• A friend asks for it while an alert about you is already in progress. Your phone shares it at once and tells you who asked.<br>• Your phone goes offline and at least 2 friends agree to unlock.<br>The company never has the key. |
+| Where you are right now, while the app streams to your friends (the friends' map) | **Only your friends.** Your phone encrypts it with a key it gives to each friend you verified. The server relays ciphertext it cannot read. When someone leaves your group, your phone switches to a new key they don't have. |
+| That a friend asked if you're okay, and your answer (okay / need help / no answer) | Your group and the server. Never with your location. |
 | Whether night mode is on, your battery level, whether an alert is in progress | Your group's friends and the server (every 2 min, no location) |
 | Whether you are near or apart from your friends | Your group. The server sees only a yes/no. It never sees coordinates. |
 | That a check-in / heads-up / unlock happened, with a short reason ("a hard fall, then down for 2 min") | Your group and the server |
@@ -35,7 +37,7 @@ The server deletes encrypted locations after 6 hours. Keys are destroyed at the 
 
 ## Who can add you to a group
 
-Only someone you meet in person and scan a QR code with. Both sides must accept.
+Nobody can add you. You join a group only by scanning an invite code a member shows you in person. Each code works once and expires after 10 minutes. You both check that the fingerprint on the other phone matches, and either of you can undo it. If a friend's key ever changes, pip stops sharing with that key until you check it again in person.
 
 ## Not an emergency service
 

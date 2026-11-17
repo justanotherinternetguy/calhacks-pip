@@ -1,10 +1,10 @@
 // Times the subject confirmed they are OK, as the monitor saw them: the phone's `owner_ok` engine event (a check-in
 // answered after fingerprint / face / PIN, or an alert stood down with a biometric) and the manual "I'm okay"
-// broadcast. Kept per subject in this browser so a refresh keeps the log; the AI read resets to 0 on a new one.
+// broadcast. Kept per subject in this browser so a refresh keeps the log.
 import { useEffect, useRef, useState } from 'react';
 import { subscribeTelemetry } from '@/lib/telemetry';
 import type { EngineEventEntry } from '@/lib/telemetry';
-import type { OkConfirmation } from './riskAnalysis';
+import type { OkConfirmation } from './okList';
 import { addConfirmation } from './okList.ts';
 
 export { addConfirmation };

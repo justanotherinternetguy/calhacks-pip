@@ -219,6 +219,15 @@ class SensingService : Service(), SensorEventListener {
 
   private var micGrantedToService = false
 
+  /** Re-draw the always-on notification (friend check-in state changed); no startForeground needed. */
+  fun refreshServiceNotification() {
+    if (!foregroundStarted) return
+    runCatching {
+      (getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager)
+        .notify(AlertManager.NOTIF_SERVICE, rt.alerts.serviceNotification(rt.nightActive))
+    }
+  }
+
   /**
    * (Re)calls startForeground. Type mask: location when the permission is granted (Android 14+ throws
    * otherwise), microphone only in night mode when the user has opened the app since boot and granted
@@ -307,7 +316,7 @@ class SensingService : Service(), SensorEventListener {
         val now = rt.now()
         runCatching {
           tickNow(now)
-          if (now - lastRotateCheck > 60_000) { lastRotateCheck = now; rt.escrow.rotateIfNewDay() }
+          if (now - lastRotateCheck > 60_000) { lastRotateCheck = now; rt.escrow.rotateIfNewDay(); rt.liveKeys.rotateIfNewDay() }
         }.onFailure { Log.e(TAG, "tick failed", it) }
         delay(1_000L - (rt.now() - now).coerceIn(0L, 900L))
       }

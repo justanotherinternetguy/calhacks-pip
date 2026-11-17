@@ -76,7 +76,7 @@ class SafetyNativeModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("SafetyNative")
-    Events("statusChanged", "checkRequested", "escalation", "snatch", "sos", "dashboard", "signalIncident", "incidentCleared", "incidentLogCleared", "callOption", "sessionRefreshed")
+    Events("statusChanged", "checkRequested", "escalation", "snatch", "sos", "dashboard", "signalIncident", "incidentCleared", "incidentLogCleared", "callOption", "sessionRefreshed", "pushReceived")
 
     OnCreate {
       runCatching {
@@ -221,14 +221,50 @@ class SafetyNativeModule : Module() {
     // ---- escrow (subject side) -----------------------------------------------
 
     AsyncFunction("getIdentity") { rt.escrow.identityMap() }
-    AsyncFunction("setGroup") Coroutine { g: GroupRecord ->
-      val members = JSONArray().also { arr ->
-        g.members.forEach {
-          arr.put(JSONObject().put("userId", it.userId).put("deviceId", it.deviceId).put("x25519Pub", it.x25519Pub).put("ed25519Pub", it.ed25519Pub))
+    AsyncFunction("setGroups") Coroutine { groups: List<GroupRecord> ->
+      val arr = JSONArray()
+      groups.forEach { g ->
+        val members = JSONArray().also { m ->
+          g.members.forEach { m.put(JSONObject().put("userId", it.userId).put("deviceId", it.deviceId).put("x25519Pub", it.x25519Pub).put("ed25519Pub", it.ed25519Pub)) }
         }
+        arr.put(JSONObject().put("groupId", g.groupId).put("thresholdK", g.thresholdK).put("members", members))
       }
-      rt.escrow.setGroup(g.groupId, g.thresholdK, members)
+      mapOf("keyChanged" to rt.escrow.setGroups(arr))
     }
+
+    // ---- key pinning (CONTRACTS §6) ------------------------------------------
+
+    AsyncFunction("fingerprint") { userId: String, x25519Pub: String, ed25519Pub: String ->
+      require(KeyPins.validKey(x25519Pub) && KeyPins.validKey(ed25519Pub)) { "not a valid key" }
+      uniffi.safety.fingerprint(userId, unb64(x25519Pub), unb64(ed25519Pub))
+    }
+    AsyncFunction("pinKeys") { p: Map<String, Any?> ->
+      val (st, pin) = rt.pins.pin(
+        p["userId"] as String, p["x25519Pub"] as String, p["ed25519Pub"] as String,
+        verified = p["verified"] == true, replace = p["replace"] == true,
+      )
+      mapOf("status" to st.name.lowercase(), "pin" to pin?.toMap())
+    }
+    AsyncFunction("getPins") { rt.pins.all().map { it.toMap() } }
+
+    // ---- encrypted live location (friend side) -------------------------------
+
+    AsyncFunction("openLiveKeys") { rows: List<Map<String, Any?>> -> rt.liveKeys.open(rows) }
+    AsyncFunction("decryptLiveLocation") { ownerId: String, enc: Map<String, Any?> ->
+      rt.liveKeys.decrypt(ownerId, enc["kid"] as String, (enc["seq"] as Number).toLong(), enc["ct"] as String)
+    }
+
+    // ---- sticky friend notifications -----------------------------------------
+
+    AsyncFunction("syncSticky") { items: List<Map<String, Any?>> ->
+      rt.friendAlerts.sync(items.map {
+        FriendAlerts.Item(
+          it["key"] as String, it["title"] as? String ?: "", it["body"] as? String ?: "",
+          (it["deadlineMs"] as? Number)?.toLong() ?: 0L, it["critical"] == true,
+        )
+      })
+    }
+    AsyncFunction("clearSticky") { key: String -> rt.friendAlerts.resolve(key) }
 
     // ---- escrow (friend side) ------------------------------------------------
 

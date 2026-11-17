@@ -4,7 +4,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import { SUPABASE_URL } from './env';
 import type {
-  AuditLog, Device, Group, GroupMember, Incident, IncidentEvent, IncidentEventKind, IncidentLevel, LocationBlob,
+  AuditLog, CheckIn, Device, Group, GroupMember, Incident, IncidentEvent, IncidentEventKind, IncidentLevel, LiveKey, LocationBlob,
   Presence, Profile, ReleasedKey, TableName, Tables, UnlockApproval, UnlockRequest, Uuid,
 } from './types';
 
@@ -46,21 +46,35 @@ export const getDevicePlatforms = async (ids: Uuid[]): Promise<{ user_id: Uuid; 
 
 // ---- groups
 export async function listMyGroups(userId: Uuid) {
-  const memberships = unwrap<GroupMember[]>(await supabase.from('group_members').select('*').eq('user_id', userId));
+  // Oldest membership first: native runs escrow on the first group (EscrowManager.setGroups).
+  const memberships = unwrap<GroupMember[]>(await supabase.from('group_members').select('*').eq('user_id', userId).order('created_at'));
   const ids = memberships.map((m) => m.group_id);
-  const groups = ids.length ? unwrap<Group[]>(await supabase.from('groups').select('*').in('id', ids)) : [];
+  const fetched = ids.length ? unwrap<Group[]>(await supabase.from('groups').select('*').in('id', ids)) : [];
+  const groups = ids.map((id) => fetched.find((g) => g.id === id)).filter((g): g is Group => !!g);
   const members = ids.length ? unwrap<GroupMember[]>(await supabase.from('group_members').select('*').in('group_id', ids)) : [];
   return { memberships, groups, members };
 }
 export async function createGroup(g: { name: string; owner_id: Uuid; threshold_k?: number; campus_safety_number?: string | null }) {
-  const group = unwrap<Group>(await supabase.from('groups').insert(g).select().single());
-  await supabase.from('group_members').insert({ group_id: group.id, user_id: g.owner_id, status: 'active', invited_by: g.owner_id });
-  return group;
+  // The owner's own membership row comes from the groups_add_owner trigger (0002).
+  return unwrap<Group>(await supabase.from('groups').insert(g).select().single());
 }
 export const updateGroup = async (id: Uuid, patch: Partial<Group>) => unwrap<Group>(await supabase.from('groups').update(patch).eq('id', id).select().single());
-export const inviteMember = async (group_id: Uuid, user_id: Uuid, invited_by: Uuid) =>
-  unwrap<GroupMember>(await supabase.from('group_members').upsert({ group_id, user_id, status: 'invited', invited_by }).select().single());
-export const leaveGroup = async (group_id: Uuid, user_id: Uuid) => unwrap(await supabase.from('group_members').delete().match({ group_id, user_id }));
+/** Leaving as the owner hands the group to the longest-standing member (leave_group, 0019). */
+export const leaveGroup = async (group_id: Uuid) => unwrap(await supabase.rpc('leave_group', { p_group: group_id }));
+/** The owner removes anyone; the inviter may undo their own invite for an hour (fingerprint did not match). */
+export const removeMember = async (group_id: Uuid, user_id: Uuid) => unwrap(await supabase.rpc('remove_member', { p_group: group_id, p_user: user_id }));
+/** A single-use, 10-minute invite token for the QR (only its hash is stored). Any active member may invite. */
+export async function createInvite(group_id: Uuid): Promise<{ inviteId: Uuid; token: string; expiresAt: string }> {
+  const rows = unwrap<{ invite_id: Uuid; token: string; expires_at: string }[]>(await supabase.rpc('create_group_invite', { p_group: group_id }));
+  const r = rows[0];
+  if (!r) throw new Error('Could not create an invite');
+  return { inviteId: r.invite_id, token: r.token, expiresAt: r.expires_at };
+}
+/** Joins the group behind a scanned invite token; returns its id. */
+export const redeemInvite = async (token: string) => unwrap<Uuid>(await supabase.rpc('redeem_group_invite', { p_token: token }));
+export const getInvite = async (id: Uuid) =>
+  unwrap<{ id: Uuid; used_by: Uuid | null; used_at: string | null; expires_at: string } | null>(
+    await supabase.from('group_invites').select('id, used_by, used_at, expires_at').eq('id', id).maybeSingle());
 export const getPresence = async (group_id: Uuid) => unwrap<Presence[]>(await supabase.from('presence').select('*').eq('group_id', group_id));
 
 // ---- incidents
@@ -79,8 +93,9 @@ export const listReleasedKeysForMe = async (incident_id: Uuid, recipient_user_id
   unwrap<ReleasedKey[]>(await supabase.from('released_keys').select('*').match({ incident_id, recipient_user_id }));
 export const listLocationBlobs = async (user_id: Uuid, epoch_id: Uuid) =>
   unwrap<LocationBlob[]>(await supabase.from('location_blobs').select('*').match({ user_id, epoch_id }).order('seq'));
-export const getActiveEpoch = async (user_id: Uuid, group_id: Uuid) =>
-  unwrap<{ id: Uuid; k: number; n: number } | null>(await supabase.from('epochs').select('id,k,n').match({ user_id, group_id, active: true }).order('created_at', { ascending: false }).limit(1).maybeSingle());
+/** A phone keeps one active escrow epoch (on its primary group), whichever group the incident is in. */
+export const getActiveEpoch = async (user_id: Uuid) =>
+  unwrap<{ id: Uuid; k: number; n: number } | null>(await supabase.from('epochs').select('id,k,n').match({ user_id, active: true }).order('created_at', { ascending: false }).limit(1).maybeSingle());
 export const listUnlockRequests = async (incident_id: Uuid) => unwrap<UnlockRequest[]>(await supabase.from('unlock_requests').select('*').eq('incident_id', incident_id));
 export const getUnlockRequest = async (id: Uuid) => unwrap<UnlockRequest>(await supabase.from('unlock_requests').select('*').eq('id', id).single());
 export const listUnlockApprovals = async (request_id: Uuid) => unwrap<UnlockApproval[]>(await supabase.from('unlock_approvals').select('*').eq('request_id', request_id));
@@ -93,7 +108,6 @@ export const rpc = {
   resolveIncident: async (incident_id: Uuid) => unwrap(await supabase.rpc('resolve_incident', { incident_id })),
   addIncidentEvent: async (a: { incident_id: Uuid; kind: IncidentEventKind; payload?: Record<string, unknown> }) =>
     unwrap<Uuid>(await supabase.rpc('add_incident_event', { payload: {}, ...a })),
-  acceptInvite: async (group_id: Uuid) => unwrap(await supabase.rpc('accept_invite', { group_id })),
   openUnlockRequest: async (incident_id: Uuid) => unwrap<Uuid>(await supabase.rpc('open_unlock_request', { incident_id })),
   /** Deletes the subject's incidents (with their events, unlock requests and released keys) for good; returns how many. */
   purgeIncidents: async (subject: Uuid) => unwrap<number>(await supabase.rpc('purge_incidents', { subject })),
@@ -110,14 +124,31 @@ async function callFn(name: string, body?: unknown) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token ?? ''}` },
       body: JSON.stringify(body),
     });
-  if (!res.ok) throw new Error(`${name}: ${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text;
+    try { msg = (JSON.parse(text) as { error?: string }).error ?? text; } catch { /* not JSON */ }
+    throw new Error(msg || `${name}: ${res.status}`);
+  }
   return res.json().catch(() => ({}));
 }
 export const fn = {
   push: (b: { incidentId: Uuid; kind: string; title: string; body: string; recipients?: Uuid[]; critical?: boolean; data?: Record<string, unknown> }) => callFn('push', b),
   unlock: (b: { incidentId: Uuid }) => callFn('unlock', b) as Promise<{ requestId: Uuid; k?: number }>,
   config: () => callFn('config') as Promise<{ version: string; toml: string }>,
+  /** Friend check-ins (functions/checkin): ask → sticky "You okay?" on their phone; answer → tells the asker. */
+  checkin: (b: { action: 'ask'; targetId: Uuid } | { action: 'answer'; checkInId: Uuid; status: 'ok' | 'help' } | { action: 'cancel'; checkInId: Uuid }) =>
+    callFn('checkin', b) as Promise<{ checkIn: CheckIn; sent: number }>,
 };
+
+// ---- check-ins / live keys
+/** Last 24 h of check-ins I can see (mine both ways, and my group-mates'). */
+export const listCheckIns = async () =>
+  unwrap<CheckIn[]>(await supabase.from('check_ins').select('*').gte('created_at', new Date(Date.now() - 24 * 3_600_000).toISOString())
+    .order('created_at', { ascending: false }).limit(200));
+export const getCheckIn = async (id: Uuid) => unwrap<CheckIn | null>(await supabase.from('check_ins').select('*').eq('id', id).maybeSingle());
+export const listLiveKeysForMe = async (me: Uuid) =>
+  unwrap<LiveKey[]>(await supabase.from('live_keys').select('*').eq('recipient_id', me).order('created_at', { ascending: false }).limit(200));
 
 // ---- realtime
 export function subscribe<T extends TableName>(

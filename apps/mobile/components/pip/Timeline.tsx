@@ -2,7 +2,7 @@ import React from 'react';
 import { View } from 'react-native';
 import { format } from 'date-fns';
 import type { IncidentRecord } from '@/modules/safety-native';
-import { FAMILY } from '@/components/monitor/incidentTimeline';
+import { FAMILY } from '@/components/monitor/families';
 import { isActive, recordTitle } from '@/lib/concern';
 import { fmtCountdown } from '@/components/telemetry/labels';
 import { ht, ui } from '@/lib/theme';

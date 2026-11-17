@@ -1,6 +1,9 @@
 // POST /functions/v1/watchdog   (service role / CRON_SECRET only)
-// Body optional: { incidentIds?: string[] } — when pg_cron already ran
-// watchdog_tick() it posts the new ids here; otherwise we run the tick.
+// Body optional:
+//   { incidentIds?: string[] }  — when pg_cron already ran watchdog_tick() + check_in_tick() it posts the new
+//                                 ids here; otherwise we run both ticks.
+//   { resolvedIds?: string[] }  — incidents that just resolved (trigger in 0021): a silent push so every phone
+//                                 drops its sticky alert for them.
 import { isServiceCaller, json, preflight, readJson, serviceClient } from "../_shared/supabase.ts";
 import { groupMemberIds, pushToUsers } from "../_shared/push.ts";
 import { type IncidentRow, watchdogMessage } from "./message.ts";
@@ -11,7 +14,23 @@ Deno.serve(async (req) => {
   if (!isServiceCaller(req)) return json({ error: "unauthorized" }, 401);
 
   const db = serviceClient();
-  const body = req.method === "POST" ? await readJson<{ incidentIds?: string[] }>(req) : {};
+  const body = req.method === "POST" ? await readJson<{ incidentIds?: string[]; resolvedIds?: string[] }>(req) : {};
+
+  if (body.resolvedIds?.length) {
+    const { data, error } = await db.from("incidents").select("id, user_id, group_id").in("id", body.resolvedIds);
+    if (error) return json({ error: error.message }, 500);
+    const cleared = [];
+    for (const inc of (data ?? []) as { id: string; user_id: string; group_id: string }[]) {
+      try {
+        const recipients = [...new Set([...(await groupMemberIds(db, inc.group_id)), inc.user_id])];
+        const r = await pushToUsers(db, recipients, { incidentId: inc.id, kind: "incident_resolved", title: "", body: "" });
+        cleared.push({ incidentId: inc.id, sent: r.filter((x) => x.ok).length });
+      } catch (e) {
+        cleared.push({ incidentId: inc.id, error: String(e) });
+      }
+    }
+    if (!body.incidentIds?.length) return json({ cleared });
+  }
 
   let incidents: IncidentRow[] = [];
   if (body.incidentIds?.length) {
@@ -22,9 +41,11 @@ Deno.serve(async (req) => {
     if (error) return json({ error: error.message }, 500);
     incidents = (data ?? []) as IncidentRow[];
   } else {
-    const { data, error } = await db.rpc("watchdog_tick");
-    if (error) return json({ error: error.message }, 500);
-    incidents = (data ?? []) as IncidentRow[];
+    for (const fn of ["watchdog_tick", "check_in_tick"]) {
+      const { data, error } = await db.rpc(fn);
+      if (error) return json({ error: error.message }, 500);
+      incidents.push(...((data ?? []) as IncidentRow[]));
+    }
   }
 
   const out = [];

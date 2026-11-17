@@ -6,5 +6,5 @@ export const EVENT_LABEL: Record<IncidentEventKind, string> = {
   called_911: 'called 911', called_campus: 'called campus safety', found: 'found them', resolved: 'marked safe', unlock_requested: 'requested fallback unlock',
   unlock_approved: 'approved unlock', phone_offline: 'phone went offline', battery_dying: 'battery dying',
   call_option: 'no response for 10 minutes', escalated: 'alerted the whole group', location_requested: 'asked for the location',
-  check_answered: 'answered the check-in',
+  check_answered: 'answered the check-in', check_in_missed: 'did not answer a friend\'s check-in',
 };

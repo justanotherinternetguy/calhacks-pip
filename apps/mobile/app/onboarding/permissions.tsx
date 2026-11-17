@@ -51,7 +51,7 @@ export default function PermissionsScreen() {
         );
       })}
       {perms && Object.values(perms).includes('denied') && <Button title="Open system settings" kind="ghost" onPress={() => Linking.openSettings()} />}
-      <Button title="Continue" onPress={() => router.push('/onboarding/home-places')} disabled={!essentialsOk && !SafetyNative.isMock} />
+      <Button title="Continue" onPress={() => router.push('/onboarding/friends')} disabled={!essentialsOk && !SafetyNative.isMock} />
       {!essentialsOk && <P muted style={{ fontSize: 14 }}>pip needs location, motion and notifications to work.</P>}
     </Screen>
   );

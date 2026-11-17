@@ -95,19 +95,54 @@ class EscrowManager(private val rt: SafetyRuntime) {
   fun groupId(): String? = group()?.groupId
   fun memberUserIds(): List<String> = group()?.members?.map { it.userId } ?: emptyList()
 
-  /** Stores the group and rotates the day key immediately (new member set ⇒ new shares). */
-  suspend fun setGroup(groupId: String, thresholdK: Int, members: JSONArray) {
+  /**
+   * All my groups, oldest membership first (lib/native.ts orders them). Every member key is checked against the pin
+   * store first: unseen keys are pinned (trust on first use), a key that differs from its pin is left out until it is
+   * re-verified in person, and malformed keys (mock / web placeholders) are never used, so one bad row cannot break
+   * everyone's shares.
+   *
+   * Escrow (day key, Shamir shares, released hour keys, incidents, proximity) runs on the PRIMARY group = the first
+   * one, so it no longer flips to whichever group was set last. The live location key goes to every friend in every
+   * group. Returns the user ids whose server key no longer matches their pin.
+   */
+  suspend fun setGroups(groups: JSONArray): List<String> {
     val self = prefs.serverConfig?.userId
-    val filtered = JSONArray()
-    for (i in 0 until members.length()) {
-      val m = members.getJSONObject(i)
-      if (m.getString("userId") != self) filtered.put(m)
+    val keyChanged = LinkedHashSet<String>()
+    val friends = LinkedHashMap<String, String>()
+    var primary: String? = null
+    for (gi in 0 until groups.length()) {
+      val g = groups.getJSONObject(gi)
+      val members = g.getJSONArray("members")
+      val keptList = ArrayList<JSONObject>()
+      for (i in 0 until members.length()) {
+        val m = members.getJSONObject(i)
+        val uid = m.getString("userId")
+        if (uid == self) continue
+        val (st, _) = rt.pins.pin(uid, m.getString("x25519Pub"), m.getString("ed25519Pub"), verified = false)
+        when (st) {
+          KeyPins.Status.NEW, KeyPins.Status.SAME -> { keptList.add(m); friends[uid] = m.getString("x25519Pub") }
+          KeyPins.Status.CHANGED -> { keyChanged.add(uid); Log.w(TAG, "key for ${uid.take(8)} changed: left out until re-verified") }
+          KeyPins.Status.INVALID -> Log.w(TAG, "malformed key for ${uid.take(8)}: left out")
+        }
+      }
+      // Sorted, so the same member set always serializes the same (no needless re-keying on reordered input).
+      val kept = JSONArray(keptList.sortedBy { it.getString("userId") })
+      if (gi == 0) primary = JSONObject().put("groupId", g.getString("groupId")).put("thresholdK", g.getInt("thresholdK")).put("members", kept).toString()
     }
-    val next = JSONObject().put("groupId", groupId).put("thresholdK", thresholdK).put("members", filtered).toString()
-    val changed = prefs.getString("group") != next
-    prefs.putString("group", next)
-    // Only a changed member set needs new shares; otherwise just make sure today's epoch exists.
-    rotateDayKey(force = changed)
+    val had = prefs.getString("group")
+    if (primary == null) prefs.remove("group") else prefs.putString("group", primary)
+    prefs.putString("live_friends", JSONObject(friends as Map<*, *>).toString())
+    // Only a changed member set needs new shares; leaving the last group also rotates, so the old friends'
+    // shares stop at the old epoch and nothing more is released to them.
+    rotateDayKey(force = had != primary)
+    rt.liveKeys.sync(friends)
+    return keyChanged.toList()
+  }
+
+  /** userId → X25519 pub (b64) of every pinned friend across my groups, as of the last [setGroups]. */
+  fun liveFriends(): Map<String, String> {
+    val o = prefs.getString("live_friends")?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return emptyMap()
+    return o.keys().asSequence().associateWith { o.getString(it) }
   }
 
   // ---- day / hour keys -----------------------------------------------------
@@ -234,7 +269,7 @@ class EscrowManager(private val rt: SafetyRuntime) {
 
   fun openReleasedKey(subject: String, epochId: String, hourIndex: Int, sealedB64: String, senderEdPubB64: String) {
     val me = identity()
-    val key = openSealed(me.x25519Secret, unb64(senderEdPubB64), unb64(sealedB64), "hour|$epochId|$hourIndex".toByteArray(Charsets.UTF_8))
+    val key = openSealed(me.x25519Secret, rt.pins.signerKey(subject, senderEdPubB64), unb64(sealedB64), "hour|$epochId|$hourIndex".toByteArray(Charsets.UTF_8))
     prefs.putString(cacheKey(subject, epochId, hourIndex), b64(key))
     key.fill(0)
   }
@@ -256,27 +291,20 @@ class EscrowManager(private val rt: SafetyRuntime) {
     return out
   }
 
-  /** Fallback unlock, approver side: open our share for the subject's epoch and re-seal it to the requester. */
-  suspend fun approveUnlock(requestId: String, subject: String, epochId: String, requesterXPubB64: String): String {
+  /** Fallback unlock, approver side: open our share for the subject's epoch and re-seal it to the requester (whose key the caller checked against its pin). */
+  suspend fun approveUnlock(@Suppress("UNUSED_PARAMETER") requestId: String, subject: String, epochId: String, requesterXPubB64: String): String {
     val cfg = prefs.serverConfig ?: throw IllegalStateException("not configured")
     val me = identity()
     val row = rt.io { rt.supabase.select("key_shares", "epoch_id=eq.$epochId&recipient_user_id=eq.${cfg.userId}&select=share_index,sealed,sender_ed25519_pub&limit=1") }
       .optJSONObject(0) ?: throw IllegalStateException("no share for epoch $epochId")
-    val share = openSealed(me.x25519Secret, unb64(row.getString("sender_ed25519_pub")), unb64(row.getString("sealed")), "share|$epochId|${cfg.userId}".toByteArray(Charsets.UTF_8))
+    val share = openSealed(me.x25519Secret, rt.pins.signerKey(subject, row.getString("sender_ed25519_pub")), unb64(row.getString("sealed")), "share|$epochId|${cfg.userId}".toByteArray(Charsets.UTF_8))
     val plain = byteArrayOf(row.getInt("share_index").toByte()) + share
     share.fill(0)
     val sealed = sealTo(unb64(requesterXPubB64), me.ed25519Secret, plain, "approval|$subject|$epochId".toByteArray(Charsets.UTF_8))
     plain.fill(0)
-    val sealedB64 = b64(sealed)
-    rt.io {
-      runCatching {
-        rt.supabase.insert(
-          "unlock_approvals",
-          JSONObject().put("request_id", requestId).put("approver_id", cfg.userId).put("sealed_share", sealedB64).put("approver_ed25519_pub", b64(me.ed25519Public)),
-        )
-      }.onFailure { Log.w(TAG, "unlock_approvals insert failed", it) }
-    }
-    return sealedB64
+    // The caller (app/unlock-approve) inserts the unlock_approvals row; inserting here too hit the
+    // unique(request_id, approver_id) constraint and showed "Approval failed".
+    return b64(sealed)
   }
 
   /** Fallback unlock, requester side: combine k re-sealed shares → K_day, cached for decryptLocations. */
@@ -286,7 +314,9 @@ class EscrowManager(private val rt: SafetyRuntime) {
     for (i in 0 until sealedShares.length()) {
       val s = sealedShares.getJSONObject(i)
       runCatching {
-        val plain = openSealed(me.x25519Secret, unb64(s.getString("approverEd25519Pub")), unb64(s.getString("sealedB64")), "approval|$subject|$epochId".toByteArray(Charsets.UTF_8))
+        val approverKey = s.optString("approverId").takeIf { it.isNotBlank() }
+          ?.let { rt.pins.signerKey(it, s.getString("approverEd25519Pub")) } ?: unb64(s.getString("approverEd25519Pub"))
+        val plain = openSealed(me.x25519Secret, approverKey, unb64(s.getString("sealedB64")), "approval|$subject|$epochId".toByteArray(Charsets.UTF_8))
         shares.add(Share(plain[0].toUByte(), plain.copyOfRange(1, plain.size)))
       }.onFailure { Log.w(TAG, "open approval failed", it) }
     }

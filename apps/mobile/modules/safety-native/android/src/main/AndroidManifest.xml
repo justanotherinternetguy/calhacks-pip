@@ -50,6 +50,20 @@
         <receiver android:name=".GeofenceReceiver" android:exported="false" />
         <receiver android:name=".ActivityTransitionReceiver" android:exported="false" />
         <receiver android:name=".AlarmReceiver" android:exported="false" />
+        <receiver android:name=".StickyReceiver" android:exported="false" />
+
+        <!-- All FCM messages land here first: pip's data-only pushes become sticky notifications (FriendAlerts),
+             everything else is passed on to expo-notifications. Its own service is removed so only one runs. -->
+        <service
+            android:name=".PipMessagingService"
+            android:exported="false">
+            <intent-filter android:priority="1">
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <service
+            android:name="expo.modules.notifications.service.ExpoFirebaseMessagingService"
+            tools:node="remove" />
 
         <service
             android:name=".SosTileService"

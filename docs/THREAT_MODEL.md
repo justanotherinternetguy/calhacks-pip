@@ -38,7 +38,10 @@ scope here (see `tools/collect` for the tuning plan).
 - The server (`unlock` function + RLS) allows fallback unlock only for `offline`/`battery_dying` incidents. It logs every step to `audit_log`, which the subject can see.
 - RLS on every table: members-only reads, no decrypt function anywhere in Postgres. pgTAP tests assert that a non-member cannot read blobs, and that the server refuses fallback without an incident.
 - Push goes directly to APNs/FCM. Payloads carry no location.
-- Mutual-consent group joining. In-person QR key exchange. Safety-number re-verification on key change.
+- Group joining only by redeeming a single-use, 10-minute invite token shown in person (no client writes to `group_members`; pgTAP `groups.test.sql`). Both people compare fingerprints; the scanner recomputes the fingerprint from the keys in the code.
+- Key pinning on every device (trust on first use, verified by scan). A server-swapped key is left out of share sealing and live-key sealing until it is re-verified in person; signatures are always checked against the pinned key.
+- Live location for the friends' map travels only as ciphertext under a per-phone live key sealed to pinned friends, rotated daily and on any departure.
+- Friend check-ins carry no location; a missed one alerts the group through a normal incident.
 - 6 h retention of ciphertext (`purge`). The 2-min heartbeats carry no location.
 
 ## Accepted risks
@@ -49,6 +52,8 @@ scope here (see `tools/collect` for the tuning plan).
 4. **Audit log is visible to the whole group**, including the person who may be the problem. The subject sees it too, which is the point.
 5. **Device compromise** (rooted/jailbroken phone, malware) defeats all local protections.
 6. **Snatch alert includes the snatch-moment location in plaintext to friends** by design. It is one point, not a trail.
+7. **Friends see your live position while you stream.** That is the point of the friends' map; the server does not. A friend who has left keeps the old live keys for positions they already received, not new ones.
+8. **Trust on first use for friends you did not scan yourself.** Members who joined through someone else's invite are pinned the first time your phone sees them; verify them with "My code" to close that gap.
 
 ## Open items
 

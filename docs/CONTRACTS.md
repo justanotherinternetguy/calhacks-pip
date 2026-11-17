@@ -199,6 +199,22 @@ Native tracks `last_touch_ms` from: any touch in the app (root view touch listen
 ### Groups
 Default n = 4 friends, k = 2; fallback unlock requires ≥ 3 active members (enforced in `open_unlock_request` and in the UI).
 
+**Joining (migration 0019).** Clients cannot insert or update `group_members` at all. The only ways in and out:
+- `create_group_invite(p_group) → (invite_id, token, expires_at)`: any active member. `token` = 32 random bytes as hex; only `sha256(token)` is stored in `group_invites`; 10 minutes; at most 5 open per person; group size cap 12.
+- `redeem_group_invite(p_token) → group_id`: single use, unexpired, inviter still active; the caller joins as `active`. Every failure raises the same `P0002 invite invalid or expired`.
+- `remove_member(p_group, p_user)`: the owner, or the inviter within an hour of the join (fingerprint mismatch). `leave_group(p_group)`: an owner hands over to the longest-standing member; the last one out deletes the group.
+- There is no `invited` state any more (`status = 'active'` check). `profiles` are readable by yourself and active group-mates only.
+- `group_members`, `group_invites` are in the realtime publication; every phone re-keys (new escrow shares, new live key) on any membership change in its groups.
+
+**QR payloads** (`apps/mobile/lib/qr.ts`):
+- Invite (v2): `{ v: 2, k: 'invite', g: groupId, gn: groupName, t: token, u: inviterId, n: inviterName, x: x25519Pub, e: ed25519Pub, fp }`.
+- My code (v1): `{ v: 1, userId, fp, x, e }`, used only to verify a friend's keys.
+The scanner recomputes `fp = fingerprint(u, x, e)` itself and rejects a mismatch. Join: the joiner checks the fingerprint on the inviter's screen, pins the inviter's keys as verified, redeems; the inviter's phone (watching its `group_invites` row) then shows the joiner's fingerprint for the inviter to confirm, or removes them.
+
+**Key pinning.** `SafetyNative.pinKeys / getPins / fingerprint` (Android `KeyPins.kt` in EncryptedSharedPreferences; web `pinLogic.ts` in localStorage). The first key seen for a friend is pinned (trust on first use), a scanned one as verified. `setGroups(groups[])` (replaces `setGroup`) leaves out any member whose server key differs from the pin and returns them as `keyChanged` (the UI asks to re-verify in person); malformed keys are never used. Every signature check (released keys, key shares, approvals, live keys) uses the pinned Ed25519 key, and a share is re-sealed only to a requester whose key matches its pin.
+
+**Several groups.** Escrow (day key, shares, released hour keys, phone-opened incidents, proximity) runs on the primary group = the oldest membership; the live key goes to every friend in every group. `getActiveEpoch(user)` no longer filters by group. Unlock fulfilment counts approvals against the epoch's `k`.
+
 ### Display
 `/dashboard` (personal, off by default, opened from Settings) shows live metrics vs bands, sensing / mic status and context, and the incident log. Friends get only the one-line triggering-sequence summary on unlock; never another user's dashboard.
 
@@ -222,7 +238,7 @@ type TelemetryFrame = {
   sampleHz: number;                         // measured accelerometer delivery rate (e.g. 49.9)
   incidents: IncidentRecord[];              // new records (id > lastSentId) and records whose clearedMs / acknowledged / sequenceId changed — UPSERT by id; the whole live log again after a rejoin
   incidentCount: number;                    // total live log size, lets the UI detect gaps
-  events: string[];                         // engine events since the last frame, snake_case: check_requested, heads_up, unlock_location, snatch_detected, resolved, battery_dying, sampling_rate_changed, audio_listening, signal_incident, incident_cleared, call_option, owner_ok (the owner answered a check-in after fingerprint / face / PIN, or stood an alert / SOS down with a biometric; the monitor logs it as "Confirmed OK" and resets its AI read to 0)
+  events: string[];                         // engine events since the last frame, snake_case: check_requested, heads_up, unlock_location, snatch_detected, resolved, battery_dying, sampling_rate_changed, audio_listening, signal_incident, incident_cleared, call_option, owner_ok (the owner answered a check-in after fingerprint / face / PIN, or stood an alert / SOS down with a biometric; the monitor logs it as "Confirmed OK")
   rttMs?: number;                           // self-echo round trip, smoothed
   state?: {
     metrics: LiveMetrics;                   // §9 shape (bands[], listening, context, placement, samplingFull, evidence, …)
@@ -237,7 +253,13 @@ A `v: 1` payload (one complete tick per message, 4 Hz, as published before this 
 Sample timing: the monitor places every sample on the phone's sensor clock (`st` minus `k / sampleHz`) and maps it to local time with a skew floor (fast-down / slow-up minimum of `arrival − st`), then draws `max(120 ms, 1.5 × frame interval + 2 × jitter)` behind wall-clock. Arrival jitter therefore cannot stretch or compress the waveform.
 
 Native facade: `setTelemetry(on: boolean): Promise<void>`, `getTelemetryStatus(): Promise<{ on: boolean; hz: number; lastSentMs: number; failures: number; connected: boolean; reconnects: number; dropped: number; rttMs: number | null; error: string | null }>`.
-Location is NOT in telemetry; it stays on the escrow path (location_blobs + released_keys).
+Location travels only encrypted (migration 0020). `state.locEnc = { kid, seq, ct }` with
+`ct = encrypt_location(liveKey, ownerId, "live:" + kid, seq, loc)` (§5 blob format). The live key is 32 random bytes per phone,
+sealed (`seal_to`, aad `live|{ownerId}|{kid}`) to every pinned friend in `live_keys(owner_id, key_id, recipient_id, sealed)`;
+rotated every local day and whenever a friend leaves (newcomers get the current key). Friends open it with
+`openLiveKeys(rows)` (signature checked against the owner's pinned key) and read positions with `decryptLiveLocation(ownerId, locEnc)`.
+No key ⇒ no position in the frame, never a plaintext fallback. The plain `loc` field remains only for the local simulation (`lib/sim.ts`).
+The escrow path (location_blobs + released_keys) is unchanged.
 
 ## 8. Session ownership on Android
 
@@ -266,7 +288,7 @@ incidents; the incident log decides when to ask "You okay?". Parameters: `core/c
 #[derive(uniffi::Record)] pub struct LiveMetrics { pub t_ms: u64, pub placement: Placement, pub sampling_full: bool, pub activity: Activity, pub bands: Vec<MetricBand>, pub listening: bool, pub context: Vec<String>, pub baseline_trusted: bool, pub baseline_walk_days: f32, pub evidence: String, pub calm_walk_s: f32 }
 // calm_walk_s: seconds of normal walking (every unsteady metric in band, cadence not slowed, OS not stationary / in a
 // vehicle) since the newest Watch / Danger incident opened; 0 after one opens or a reset. JS `calmWalkS` (optional:
-// older phones omit it). The monitor's AI read eases faster with it.
+// older phones omit it).
 // Context gains `charging: bool`. AudioScores is { t_ms, scream, shout, snore, level_db, distress } (glass removed;
 // `distress` = distress-phrase confidence 0..1 from the on-device keyword spotter, 0 when it is off, see §12).
 // EngineEvent gains AudioListening { on: bool } and IncidentCleared { record: IncidentRecord }.
@@ -381,3 +403,17 @@ under action labels ("normal walking", "stumbling", …), to measure and retune 
   venue, within `distress_after_s` of the fall. Once per fall; clears after `distress_clear_min` (10). Summary phrase:
   "words like “help”".
 
+
+## 13. Friends check in on each other (migration 0021, `functions/checkin`)
+
+The main flow. A friend asks "You okay?"; the target's phone shows a sticky notification until it is answered.
+
+- Table `check_ins(id, asker_id, target_id, group_id, status pending|ok|help|missed|cancelled, created_at, deadline_at, answered_at, incident_id)`. Readable by asker, target and the target's active group-mates. No direct writes.
+- RPCs (as the user): `ask_check_in(p_target)` (shared active group required; one pending per pair, idempotent; 2-minute cooldown; deadline 10 min), `answer_check_in(p_id, 'ok'|'help')` (target only; a late "ok" resolves the missed incident), `cancel_check_in(p_id)` (asker only).
+- `POST /functions/v1/checkin { action: 'ask', targetId } | { action: 'answer', checkInId, status } | { action: 'cancel', checkInId }` calls the RPC with the caller's JWT, then pushes: `checkin_request` (target, critical, `data.deadlineMs`), `checkin_answered` (asker; `help` is critical), `checkin_cancelled` (target). "I need help" also raises the SOS on the target's phone (the phone does the location release).
+- Missed: `check_in_tick()` (run with `watchdog_tick()` by `cron_watchdog` every minute and by the watchdog function) marks pending rows past the deadline `missed` and opens one `missed_check_in` incident (event `check_in_missed`) per target and group; the watchdog pushes it to the group. Friends then have the usual incident actions.
+- Resolved: trigger `incidents_notify_resolved` calls the watchdog with `resolvedIds`; it sends a silent `incident_resolved` push so sticky alerts close everywhere.
+
+**Pushes are data-only on Android** (`_shared/push.ts buildFcmMessage`): `data = { pip: "1", kind, route, incidentId?, checkInId?, title, body, critical, channel }`, no `notification` block. `PipMessagingService` (extends expo-notifications' FCM service, which the manifest removes) handles `pip` messages natively and passes anything else on.
+
+**Sticky notifications** (`FriendAlerts.kt`, channel `friend`): keys `in:<checkInId>` (asked of me: I'm OK — needs device unlock — / I need help), `out:<checkInId>` (waiting on a friend, low priority), `inc:<incidentId>` (a friend's alert). Ongoing, no auto-cancel, re-posted silently from their delete intent while still open (Android 14 lets users swipe ongoing notifications), kept in a Prefs ledger, re-posted on boot, and reconciled with the server after every app refresh: `SafetyNative.syncSticky(items)` with `items = stickyItems(...)` (`lib/sticky.ts`). The always-on service notification leads with the check-in state and has a "Check on a friend" action.

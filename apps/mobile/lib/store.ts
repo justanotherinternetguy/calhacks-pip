@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import type { Session } from '@supabase/supabase-js';
 import type { Status } from '@/modules/safety-native';
-import type { Group, GroupMember, Incident, IncidentEvent, Presence, Profile, Uuid } from './types';
+import type { CheckIn, Group, GroupMember, Incident, IncidentEvent, Presence, Profile, Uuid } from './types';
 
 export type PendingCheck = { phrase: string; deadlineMs: number } | null;
 export type SnatchAlert = { summary: string; lat?: number; lng?: number; atMs: number } | null;
@@ -29,7 +29,12 @@ type State = {
   dashboardEnabled: boolean;
   /** users with a phone registered (real sensors); null until loaded. Everyone else gets simulated data. */
   sensorUsers: Uuid[] | null;
+  /** friend check-ins I asked or was asked, plus my group-mates' (newest first) */
+  checkIns: CheckIn[];
+  /** friends whose key on the server no longer matches the one this phone pinned: re-verify in person */
+  keyChanged: Uuid[];
   set: (patch: Partial<State>) => void;
+  upsertCheckIn: (c: CheckIn) => void;
   upsertIncident: (i: Incident) => void;
   /** drop a deleted incident and its events */
   removeIncident: (id: Uuid) => void;
@@ -41,6 +46,7 @@ const initial = {
   session: null, profile: null, onboarded: false, status: null, pendingCheck: null, snatch: null, sosActive: false,
   groups: [], members: [], presence: {}, profiles: {}, incidents: [], events: {},
   callOption: null, dashboardEnabled: false, sensorUsers: null as Uuid[] | null,
+  checkIns: [] as CheckIn[], keyChanged: [] as Uuid[],
 };
 
 /**
@@ -52,6 +58,8 @@ export const NO_EVENTS: readonly IncidentEvent[] = [];
 export const useStore = create<State>((set) => ({
   ...initial,
   set: (patch) => set(patch),
+  upsertCheckIn: (c) =>
+    set((s) => ({ checkIns: [c, ...s.checkIns.filter((x) => x.id !== c.id)].sort((a, b) => b.created_at.localeCompare(a.created_at)) })),
   upsertIncident: (i) =>
     set((s) => ({ incidents: [i, ...s.incidents.filter((x) => x.id !== i.id)].sort((a, b) => b.opened_at.localeCompare(a.opened_at)) })),
   removeIncident: (id) =>

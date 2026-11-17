@@ -7,7 +7,8 @@
  *   friend can open released hour keys, decrypt location blobs, approve fallback unlocks (re-sealing
  *   their Shamir share) and recover K_day from approvals. All AADs follow CONTRACTS.md §5.
  * - Nothing is published from here: the web user never rotates a day key or uploads shares/blobs
- *   (that is the subject phone's job). `setGroup` only remembers member keys.
+ *   (that is the subject phone's job). `setGroups` only pins member keys (CONTRACTS §6).
+ * - Friends' live positions arrive encrypted (`locEnc`); `openLiveKeys` / `decryptLiveLocation` read them.
  */
 import type {
   ApproveUnlockInput,
@@ -16,6 +17,11 @@ import type {
   DecryptedLocation,
   GroupConfig,
   HomePlace,
+  KeyPin,
+  LiveKeyRow,
+  LiveLocEnc,
+  PinInput,
+  PinResult,
   Identity,
   NightMode,
   Permissions,
@@ -29,6 +35,7 @@ import type {
 } from './SafetyNative.types';
 import { MockSafetyNative } from './MockSafetyNative';
 import { loadWasm, type SafetyWasm, type WasmIdentity, type WasmShare } from './wasm';
+import { applyPin, signerKey } from './pinLogic';
 import { supabase } from '@/lib/supabase';
 
 // ---- byte helpers (base64 on the wire, Uint8Array into wasm)
@@ -51,6 +58,7 @@ function fromB64(s: string): Uint8Array {
  * non-extractable WebCrypto keys, which HPKE/Ed25519 via wasm cannot use. Clearing site data = new device.
  */
 const IDENTITY_KEY = 'safe.web.identity.v1';
+const PINS_KEY = 'safe.web.pins.v1';
 type StoredIdentity = Record<keyof WasmIdentity, string>;
 
 export class WebSafetyNative implements SafetyNativeModuleType {
@@ -176,15 +184,73 @@ export class WebSafetyNative implements SafetyNativeModuleType {
     };
   }
 
-  /** Friend-only: remember member keys. No day-key rotation / share upload — a browser never senses. */
-  async setGroup(g: GroupConfig) {
-    this.groups.set(g.groupId, g);
+  /** Friend-only: pin member keys. No day-key rotation / share upload: a browser never senses. */
+  async setGroups(groups: GroupConfig[]) {
+    const me = await this.uid().catch(() => null);
+    const keyChanged = new Set<string>();
+    this.groups.clear();
+    for (const g of groups) {
+      this.groups.set(g.groupId, g);
+      for (const m of g.members) {
+        if (m.userId === me) continue;
+        const r = await this.pinKeys({ userId: m.userId, x25519Pub: m.x25519Pub, ed25519Pub: m.ed25519Pub, verified: false });
+        if (r.status === 'changed') keyChanged.add(m.userId);
+      }
+    }
+    return { keyChanged: [...keyChanged] };
   }
+
+  // ---- key pinning (localStorage, like the identity) -------------------------------------------------
+  private pinMap(): Record<string, KeyPin> {
+    try { return JSON.parse(globalThis.localStorage?.getItem(PINS_KEY) ?? '{}') as Record<string, KeyPin>; } catch { return {}; }
+  }
+  async fingerprint(userId: string, x25519Pub: string, ed25519Pub: string) {
+    return (await this.w()).fingerprint(userId, fromB64(x25519Pub), fromB64(ed25519Pub));
+  }
+  async pinKeys(p: PinInput): Promise<PinResult> {
+    const before = this.pinMap();
+    const { pins, result } = applyPin(before, p, Date.now());
+    if (pins !== before) {
+      try { globalThis.localStorage?.setItem(PINS_KEY, JSON.stringify(pins)); } catch (e) { console.warn('[SafetyNative web] could not store pins', e); }
+    }
+    return result;
+  }
+  async getPins() { return Object.values(this.pinMap()); }
+
+  // ---- encrypted live location (CONTRACTS §7) ---------------------------------------------------------
+  private liveKeys = new Map<string, Uint8Array>();
+  async openLiveKeys(rows: LiveKeyRow[]) {
+    const [w, id] = await Promise.all([this.w(), this.loadIdentity()]);
+    const pins = this.pinMap();
+    let n = 0;
+    for (const r of rows) {
+      const k = `${r.ownerId}|${r.keyId}`;
+      if (this.liveKeys.has(k)) { n++; continue; }
+      const pin = pins[r.ownerId];
+      if (!pin) { console.warn(`[SafetyNative web] no pinned key for ${r.ownerId.slice(0, 8)}: live key ignored`); continue; }
+      try {
+        this.liveKeys.set(k, w.open_sealed(id.x25519Secret, fromB64(pin.ed25519Pub), fromB64(r.sealedB64), utf8(`live|${r.ownerId}|${r.keyId}`)));
+        n++;
+      } catch (e) { console.warn(`[SafetyNative web] live key from ${r.ownerId.slice(0, 8)} did not verify`, e); }
+    }
+    return n;
+  }
+  async decryptLiveLocation(ownerId: string, enc: LiveLocEnc): Promise<DecryptedLocation | null> {
+    const key = this.liveKeys.get(`${ownerId}|${enc.kid}`);
+    if (!key) return null;
+    try {
+      const l = (await this.w()).decrypt_location(key, ownerId, `live:${enc.kid}`, enc.seq, fromB64(enc.ct));
+      return { lat: l.lat, lng: l.lng, accuracyM: l.accuracyM, tMs: l.tMs };
+    } catch { return null; }
+  }
+  async syncSticky() {}
+  async clearSticky() {}
 
   /** released_keys row → cache K_h. aad = "hour|{epochId}|{hourIndex}" (CONTRACTS §5). */
   async openReleasedKey(r: ReleasedKeyInput) {
     const [w, id] = await Promise.all([this.w(), this.loadIdentity()]);
-    const key = w.open_sealed(id.x25519Secret, fromB64(r.senderEd25519Pub), fromB64(r.sealedB64), utf8(`hour|${r.epochId}|${r.hourIndex}`));
+    const signer = signerKey(this.pinMap(), r.subjectUserId, r.senderEd25519Pub);
+    const key = w.open_sealed(id.x25519Secret, fromB64(signer), fromB64(r.sealedB64), utf8(`hour|${r.epochId}|${r.hourIndex}`));
     if (key.length !== 32) throw new Error(`released key must be 32 bytes, got ${key.length}`);
     this.hourKeys.set(`${r.subjectUserId}|${r.epochId}|${r.hourIndex}`, key);
   }
@@ -226,7 +292,7 @@ export class WebSafetyNative implements SafetyNativeModuleType {
     if (error) throw new Error(`key_shares: ${error.message}`);
     if (!data) throw new Error('No escrowed share for this epoch was sealed to this device');
     const row = data as { share_index: number; sealed: string; sender_ed25519_pub: string };
-    const share = w.open_sealed(id.x25519Secret, fromB64(row.sender_ed25519_pub), fromB64(row.sealed), utf8(`share|${r.epochId}|${me}`));
+    const share = w.open_sealed(id.x25519Secret, fromB64(signerKey(this.pinMap(), r.subjectUserId, row.sender_ed25519_pub)), fromB64(row.sealed), utf8(`share|${r.epochId}|${me}`));
     const payload = new Uint8Array(1 + share.length);
     payload[0] = row.share_index & 0xff;
     payload.set(share, 1);
@@ -241,7 +307,8 @@ export class WebSafetyNative implements SafetyNativeModuleType {
     const aad = utf8(`approval|${r.subjectUserId}|${r.epochId}`);
     const shares: WasmShare[] = [];
     for (const s of r.sealedShares) {
-      const bytes = w.open_sealed(id.x25519Secret, fromB64(s.approverEd25519Pub), fromB64(s.sealedB64), aad);
+      const signer = s.approverId ? signerKey(this.pinMap(), s.approverId, s.approverEd25519Pub) : s.approverEd25519Pub;
+      const bytes = w.open_sealed(id.x25519Secret, fromB64(signer), fromB64(s.sealedB64), aad);
       if (bytes.length < 2) throw new Error('approval payload too short');
       shares.push({ index: bytes[0], data: bytes.slice(1) });
     }

@@ -4,8 +4,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export interface PushInput {
-  incidentId: string;
-  /** incident_events.kind or incident level, e.g. 'heads_up', 'ring', 'offline' */
+  /** the incident this is about (alerts, ring, resolved) */
+  incidentId?: string;
+  /** the friend check-in this is about (checkin_request / checkin_answered / checkin_cancelled) */
+  checkInId?: string;
+  /** incident_events.kind or incident level, e.g. 'heads_up', 'ring', 'offline', or a check-in kind */
   kind: string;
   title: string;
   body: string;
@@ -150,21 +153,31 @@ export async function makeGoogleJwt(opts: {
 
 // ---------------------------------------------------------------- payloads
 /** Where the app navigates when the user taps the notification (expo-router path). */
-export function defaultRoute(input: Pick<PushInput, "incidentId" | "kind">): string {
-  return `/incident/${input.incidentId}`;
+export function defaultRoute(input: Pick<PushInput, "incidentId" | "checkInId" | "kind">): string {
+  if (input.incidentId) return `/incident/${input.incidentId}`;
+  if (input.checkInId) return `/checkin/${input.checkInId}`;
+  return "/home";
+}
+
+/** Groups pushes about the same thing (APNs thread / collapse id, FCM collapse key, Android notification tag). */
+export function threadKey(input: Pick<PushInput, "incidentId" | "checkInId" | "kind">): string {
+  return input.incidentId ?? (input.checkInId ? `ci:${input.checkInId}` : input.kind);
 }
 
 /**
- * Flat string map shared by APNs and FCM. Always carries `incidentId`, `kind`
- * and `route` so the app can react (ring the phone, deep-link) without
- * trusting the human-readable title/body. Caller-supplied `data` wins.
+ * Flat string map shared by APNs and FCM. Always carries `pip: "1"`, `kind`
+ * and `route` (plus `incidentId` / `checkInId` when set) so the app can react
+ * (post a sticky notification, ring the phone, deep-link) without trusting the
+ * human-readable title/body. Caller-supplied `data` wins.
  */
 export function stringifyData(input: PushInput): Record<string, string> {
   const out: Record<string, string> = {
-    incidentId: input.incidentId,
+    pip: "1",
     kind: input.kind,
     route: defaultRoute(input),
   };
+  if (input.incidentId) out.incidentId = input.incidentId;
+  if (input.checkInId) out.checkInId = input.checkInId;
   for (const [k, v] of Object.entries(input.data ?? {})) {
     if (v === undefined || v === null) continue;
     out[k] = typeof v === "string" ? v : JSON.stringify(v);
@@ -186,7 +199,7 @@ export function buildApnsPayload(input: PushInput): Record<string, unknown> {
     sound: critical ? { critical: 1, name: APNS_SOUND_CRITICAL, volume: 1.0 } : APNS_SOUND_DEFAULT,
     "interruption-level": critical ? "critical" : "time-sensitive",
     "relevance-score": critical ? 1.0 : 0.8,
-    "thread-id": input.incidentId,
+    "thread-id": threadKey(input),
     category: input.kind,
     "mutable-content": 1,
   };
@@ -200,33 +213,30 @@ export function buildApnsHeaders(input: PushInput, topic: string, jwt: string): 
     "apns-push-type": "alert",
     "apns-priority": "10",
     "apns-expiration": "0",
-    "apns-collapse-id": `${input.incidentId}:${input.kind}`.slice(0, 64),
+    "apns-collapse-id": `${threadKey(input)}:${input.kind}`.slice(0, 64),
     "content-type": "application/json",
   };
 }
 
 export const FCM_CHANNEL = "alarm";
 
-/** FCM v1 `message` object for one token. */
+/**
+ * FCM v1 `message` object for one token. Data-only on purpose: Android then always hands it to the app
+ * (PipMessagingService), even in the background or after the app was swiped away, and the app posts the
+ * notification itself, sticky until it is handled (an answered check-in, a resolved incident). A `notification`
+ * block would be drawn by the system as a plain, swipeable notification the app never sees.
+ * `title` / `body` / `critical` / `channel` ride in `data`.
+ */
 export function buildFcmMessage(token: string, input: PushInput): Record<string, unknown> {
   const critical = !!input.critical;
   return {
     message: {
       token,
-      notification: { title: input.title, body: input.body },
-      data: { ...stringifyData(input), critical: String(critical), title: input.title, body: input.body },
+      data: { ...stringifyData(input), critical: String(critical), title: input.title, body: input.body, channel: FCM_CHANNEL },
       android: {
         priority: "HIGH",
         ttl: "600s",
-        collapse_key: `${input.incidentId}:${input.kind}`.slice(0, 64),
-        notification: {
-          channel_id: FCM_CHANNEL,
-          sound: critical ? "alarm" : "default",
-          notification_priority: critical ? "PRIORITY_MAX" : "PRIORITY_HIGH",
-          visibility: "PUBLIC",
-          default_vibrate_timings: true,
-          tag: input.incidentId,
-        },
+        collapse_key: `${threadKey(input)}:${input.kind}`.slice(0, 64),
       },
     },
   };

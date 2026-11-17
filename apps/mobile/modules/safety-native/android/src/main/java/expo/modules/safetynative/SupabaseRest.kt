@@ -77,6 +77,7 @@ class SupabaseRest(private val prefs: Prefs) {
     val q = onConflict?.let { "?on_conflict=$it" } ?: ""
     request("/rest/v1/$table$q", "POST", row, "resolution=merge-duplicates,return=minimal")
   }
+  fun delete(table: String, filter: String) { request("/rest/v1/$table?$filter", "DELETE", null, "return=minimal") }
   fun patch(table: String, filter: String, patch: JSONObject) { request("/rest/v1/$table?$filter", "PATCH", patch, "return=minimal") }
   fun select(table: String, query: String): JSONArray = JSONArray(request("/rest/v1/$table?$query", "GET", null, null) ?: "[]")
   fun rpc(fn: String, args: JSONObject): String? = request("/rest/v1/rpc/$fn", "POST", args, null)

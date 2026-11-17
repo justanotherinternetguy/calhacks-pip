@@ -17,6 +17,9 @@ import type {
   Subscription,
   TelemetryCollect,
   TelemetryStatus,
+  KeyPin,
+  PinInput,
+  PinResult,
 } from './SafetyNative.types';
 
 type Listener = (e: never) => void;
@@ -205,11 +208,32 @@ export class MockSafetyNative implements SafetyNativeModuleType {
     return { seconds };
   }
   async recordTypingPractice() {}
-  async getIdentity() {
-    const fp = Array.from({ length: 8 }, (_, i) => (this.userId.charCodeAt(i % this.userId.length) * 2654435761 % 65536).toString(16).padStart(4, '0')).join('-');
-    return { userId: this.userId, x25519Pub: btoa('mock-x25519-' + this.userId), ed25519Pub: btoa('mock-ed25519-' + this.userId), fingerprint: fp };
+  private mockFp(userId: string) {
+    return Array.from({ length: 8 }, (_, i) => (userId.charCodeAt(i % userId.length) * 2654435761 % 65536).toString(16).padStart(4, '0')).join('-');
   }
-  async setGroup() {}
+  async getIdentity() {
+    return { userId: this.userId, x25519Pub: btoa('mock-x25519-' + this.userId), ed25519Pub: btoa('mock-ed25519-' + this.userId), fingerprint: this.mockFp(this.userId) };
+  }
+  async setGroups() { return { keyChanged: [] as string[] }; }
+  // Key pinning: in memory (the mock has no real keys; nothing is ever sealed with them).
+  private pins = new Map<string, KeyPin>();
+  async fingerprint(userId: string) { return this.mockFp(userId); }
+  async pinKeys(p: PinInput): Promise<PinResult> {
+    const cur = this.pins.get(p.userId);
+    const pin = (verified: boolean): KeyPin => ({ userId: p.userId, x25519Pub: p.x25519Pub, ed25519Pub: p.ed25519Pub, verified, pinnedAtMs: Date.now() });
+    if (!cur) { this.pins.set(p.userId, pin(p.verified)); return { status: 'new', pin: this.pins.get(p.userId)! }; }
+    if (cur.x25519Pub === p.x25519Pub && cur.ed25519Pub === p.ed25519Pub) {
+      if (p.verified && !cur.verified) this.pins.set(p.userId, pin(true));
+      return { status: 'same', pin: this.pins.get(p.userId)! };
+    }
+    if (p.replace && p.verified) { this.pins.set(p.userId, pin(true)); return { status: 'changed', pin: this.pins.get(p.userId)! }; }
+    return { status: 'changed', pin: cur };
+  }
+  async getPins() { return [...this.pins.values()]; }
+  async openLiveKeys() { return 0; }
+  async decryptLiveLocation() { return null; }
+  async syncSticky() {}
+  async clearSticky() {}
   async openReleasedKey() {}
   async decryptLocations(_s: string, blobs: { seq: number }[]) {
     // fake a short walking trail around a campus-ish point

@@ -6,9 +6,9 @@ import { Brand, CheckMark, StepNumber, T } from '@/components/pip/kit';
 import { ht, ui } from '@/lib/theme';
 
 const STEPS: { fill: string; title: string; text: string }[] = [
-  { fill: ht.sky, title: 'It starts on its own', text: 'Night mode turns on when you leave home in the evening. You don’t have to remember to start it.' },
-  { fill: ht.butter, title: 'It asks you first', text: 'If your walking gets unsteady, you fall and stay still, or there’s a commotion, your phone asks “you okay?”' },
-  { fill: ht.lilac, title: 'Then your friends', text: 'If you don’t answer, your friends get a heads-up. If you still don’t answer, pip shares your location with them.' },
+  { fill: ht.sky, title: 'Friends check on each other', text: 'Tap “Ask” and your friend’s phone asks “you okay?”. It stays on their screen until they answer.' },
+  { fill: ht.butter, title: 'No answer? The group knows', text: 'If they don’t answer in 10 minutes, everyone in your group gets an alert, so nobody gets left behind.' },
+  { fill: ht.lilac, title: 'Your phone can ask too', text: 'With night mode on, a fall or a commotion makes your phone ask “you okay?” before it tells your friends.' },
   { fill: ht.coral, title: 'Friends decide', text: 'They call you, come find you, or ring campus safety. pip doesn’t call anyone on its own.' },
 ];
 
@@ -31,7 +31,7 @@ export default function Welcome() {
       </View>
       <View style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start', marginTop: 2 }}>
         <CheckMark />
-        <P muted style={{ flex: 1, fontSize: 14.5, lineHeight: 20 }}>Your phone encrypts your location. We can’t read it, and no single friend can open it alone.</P>
+        <P muted style={{ flex: 1, fontSize: 14.5, lineHeight: 20 }}>Your phone encrypts your location for your friends only. We can’t read it. You add friends in person, so nobody can sneak into your group.</P>
       </View>
       <Button title="Set up (3 minutes)" onPress={() => router.push('/onboarding/permissions')} />
     </Screen>

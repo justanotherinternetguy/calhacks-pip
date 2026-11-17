@@ -1,6 +1,8 @@
 # Plan: Friend-group night-out safety app (iOS + Android, production v1)
 
 ## Context
+**Update (2026-11):** the main goal is now **friends checking in on each other**: a friend taps "Ask", the other phone shows a sticky "You okay?" until it is answered, and no answer in 10 minutes alerts the whole group (docs/CONTRACTS.md §13). Groups are joined only in person with one-time invite QR codes, keys are pinned on every phone, and live location is encrypted to friends. Passive detection (below) stays as a secondary layer that can start a check-in on its own. There is no LLM anywhere in the product.
+
 Every existing safety app needs the person in danger to act (press a button, set a timer, share a location). This app runs passively, notices when a user can't ask for help (bad gait drift, hard fall then no movement, commotion, phone snatched), gives them a chance to say "I'm fine", and then alerts their trusted friends. Location stays end-to-end encrypted until the danger estimate is high, and no single party (one friend, or the company) can unlock it. Friends decide what to do; the app never calls police itself.
 
 `/home/thinkies/Git/safe` is empty, so this is a greenfield build. Decisions made: **Expo (React Native) UI + Swift/Kotlin native sensing + shared Rust core**, **Supabase backend**, **production v1 scope**, **mic duty-cycled only during night mode**.

@@ -21,6 +21,8 @@ export function watchdogMessage(inc: IncidentRow, displayName: string | null | u
       return { title: `${name}'s phone went offline`, body: inc.summary || `${name}'s phone stopped sending updates.`, critical: true };
     case "battery_dying":
       return { title: `${name}'s phone is about to die`, body: inc.summary || `${name}'s battery is almost empty.`, critical: true };
+    case "missed_check_in":
+      return { title: `${name} didn't answer a check-in`, body: `${name} ${inc.summary || "didn't answer a check-in"}. Try calling them.`, critical: true };
     default:
       return { title: `${name} might not be okay`, body: inc.summary || "", critical: inc.level === "unlocked" || inc.level === "sos" || inc.level === "snatch" };
   }

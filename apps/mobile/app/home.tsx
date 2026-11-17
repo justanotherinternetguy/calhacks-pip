@@ -10,6 +10,7 @@ import { FriendsDrawer } from '@/components/pip/FriendsDrawer';
 import { FriendsList } from '@/components/pip/FriendsList';
 import { FriendsMap, type MapPerson } from '@/components/pip/FriendsMap';
 import { HoldForHelp } from '@/components/pip/HoldForHelp';
+import { CheckOnFriends, QuestionsForMe } from '@/components/pip/CheckOnFriends';
 import { Brand, Btn, Chip, D, Dot, Hairline, Handle, Icon, T } from '@/components/pip/kit';
 import { whereIs } from '@/components/pip/where';
 import { usePeople, type Person } from '@/components/pip/usePeople';
@@ -23,9 +24,9 @@ import { ht, ui } from '@/lib/theme';
 const MAX_COLUMN = 520;
 
 /**
- * Home. The map fills the screen: you in sky, friends placed where they are, the group's zone in lilac. A paper sheet
- * rises over the bottom with your own check-in or alert (if any), the hold-for-help button and "I'm okay". The friends
- * sidebar opens with how your friends stand ("Keep an eye on …"), then lists everyone's status.
+ * Home. Friends checking in on each other comes first: a friend's "You okay?" to you (answer in one tap), then your
+ * friends with a one-tap "Ask". The map fills the screen behind; the sheet keeps your own alert (if any), the
+ * hold-for-help button and "I'm okay". Passive detection (night mode) is a pill in the header.
  */
 export default function Home() {
   const router = useRouter();
@@ -118,6 +119,7 @@ export default function Home() {
 
         <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) + 10 }]} onLayout={(e) => setSheetH(Math.round(e.nativeEvent.layout.height))}>
           <Handle />
+          <QuestionsForMe />
           {line ? (
             <>
               <Pressable
@@ -145,6 +147,7 @@ export default function Home() {
             </Pressable>
           )}
 
+          {!line && <CheckOnFriends others={others} onOpen={open} max={3} />}
           <HoldForHelp active={alarmed} pending={standDown.state === 'pending'} onTrigger={onSos} onStandDown={() => void standDown.run()} />
 
           <Btn

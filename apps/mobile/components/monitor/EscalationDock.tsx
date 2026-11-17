@@ -14,11 +14,12 @@ import * as actions from '@/lib/incidentActions';
 import { fmtClock, fmtCountdown } from '@/components/telemetry/labels';
 
 /** Server incident levels where friends are involved (the dock shows). */
-export const ESCALATED_LEVELS = new Set<Incident['level']>(['heads_up', 'unlocked', 'snatch', 'sos', 'offline', 'battery_dying']);
+export const ESCALATED_LEVELS = new Set<Incident['level']>(['heads_up', 'unlocked', 'snatch', 'sos', 'offline', 'battery_dying', 'missed_check_in']);
 /** model-v1.toml thresholds.call_option_s: "not resolved in time" once an incident is open this long. */
 const OVERDUE_MS = 600_000;
 const LEVEL_LABEL: Partial<Record<Incident['level'], string>> = {
   heads_up: 'Heads-up', unlocked: 'Location unlocked', snatch: 'Phone snatch', sos: 'SOS', offline: 'Phone offline', battery_dying: 'Battery dying',
+  missed_check_in: 'Missed check-in',
 };
 
 type Props = {

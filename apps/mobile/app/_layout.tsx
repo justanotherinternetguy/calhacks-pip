@@ -99,14 +99,15 @@ export default function RootLayout() {
         <Stack.Screen name="home" options={{ headerShown: false }} />
         <Stack.Screen name="friends" options={{ headerShown: false }} />
         <Stack.Screen name="friend/[id]" options={{ headerShown: false }} />
-        <Stack.Screen name="groups" options={{ title: 'Groups' }} />
+        <Stack.Screen name="groups" options={{ title: 'Friends & groups' }} />
         <Stack.Screen name="history" options={{ title: 'History' }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
         <Stack.Screen name="check-in" options={{ presentation: 'fullScreenModal', title: 'You okay?', headerShown: false }} />
         <Stack.Screen name="snatch" options={{ presentation: 'fullScreenModal', title: 'Snatch alert', headerShown: false }} />
         <Stack.Screen name="debug/inject" options={{ headerShown: false }} />
         <Stack.Screen name="debug/friend-view" options={{ title: 'Friend view (demo)' }} />
-        <Stack.Screen name="scan" options={{ presentation: 'modal', title: 'Scan friend QR' }} />
+        <Stack.Screen name="scan" options={{ presentation: 'modal', title: 'Scan a code' }} />
+        <Stack.Screen name="checkin/[id]" options={{ presentation: 'modal', title: 'Check-in' }} />
         <Stack.Screen name="incident/[id]" options={{ title: 'Incident', headerShown: false }} />
         <Stack.Screen name="monitor" options={{ headerShown: false }} />
         <Stack.Screen name="collect" options={{ headerShown: false }} />

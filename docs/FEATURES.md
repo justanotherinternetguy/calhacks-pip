@@ -375,29 +375,8 @@ expiry). Uploads and telemetry thus survive a sleeping JS runtime, a backgrounde
   (10 min), the dock turns red, beeps and opens itself. It has all friend actions, and an inline map once
   keys arrive. A red record in the live log opens it at once, before the database row lands.
 - **Delete all** button: deletes the subject's incidents for good. It removes the server rows (with their events,
-  unlock requests and released keys), wipes the on-device log, resets sensing and drops the AI read. Any group
+  unlock requests and released keys), wipes the on-device log and resets sensing. Any group
   member can use it. Only the subject's own delete also removes their audit-log rows.
-- **AI read of the incident log** (right column, advisory only):
-  - The monitor first turns the log into a structured timeline: kinds, tiers, families, times, gaps,
-    durations, bursts, overlaps, a 15-minute trend, and matched ordered **chains**. The chains are
-    impact → scream within 2 min, fall → down → missed check-in → snoring, impaired → separated → vehicle,
-    and grab → moving away. Reassuring chains, like a recovered fall or a lone drop, are also matched. The
-    timeline also shows which step would come next. No measurements, location or audio go in.
-  - The friend's browser sends it to **Claude** (default `claude-haiku-5-5`, structured outputs) when
-    `EXPO_PUBLIC_ANTHROPIC_API_KEY` is set. Otherwise, or on failure, it goes to a free **OpenRouter**
-    model (default `nvidia/nemotron-3.5-lightning:free`, with fallbacks).
-  - The result has a risk level and a 0 to 100 score (low / elevated / high / critical), a trajectory and
-    a confidence. It also lists factors up and down, how incidents chain, the innocent explanation, what
-    would change the read, and short pop-up reminders. The engine's own escalation sets a floor: heads-up
-    ⇒ at least high, unlocked / snatch ⇒ critical.
-  - The monitor asks again only when the picture changes. It debounces the request and asks at most every
-    45 s unless escalation rises. It caches the last read per person.
-  - **The score eases while things stay calm**, without a new request (`riskDecay.ts`): it halves every
-    15 calm minutes, and each minute of normal walking (the phone's `calmWalkS`: the person's usual gait,
-    every unsteadiness metric in range) counts as 3. It holds while any watch or danger incident is open,
-    a check-in is pending or an alert runs, and never goes below the engine's floor. The easing shows as a
-    "Calm for … min" step in the reasoning, and the next read is told to start from the eased score.
-  - Both keys end up in the web bundle by design. Use a low spend limit or a free-tier key.
 
 ---
 

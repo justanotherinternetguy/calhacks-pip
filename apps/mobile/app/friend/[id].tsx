@@ -9,6 +9,7 @@ import { fmtDist, whereIs } from '@/components/pip/where';
 import { Btn, Caps, Chip, D, Hairline, Handle, Icon, IconBtn, T, TextAction } from '@/components/pip/kit';
 import { Timeline } from '@/components/pip/Timeline';
 import { NightModeSwitch } from '@/components/pip/NightModeSwitch';
+import { AskOkay } from '@/components/pip/AskOkay';
 import { usePeople, type Person } from '@/components/pip/usePeople';
 import { ago, isActive, serverIncidentLine } from '@/lib/concern';
 import { useFriends, walkMinutes } from '@/lib/friends';
@@ -64,7 +65,7 @@ export default function FriendScreen() {
             : c.saidOkay ? `${f.name} says they’re okay.` : `${f.name} is out.`;
   const where = whereIs(p);
   const sub = f.isMe
-    ? f.nightMode ? 'Your location stays sealed on this phone.' : 'Night mode turns on when you leave home in the evening.'
+    ? 'Only your friends can see where you are: your location is encrypted on this phone for them.'
     : [c.headline, where ? `${where}${p.distM != null ? ` · ${walkMinutes(p.distM)} min walk` : ''}` : null, f.simulated ? 'simulated' : null].filter(Boolean).join(' · ');
 
   return (
@@ -147,8 +148,9 @@ function FriendActions({ p, onFriends }: { p: Person; onFriends: () => void }) {
       </View>
       <View style={{ flexDirection: 'row' }}>
         <TextAction title="All friends" onPress={onFriends} color={ui.quiet} style={{ flex: 1 }} />
+        <TextAction title={`Go to ${f.name}${p.distM != null ? ` · ${fmtDist(p.distM)}` : ''}`} onPress={go} color={f.loc ? ui.link : ui.quiet} style={{ flex: 1 }} />
       </View>
-      <Btn kind="main" size={56} iconRight={Icon.arrow(ht.cream)} title={`Go to ${f.name}${p.distM != null ? ` · ${fmtDist(p.distM)}` : ''}`} onPress={go} disabled={!f.loc} style={{ marginTop: 2 }} />
+      <AskOkay friendId={f.id} name={f.name} simulated={f.simulated} />
     </View>
   );
 }

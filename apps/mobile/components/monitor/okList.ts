@@ -1,5 +1,6 @@
 // Pure list logic for the monitor's "Confirmed OK" log (okConfirmations.ts). Type imports only, so node --test runs it.
-import type { OkConfirmation } from './riskAnalysis';
+/** The subject said they are OK: answered a check-in (fingerprint / face / PIN) or tapped "I'm okay". */
+export type OkConfirmation = { atMs: number; how: 'check_in' | 'tapped' };
 
 const MAX = 50;
 /** Two reports closer than this are the same confirmation (an answered check-in can also send "I'm okay"). */

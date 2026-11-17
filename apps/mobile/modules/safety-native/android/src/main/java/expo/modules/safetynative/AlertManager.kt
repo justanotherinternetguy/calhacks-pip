@@ -76,14 +76,26 @@ class AlertManager(private val ctx: Context, private val rt: SafetyRuntime) {
     return PendingIntent.getActivity(ctx, 10, i, flags())
   }
 
-  /** Persistent low-priority notification required by the foreground service. */
-  fun serviceNotification(night: Boolean): Notification =
-    NotificationCompat.Builder(ctx, CH_SENSING)
+  /**
+   * Persistent low-priority notification required by the foreground service. It leads with friend check-ins
+   * (an open question to you, a friend's alert, or who you are waiting on); night mode is the second line.
+   */
+  fun serviceNotification(night: Boolean): Notification {
+    val friends = rt.friendAlerts.summary()
+    val mode = if (night) "Night mode on" else "Night mode is ready"
+    val ask = PendingIntent.getActivity(
+      ctx, 11,
+      Intent(Intent.ACTION_VIEW, android.net.Uri.parse("safe://home")).setPackage(ctx.packageName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+      flags(),
+    )
+    return NotificationCompat.Builder(ctx, CH_SENSING)
       .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-      .setContentTitle(if (night) "Night mode on" else "Night mode is ready")
-      .setContentText(if (night) "Watching for falls and check-ins" else "It starts when you leave home in the evening")
-      .setOngoing(true).setSilent(true).setContentIntent(launcherIntent())
+      .setContentTitle(friends ?: "Your friends can check on you")
+      .setContentText(if (friends != null) mode else if (night) "$mode · watching for falls" else "$mode · it starts when you head out")
+      .setOngoing(true).setSilent(true).setOnlyAlertOnce(true).setContentIntent(launcherIntent())
+      .addAction(0, "Check on a friend", ask)
       .setCategory(NotificationCompat.CATEGORY_SERVICE).build()
+  }
 
   /**
    * "You okay?" with what was detected ("A possible fall"). Full-screen on the lock screen when the OS allows it

@@ -77,7 +77,7 @@ export default function IncidentScreen() {
   useEffect(() => {
     if (!req || !subject || req.requester_id !== me || approvals.length < k || trail.length) return;
     (async () => {
-      const r = await SafetyNative.recoverFromShares({ subjectUserId: subject, epochId: req.epoch_id, sealedShares: approvals.map((a) => ({ sealedB64: a.sealed_share, approverEd25519Pub: a.approver_ed25519_pub })) });
+      const r = await SafetyNative.recoverFromShares({ subjectUserId: subject, epochId: req.epoch_id, sealedShares: approvals.map((a) => ({ sealedB64: a.sealed_share, approverEd25519Pub: a.approver_ed25519_pub, approverId: a.approver_id })) });
       if (!r.ok) return;
       const blobs = await listLocationBlobs(subject, req.epoch_id);
       const pts = await SafetyNative.decryptLocations(subject, blobs.map((b) => ({ epochId: b.epoch_id, seq: Number(b.seq), hourIndex: b.hour_index, ciphertextB64: b.ciphertext })));
@@ -101,11 +101,12 @@ export default function IncidentScreen() {
   const found = act('found', () => (isSubject ? event('found').then(() => rpc.resolveIncident(id)) : actions.markSafe(ctx!)), 'Marked safe.');
   const requestUnlock = act('unlock', async () => {
     if (!subject || !incident) return;
-    const epoch = await getActiveEpoch(subject, incident.group_id);
+    const epoch = await getActiveEpoch(subject);
     if (!epoch) throw new Error('No active epoch for this friend');
     // Server checks the incident is offline/battery_dying (refuses otherwise), then we open the request row.
     const res = await fn.unlock({ incidentId: id });
-    setK(res.k ?? epoch.k ?? group?.threshold_k ?? 2);
+    // The epoch's k is what the shares were split with (clamped to the members at the time), not the group setting.
+    setK(epoch.k || res.k || group?.threshold_k || 2);
     const existing = (await listUnlockRequests(id)).find((r) => r.status === 'open');
     if (existing) setReq(existing);
     else {
@@ -237,11 +238,11 @@ export default function IncidentScreen() {
 
 const LEVEL_LINE: Record<string, string> = {
   check: 'Check-in pending', heads_up: 'Heads-up', unlocked: 'Location shared', sos: 'Called for help', snatch: 'Phone snatched',
-  offline: 'Phone offline', battery_dying: 'Battery dying', resolved: 'Found safe',
+  offline: 'Phone offline', battery_dying: 'Battery dying', missed_check_in: 'Didn’t answer a check-in', resolved: 'Found safe',
 };
 const LEVEL_HUE: Record<string, { text: string }> = {
   check: { text: ht.butterDeep }, battery_dying: { text: ht.butterDeep }, offline: { text: ht.butterDeep },
-  heads_up: { text: ht.coralDeep }, unlocked: { text: ht.coralDeep }, sos: { text: ht.coralDeep }, snatch: { text: ht.coralDeep },
+  heads_up: { text: ht.coralDeep }, unlocked: { text: ht.coralDeep }, sos: { text: ht.coralDeep }, snatch: { text: ht.coralDeep }, missed_check_in: { text: ht.coralDeep },
   resolved: { text: ht.mintDeep },
 };
 

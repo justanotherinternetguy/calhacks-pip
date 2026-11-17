@@ -9,10 +9,11 @@ import { jwtExpMs, readStoredSession, supabase } from './supabase';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from './env';
 import { setDemoFlag } from './demo';
 import { registerPushToken, unregisterPushToken } from './push';
-import { fn, listMyGroups, getDevicePlatforms, getDevicesForUsers, getProfiles, getPresence, listIncidents, subscribe, upsertDevice, rpc } from './db';
+import { fn, listMyGroups, getDevicePlatforms, getDevicesForUsers, getProfiles, getPresence, listCheckIns, listIncidents, listLiveKeysForMe, subscribe, upsertDevice, rpc } from './db';
 import { readDashboardEnabled, useStore } from './store';
 import { markOkay, sendOkay } from './telemetry';
-import type { Incident, IncidentEvent, Presence } from './types';
+import { stickyItems } from './sticky';
+import type { CheckIn, Incident, IncidentEvent, Presence } from './types';
 
 let configuredFor: string | null = null;
 let dashboardPrefLoaded = false;
@@ -127,6 +128,8 @@ function wireEvents() {
     SafetyNative.addListener('callOption', (e) => s({ callOption: { summary: e.summary, atMs: Date.now() } })),
     // Native rotated the JWT pair (SessionKeeper): adopt it, or supabase-js would later refresh with a dead token.
     // setSession fires TOKEN_REFRESHED → onAuthSession → SafetyNative.setSession(same pair), which native ignores.
+    // A pip push arrived (native already posted the sticky notification): pull the new state now.
+    SafetyNative.addListener('pushReceived', () => { void refreshAll(); }),
     SafetyNative.addListener('sessionRefreshed', (ns) => {
       if (ns.userId !== useStore.getState().session?.user.id) return;
       void supabase.auth.setSession({ access_token: ns.accessToken, refresh_token: ns.refreshToken }).then(({ error }) => { if (error) console.warn('sessionRefreshed', error.message); });
@@ -160,37 +163,72 @@ export async function refreshAll() {
     });
     await pushGroupsToNative(userId);
   } catch (e) { console.warn('refreshAll', e); }
-  await refreshIncidents();
+  await Promise.all([refreshIncidents(), refreshCheckInsAndSticky(), refreshLiveKeys(userId)]);
 }
 
-/** Hands each active group's member keys to native (drives day-key rotation + share upload). */
+/**
+ * Hands all my groups' member keys to native in one call, oldest membership first. Native pins unseen keys, leaves
+ * out keys that changed since they were pinned (reported back for re-verification), runs escrow on the first group
+ * and seals its live location key to every friend.
+ */
 async function pushGroupsToNative(userId: string) {
   const { groups, members } = useStore.getState();
-  for (const g of groups) {
-    const active = members.filter((m) => m.group_id === g.id && m.status === 'active' && m.user_id !== userId);
-    const devices = await getDevicesForUsers(active.map((m) => m.user_id));
-    await SafetyNative.setGroup({
-      groupId: g.id, thresholdK: g.threshold_k,
-      members: devices.filter((d) => d.x25519_pub && d.ed25519_pub).map((d) => ({ userId: d.user_id, deviceId: d.id, x25519Pub: d.x25519_pub!, ed25519Pub: d.ed25519_pub! })),
-    }).catch((e) => console.warn('setGroup', e));
-  }
+  const ids = [...new Set(members.filter((m) => m.user_id !== userId).map((m) => m.user_id))];
+  const devices = await getDevicesForUsers(ids);
+  const keyed = devices.filter((d) => d.x25519_pub && d.ed25519_pub);
+  try {
+    const { keyChanged } = await SafetyNative.setGroups(groups.map((g) => {
+      const inGroup = new Set(members.filter((m) => m.group_id === g.id && m.user_id !== userId).map((m) => m.user_id));
+      return {
+        groupId: g.id, thresholdK: g.threshold_k,
+        members: keyed.filter((d) => inGroup.has(d.user_id)).map((d) => ({ userId: d.user_id, deviceId: d.id, x25519Pub: d.x25519_pub!, ed25519Pub: d.ed25519_pub! })),
+      };
+    }));
+    useStore.getState().set({ keyChanged });
+  } catch (e) { console.warn('setGroups', e); }
+}
+
+/** Friends' sealed live keys → native, so their encrypted map positions can be read. */
+async function refreshLiveKeys(userId: string) {
+  try {
+    const rows = await listLiveKeysForMe(userId);
+    await SafetyNative.openLiveKeys(rows.map((r) => ({ ownerId: r.owner_id, keyId: r.key_id, sealedB64: r.sealed })));
+  } catch (e) { console.warn('live keys', e); }
+}
+
+/** Check-ins from the server, then the sticky notifications this phone should show (FriendAlerts.kt). */
+export async function refreshCheckInsAndSticky() {
+  try { useStore.getState().set({ checkIns: await listCheckIns() }); } catch (e) { console.warn('checkIns', e); }
+  syncSticky();
+}
+
+export function syncSticky() {
+  const { session, checkIns, incidents, profiles } = useStore.getState();
+  if (!session) return;
+  const nameOf = (id: string) => profiles[id]?.display_name || 'A friend';
+  void SafetyNative.syncSticky(stickyItems(session.user.id, checkIns, incidents, nameOf, Date.now())).catch(() => {});
 }
 
 export async function refreshIncidents() {
   const { session, groups } = useStore.getState();
   if (!session) return;
   try { useStore.getState().set({ incidents: await listIncidents(groups.map((g) => g.id), session.user.id) }); } catch (e) { console.warn('incidents', e); }
+  syncSticky();
 }
 
 function wireRealtime(userId: string) {
   teardownRealtime();
   const st = useStore.getState();
   channels = [
-    subscribe('incidents', undefined, (row: Incident, ev) => (ev === 'DELETE' ? st.removeIncident(row.id) : st.upsertIncident(row))),
+    subscribe('incidents', undefined, (row: Incident, ev) => { if (ev === 'DELETE') st.removeIncident(row.id); else st.upsertIncident(row); syncSticky(); }),
+    subscribe('check_ins', undefined, (row: CheckIn) => { st.upsertCheckIn(row); syncSticky(); }),
+    // A friend rotated or newly sealed their live key to me.
+    subscribe('live_keys', `recipient_id=eq.${userId}`, () => void refreshLiveKeys(userId)),
     subscribe('incident_events', undefined, (row: IncidentEvent, ev) => ev === 'INSERT' && st.addEvent(row)),
     subscribe('presence', undefined, (row: Presence) =>
       useStore.setState((s) => ({ presence: { ...s.presence, [row.group_id]: [row, ...(s.presence[row.group_id] ?? []).filter((p) => p.user_id !== row.user_id)] } }))),
-    subscribe('group_members', `user_id=eq.${userId}`, () => void refreshAll()),
+    // Any membership change in my groups (someone joined, left or was removed) re-keys: new shares, new live key.
+    subscribe('group_members', undefined, () => void refreshAll()),
     subscribe('unlock_requests', undefined, (row) => {
       // approver flow: someone asked to unlock a subject's location while their phone is offline
       if (row.requester_id !== userId && row.status === 'open') router.push(`/unlock-approve/${row.id}`);

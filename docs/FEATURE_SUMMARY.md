@@ -15,7 +15,7 @@ version and [CONTRACTS.md](CONTRACTS.md) the exact interfaces.
 |---|---|---|
 | Android app | Expo / React Native UI, Kotlin foreground service, Rust engine (uniffi) | Sensing, detection, check-ins, alerts, encryption |
 | Backend | Supabase: Postgres with row-level security, Realtime, Deno edge functions, pg_cron | Stores only ciphertext and coarse status, sends pushes, watches for phones going offline |
-| Web monitor | The same Expo code in a browser, Rust crypto as WebAssembly | The friends' console: live sensor view, incidents, AI read, location once unlocked |
+| Web monitor | The same Expo code in a browser, Rust crypto as WebAssembly | The friends' console: live sensor view, incidents, location once unlocked |
 
 ---
 
@@ -154,17 +154,7 @@ after 2 s of jogging, check-in lasts 30 s).
 - **Escalation dock**: appears while an alert is open, turns red and beeps when overdue, has every friend
   action and a map once keys arrive.
 - **Delete all**: permanently deletes the person's incidents from the server, empties the phone's log, resets
-  sensing, and clears the AI read and the OK log.
-- **AI read** (advisory only): the incident timeline (kinds, order, gaps, durations, matched patterns; never
-  measurements, location or audio) goes to Claude Haiku 5.5 from the friend's browser, with a free OpenRouter
-  model as fallback. It re-reads after every new event. You get a risk level and a 0 to 100 score, a
-  trajectory, the innocent explanation, what would change the read, and pop-up reminders. The engine's own
-  alert level sets a floor.
-- **The AI shows its working.** Arrows run from each incident in the log to the AI's reading of it ("+10:
-  possible fall right after a missed check-in"), from there into the steps that combine incidents ("impaired,
-  then a fall, then down: +4"), and into the total, which adds up to the score. Hovering highlights one path.
-- **"I'm OK" resets the AI.** When you confirm you're fine, the score drops to 0 at once and the next read
-  counts only what happens afterwards.
+  sensing, and clears the OK log.
 
 ## 7. Data collection and calibration
 
@@ -224,8 +214,7 @@ OK log). CI runs Rust, the simulator gate, functions, mobile typecheck and lint,
 - The server plus one friend working together could narrow down proximity cells (about 150 m) at night.
 - k friends together can unlock during a real offline incident; that is the feature, and the audit log shows
   it.
-- Any group member can wipe a friend's incident log from the monitor, and the AI keys sit in the web bundle
-  (use a low spend limit).
+- Any group member can wipe a friend's incident log from the monitor.
 - Open items: an external crypto review, checking the rules file's signature on the phone, rate limits on
   unlock requests, Play Store declarations, accessibility, a field test of battery life and a real
   data-collection study.

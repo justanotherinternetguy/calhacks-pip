@@ -49,7 +49,10 @@ class SafetyRuntime private constructor(val app: Context) {
   val engine = EngineHolder(app, prefs)
   val supabase = SupabaseRest(prefs)
   val alerts = AlertManager(app, this)
+  val friendAlerts = FriendAlerts(app, this)
+  val pins = KeyPins(prefs)
   val escrow = EscrowManager(this)
+  val liveKeys = LiveKeyManager(this)
   val heartbeat = HeartbeatUploader(this)
   val locationUploader = LocationUploader(this)
   val proximityUploader = ProximityUploader(this)
@@ -170,6 +173,7 @@ class SafetyRuntime private constructor(val app: Context) {
     telemetryConfigured = false
     syncTelemetryPublisher()
     sensing?.onStreamingChanged()
+    liveKeys.clear()
     Log.i(TAG, "session cleared")
   }
 
@@ -289,7 +293,7 @@ class SafetyRuntime private constructor(val app: Context) {
 
   /**
    * The owner confirmed they are OK (a check-in answered after fingerprint / face / PIN, or an alert stood down with
-   * a biometric). Rides the telemetry `events` as `owner_ok`, so the friends' monitor logs it and resets its AI read.
+   * a biometric). Rides the telemetry `events` as `owner_ok`, so the friends' monitor logs it.
    */
   fun noteOwnerOk(how: String) {
     synchronized(eventRing) { eventRing.addLast("owner_ok"); while (eventRing.size > EVENT_RING_MAX) eventRing.removeFirst() }

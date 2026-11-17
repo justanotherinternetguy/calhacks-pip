@@ -1,21 +1,24 @@
-// Incoming-push handling. Native posts the local alerts (check-in, heads-up, alarm);
-// JS owns remote pushes from supabase/functions/push: foreground display, ringing the
-// phone on a friend's 'ring', and deep-linking into the incident.
+// Incoming-push handling. On Android, pip's pushes are data-only and native posts them itself as sticky
+// notifications (PipMessagingService → FriendAlerts), so they never reach these listeners there; this file covers
+// iOS / other builds and taps: foreground display, ringing on a friend's 'ring', deep-linking to the incident or
+// the friend check-in.
 import * as Notifications from 'expo-notifications';
 import { AndroidAudioContentType, AndroidAudioUsage, AndroidImportance, AndroidNotificationVisibility } from 'expo-notifications';
 import { router } from 'expo-router';
 import { Platform } from 'react-native';
 import { SafetyNative } from '@/modules/safety-native';
-import { refreshIncidents } from './native';
+import { refreshCheckInsAndSticky, refreshIncidents } from './native';
 
 /** Must equal FCM_CHANNEL in supabase/functions/_shared/push.ts and AlertManager.CH_ALARM on Android. */
 export const PUSH_CHANNEL_ID = 'alarm';
 /** How long a remote 'ring' sounds the alarm (seconds). */
 export const RING_SECONDS = 30;
 /** Pushes that open the incident screen. */
-const INCIDENT_KINDS = new Set(['heads_up', 'unlocked', 'snatch', 'offline', 'battery_dying', 'sos', 'check', 'release', 'unlock_requested']);
+const INCIDENT_KINDS = new Set(['heads_up', 'unlocked', 'snatch', 'offline', 'battery_dying', 'sos', 'missed_check_in', 'check', 'release', 'unlock_requested']);
+/** Friend check-in pushes (functions/checkin); the request one opens the answer screen. */
+const CHECKIN_KINDS = new Set(['checkin_request', 'checkin_answered', 'checkin_cancelled']);
 
-export type PushData = { kind?: string; incidentId?: string; route?: string; critical?: string } & Record<string, unknown>;
+export type PushData = { kind?: string; incidentId?: string; checkInId?: string; route?: string; critical?: string } & Record<string, unknown>;
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
@@ -40,6 +43,7 @@ export function extractPushData(n: Notifications.Notification): PushData {
 export function routeFor(data: PushData): string | null {
   if (typeof data.route === 'string' && data.route.startsWith('/')) return data.route;
   if (data.kind && INCIDENT_KINDS.has(data.kind) && typeof data.incidentId === 'string' && data.incidentId) return `/incident/${data.incidentId}`;
+  if (data.kind && CHECKIN_KINDS.has(data.kind) && typeof data.checkInId === 'string' && data.checkInId) return `/checkin/${data.checkInId}`;
   return null;
 }
 
@@ -62,10 +66,11 @@ function ringIfNeeded(data: PushData) {
  */
 export function handlePush(data: PushData, interaction: boolean) {
   ringIfNeeded(data);
-  if (data.kind && data.kind !== 'ring') void refreshIncidents().catch(() => {});
+  if (data.kind && CHECKIN_KINDS.has(data.kind)) void refreshCheckInsAndSticky().catch(() => {});
+  else if (data.kind && data.kind !== 'ring') void refreshIncidents().catch(() => {});
   const route = routeFor(data);
   if (!route) return;
-  if (interaction || (data.kind && INCIDENT_KINDS.has(data.kind))) {
+  if (interaction || (data.kind && (INCIDENT_KINDS.has(data.kind) || data.kind === 'checkin_request'))) {
     try { router.push(route as never); } catch (e) { console.warn('push route failed', route, e); }
   }
 }

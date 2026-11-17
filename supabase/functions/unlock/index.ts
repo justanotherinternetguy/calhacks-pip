@@ -25,7 +25,7 @@ Deno.serve(async (req) => {
     const db = serviceClient();
     const { data: reqRow, error } = await db
       .from("unlock_requests")
-      .select("id, status, requester_id, incident_id, incidents!inner(user_id, group_id, groups!inner(threshold_k))")
+      .select("id, status, requester_id, incident_id, epoch_id, epochs(k), incidents!inner(user_id, group_id, groups!inner(threshold_k))")
       .eq("id", requestId)
       .maybeSingle();
     if (error) return json({ error: error.message }, 500);
@@ -46,7 +46,11 @@ Deno.serve(async (req) => {
       db.from("unlock_approvals").select("id", { count: "exact", head: true }).eq("request_id", requestId),
       db.from("group_members").select("user_id", { count: "exact", head: true }).eq("group_id", inc.group_id).eq("status", "active"),
     ]);
-    const status = unlockStatus(requestId, reqRow.status, count ?? 0, inc.groups.threshold_k, members ?? 0);
+    // The shares were split k-of-n with the epoch's k (threshold clamped to the members at the time), so that is
+    // how many approvals can rebuild the key; the group's current setting may differ.
+    // deno-lint-ignore no-explicit-any
+    const epochK = ((reqRow as any).epochs as { k: number } | null)?.k;
+    const status = unlockStatus(requestId, reqRow.status, count ?? 0, epochK || inc.groups.threshold_k, members ?? 0);
     if (status.fulfilled && reqRow.status === "open") {
       await db.from("unlock_requests").update({ status: "fulfilled" }).eq("id", requestId);
     }

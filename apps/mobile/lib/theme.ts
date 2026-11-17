@@ -85,7 +85,7 @@ export const colors = {
 };
 export const radius = 22;
 export const levelColor = (level: string) =>
-  ({ idle: ui.quiet, resolved: ht.mintDeep, check: ht.butterDeep, heads_up: ht.butterDeep, unlocked: ht.coralDeep, snatch: ht.coralDeep, sos: ht.coralDeep, offline: ui.quiet, battery_dying: ht.butterDeep }[level] ?? ui.quiet);
+  ({ idle: ui.quiet, resolved: ht.mintDeep, check: ht.butterDeep, heads_up: ht.butterDeep, unlocked: ht.coralDeep, snatch: ht.coralDeep, sos: ht.coralDeep, offline: ui.quiet, battery_dying: ht.butterDeep, missed_check_in: ht.coralDeep }[level] ?? ui.quiet);
 
 export const pip = {
   ground: ui.ground,

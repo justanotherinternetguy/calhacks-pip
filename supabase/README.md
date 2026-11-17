@@ -36,8 +36,8 @@ bare `supabase/postgres` image (that is how they were verified):
 
 ```sh
 docker run -d --name safe-pg -e POSTGRES_PASSWORD=postgres -p 55432:5432 supabase/postgres:17.6.1.054
-for f in migrations/000*.sql; do PGPASSWORD=postgres psql -h 127.0.0.1 -p 55432 -U postgres -v ON_ERROR_STOP=1 -f $f; done
-PGPASSWORD=postgres psql -h 127.0.0.1 -p 55432 -U postgres -v ON_ERROR_STOP=1 -f tests/rls.test.sql   # look for "not ok"
+for f in migrations/00*.sql; do PGPASSWORD=postgres psql -h 127.0.0.1 -p 55432 -U postgres -v ON_ERROR_STOP=1 -f $f; done
+for t in tests/*.test.sql; do PGPASSWORD=postgres psql -h 127.0.0.1 -p 55432 -U postgres -f $t; done   # look for "not ok"
 ```
 
 ## Tests

@@ -15,6 +15,8 @@ class BootReceiver : BroadcastReceiver() {
     val rt = SafetyRuntime.get(context)
     if (!rt.configured) return
     rt.startService(allowMic = false)
+    // Sticky friend notifications do not survive a reboot on their own.
+    rt.friendAlerts.repostAll()
     if (PermissionHelper.microphone(context)) rt.alerts.showRearm()
   }
 }

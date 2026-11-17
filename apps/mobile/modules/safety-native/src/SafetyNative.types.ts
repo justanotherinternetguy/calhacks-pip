@@ -59,6 +59,19 @@ export type TypingVerdict = { accepted: boolean; zScore: number; reason: string 
 export type Identity = { userId: string; x25519Pub: string; ed25519Pub: string; fingerprint: string };
 export type GroupMemberKeys = { userId: string; deviceId: string; x25519Pub: string; ed25519Pub: string };
 export type GroupConfig = { groupId: string; thresholdK: number; members: GroupMemberKeys[] };
+/** A friend's public keys as this device pinned them (CONTRACTS §6). `verified` = matched in person by QR. */
+export type KeyPin = { userId: string; x25519Pub: string; ed25519Pub: string; verified: boolean; pinnedAtMs: number };
+/** new = first time seen (now pinned) · same = matches the pin · changed = differs, NOT stored · invalid = not a key */
+export type PinResult = { status: 'new' | 'same' | 'changed' | 'invalid'; pin: KeyPin | null };
+export type PinInput = { userId: string; x25519Pub: string; ed25519Pub: string; verified: boolean; replace?: boolean };
+/** A `live_keys` row sealed to me. */
+export type LiveKeyRow = { ownerId: string; keyId: string; sealedB64: string };
+export type LiveLocEnc = { kid: string; seq: number; ct: string };
+/**
+ * One sticky notification that should be open (FriendAlerts.kt). `key`: `in:<checkInId>` (a friend asks me),
+ * `out:<checkInId>` (I wait on a friend), `inc:<incidentId>` (a friend's alert).
+ */
+export type StickyItem = { key: string; title: string; body: string; deadlineMs?: number; critical?: boolean };
 export type ReleasedKeyInput = {
   subjectUserId: string;
   epochId: string;
@@ -77,7 +90,8 @@ export type ApproveUnlockInput = {
 export type RecoverInput = {
   subjectUserId: string;
   epochId: string;
-  sealedShares: { sealedB64: string; approverEd25519Pub: string }[];
+  /** approverId lets the device check the signature against that approver's pinned key */
+  sealedShares: { sealedB64: string; approverEd25519Pub: string; approverId?: string }[];
 };
 
 // ---- §6 addendum (spec v1.1): live signals, incident log, grab detection. camelCase mirrors of the Rust records.
@@ -154,8 +168,10 @@ export type TelemetryState = {
   checkSummary?: string;
   /** @deprecated sent by phones before checkPending; read only through `isCheckPending` */
   checkPhrase?: string;
-  /** last location fix (friends' map); absent until the phone has one */
+  /** Plaintext position: only the local simulation (lib/sim.ts) sets this; real phones never send it. */
   loc?: TelemetryLocation;
+  /** The phone's position, encrypted under its live key (CONTRACTS §7); friends decrypt with decryptLiveLocation. */
+  locEnc?: LiveLocEnc;
   /** data collection (phones from 2026-10-25 on) */
   collect?: TelemetryCollect;
 };
@@ -243,6 +259,7 @@ export type SafetyNativeEvents = {
   incidentLogCleared: Record<string, never>; // the user reset the incident log (resetIncidents)
   callOption: { summary: string }; // 10 min with no response: friends get the one-tap call option
   sessionRefreshed: NativeSession; // native rotated the JWT pair; JS must adopt it (supabase.auth.setSession)
+  pushReceived: Record<string, string>; // a pip push arrived (native already posted its notification)
 };
 export type SafetyNativeEventName = keyof SafetyNativeEvents;
 export type Subscription = { remove(): void };
@@ -271,7 +288,21 @@ export interface SafetyNativeModuleType {
   stopBaselineWalk(): Promise<{ seconds: number }>;
   recordTypingPractice(r: TypingRecord): Promise<void>;
   getIdentity(): Promise<Identity>;
-  setGroup(g: GroupConfig): Promise<void>;
+  /**
+   * All my groups, oldest membership first. Native pins unseen member keys (trust on first use), leaves out keys
+   * that differ from their pin, runs escrow on the first group and seals the live key to every friend.
+   */
+  setGroups(groups: GroupConfig[]): Promise<{ keyChanged: string[] }>;
+  // Key pinning
+  fingerprint(userId: string, x25519Pub: string, ed25519Pub: string): Promise<string>;
+  pinKeys(p: PinInput): Promise<PinResult>;
+  getPins(): Promise<KeyPin[]>;
+  // Encrypted live location (friend side)
+  openLiveKeys(rows: LiveKeyRow[]): Promise<number>;
+  decryptLiveLocation(ownerId: string, enc: LiveLocEnc): Promise<DecryptedLocation | null>;
+  // Sticky friend notifications (Android); no-ops elsewhere
+  syncSticky(items: StickyItem[]): Promise<void>;
+  clearSticky(key: string): Promise<void>;
   // Friend side
   openReleasedKey(r: ReleasedKeyInput): Promise<void>;
   decryptLocations(subjectUserId: string, blobs: BlobInput[]): Promise<DecryptedLocation[]>;

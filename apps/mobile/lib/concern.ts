@@ -38,10 +38,11 @@ export function ago(ms: number, now: number): string {
 export const isActive = (r: IncidentRecord) => r.clearedMs === 0;
 
 /** Server incident levels (see lib/types IncidentLevel): how worried to be, and the line under a name. */
-const SERVER_SCORE: Record<string, number> = { check: 4, battery_dying: 3, offline: 5, heads_up: 6, unlocked: 7, sos: 7, snatch: 8 };
+const SERVER_SCORE: Record<string, number> = { check: 4, battery_dying: 3, offline: 5, heads_up: 6, missed_check_in: 6, unlocked: 7, sos: 7, snatch: 8 };
 const SERVER_LINE: Record<string, string> = {
   check: 'Check-in pending', battery_dying: 'Battery dying', offline: 'Phone went offline', heads_up: 'Friends got a heads-up',
   unlocked: 'Location shared with friends', sos: 'Called for help', snatch: 'Phone may have been snatched',
+  missed_check_in: 'Didn’t answer a check-in',
 };
 export const serverIncidentLine = (level: string) => SERVER_LINE[level] ?? level.replace(/_/g, ' ');
 

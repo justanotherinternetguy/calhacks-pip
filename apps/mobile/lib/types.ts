@@ -1,12 +1,13 @@
 // Row types for every table in docs/CONTRACTS.md §3.
 export type Uuid = string;
 export type Platform = 'ios' | 'android';
-export type MemberStatus = 'invited' | 'active';
-export type IncidentLevel = 'check' | 'heads_up' | 'unlocked' | 'snatch' | 'offline' | 'battery_dying' | 'sos' | 'resolved';
+/** Members are always active: joining is consent (scanning an invite QR in person), there is no pending state. */
+export type MemberStatus = 'active';
+export type IncidentLevel = 'check' | 'heads_up' | 'unlocked' | 'snatch' | 'offline' | 'battery_dying' | 'sos' | 'missed_check_in' | 'resolved';
 export type IncidentEventKind =
   | 'nudge' | 'heads_up' | 'release' | 'ring' | 'en_route' | 'called_911' | 'called_campus' | 'found' | 'resolved'
   | 'unlock_requested' | 'unlock_approved' | 'phone_offline' | 'battery_dying'
-  | 'call_option' | 'escalated' | 'location_requested' | 'check_answered';
+  | 'call_option' | 'escalated' | 'location_requested' | 'check_answered' | 'check_in_missed';
 export type UnlockStatus = 'open' | 'fulfilled' | 'denied';
 
 export type Profile = { id: Uuid; display_name: string | null; phone: string | null; created_at: string };
@@ -34,6 +35,15 @@ export type ReleasedKey = {
 export type UnlockRequest = { id: Uuid; incident_id: Uuid; requester_id: Uuid; epoch_id: Uuid; status: UnlockStatus; created_at: string };
 export type UnlockApproval = { id: Uuid; request_id: Uuid; approver_id: Uuid; sealed_share: string; approver_ed25519_pub: string; created_at: string };
 export type AuditLog = { id: Uuid; subject_user_id: Uuid; actor_id: Uuid | null; kind: string; payload: Record<string, unknown> | null; created_at: string };
+/** A friend asked "You okay?" (0021_check_ins.sql). */
+export type CheckInStatus = 'pending' | 'ok' | 'help' | 'missed' | 'cancelled';
+export type CheckIn = {
+  id: Uuid; asker_id: Uuid; target_id: Uuid; group_id: Uuid; status: CheckInStatus;
+  created_at: string; deadline_at: string; answered_at: string | null; incident_id: Uuid | null;
+};
+/** One-time in-person invite (0019_secure_groups.sql); the token is only ever in the QR, never stored. */
+export type GroupInvite = { id: Uuid; group_id: Uuid; inviter_id: Uuid; created_at: string; expires_at: string; used_by: Uuid | null; used_at: string | null };
+export type LiveKey = { owner_id: Uuid; key_id: string; recipient_id: Uuid; sealed: string; created_at: string };
 export type ModelConfig = { version: string; toml: string; signature: string; created_at: string };
 
 export type Tables = {
@@ -41,5 +51,6 @@ export type Tables = {
   location_blobs: LocationBlob; proximity_tokens: ProximityToken; presence: Presence; incidents: Incident;
   incident_events: IncidentEvent; released_keys: ReleasedKey; unlock_requests: UnlockRequest; unlock_approvals: UnlockApproval;
   audit_log: AuditLog; model_configs: ModelConfig;
+  check_ins: CheckIn; group_invites: GroupInvite; live_keys: LiveKey;
 };
 export type TableName = keyof Tables;

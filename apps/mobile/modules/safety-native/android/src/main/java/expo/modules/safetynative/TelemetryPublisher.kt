@@ -324,10 +324,9 @@ class TelemetryPublisher(private val rt: SafetyRuntime) {
       .put("placement", metrics["placement"] ?: "unknown")
       .put("samplingFull", metrics["samplingFull"] ?: false)
       .put("collect", jsonOf(rt.collectMap()))
-    // Last fix for the friends' map (the map UI shows every friend's position).
-    rt.lastLocation?.let { l ->
-      s.put("loc", JSONObject().put("lat", l.latitude).put("lng", l.longitude).put("acc", l.accuracy.toDouble()).put("t", l.time))
-    }
+    // Last fix for the friends' map, encrypted under the live key (only friends hold it; the server and Realtime see
+    // ciphertext). No key yet ⇒ no position in the frame at all, never a plaintext fallback.
+    rt.lastLocation?.let { l -> rt.liveKeys.encrypt(l)?.let { s.put("locEnc", it) } }
     if (snap?.escalation == EscalationLevel.CHECK) {
       // Never the phrase itself: group-mates read this stream, and the phrase is the owner's answer.
       rt.pendingCheck?.let { s.put("checkPending", true).put("checkDeadlineMs", it.deadlineMs).put("checkSummary", it.summary) }

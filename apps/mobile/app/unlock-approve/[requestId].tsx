@@ -26,11 +26,15 @@ export default function UnlockApprove() {
     setBusy(true);
     try {
       const [dev] = await getDevicesForUsers([req.requester_id]);
-      if (!dev?.x25519_pub) throw new Error("Requester's device key not found");
+      if (!dev?.x25519_pub || !dev.ed25519_pub) throw new Error("Requester's device key not found");
+      // Only re-seal my share to the key I pinned for them (a swapped server key must not receive it).
+      const pin = await SafetyNative.pinKeys({ userId: req.requester_id, x25519Pub: dev.x25519_pub, ed25519Pub: dev.ed25519_pub, verified: false });
+      if (pin.status === 'changed') throw new Error(`${profiles[req.requester_id]?.display_name || 'This friend'}'s key changed since you added them. Re-verify their code in person (Friends → Verify) first.`);
+      if (pin.status === 'invalid') throw new Error("Requester's device key is not valid");
       const { sealedShareB64 } = await SafetyNative.approveUnlock({ requestId: req.id, subjectUserId: incident.user_id, epochId: req.epoch_id, requesterX25519Pub: dev.x25519_pub });
       const id = await SafetyNative.getIdentity();
       await insertUnlockApproval({ request_id: req.id, approver_id: me, sealed_share: sealedShareB64, approver_ed25519_pub: id.ed25519Pub });
-      await rpc.addIncidentEvent({ incident_id: incident.id, kind: 'unlock_approved' }).catch(() => {});
+      // The unlock_approved event + audit row come from the unlock_approvals trigger (0002).
       router.back();
     } catch (e: any) { Alert.alert('Approval failed', e.message); } finally { setBusy(false); }
   };

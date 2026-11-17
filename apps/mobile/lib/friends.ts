@@ -50,7 +50,8 @@ const LOG_WINDOW_MS = 12 * 3_600_000;
 const initialOf = (name: string) => (name.trim()[0] ?? '?').toUpperCase();
 
 type Roster = { id: string; name: string; phone: string | null; isMe: boolean }[];
-type Acc = { tick: TelemetryTick | null; at: number | null; conn: TelemetryConnState | null; log: Map<number, IncidentRecord>; okayAt: number | null };
+/** `loc`: the friend's last position, decrypted from the tick's `locEnc` with their live key (CONTRACTS §7). */
+type Acc = { tick: TelemetryTick | null; at: number | null; conn: TelemetryConnState | null; log: Map<number, IncidentRecord>; okayAt: number | null; loc: LatLng | null; locSeq: number };
 
 /** Mount once (root layout). Subscribes to every roster member and publishes a snapshot every second. */
 export function useFriendsFeed() {
@@ -105,7 +106,7 @@ export function useFriendsFeed() {
 
   useEffect(() => {
     const ids = rosterKey ? rosterKey.split(',') : [];
-    const acc = new Map<string, Acc>(ids.map((id) => [id, { tick: null, at: null, conn: null, log: new Map(), okayAt: null }]));
+    const acc = new Map<string, Acc>(ids.map((id) => [id, { tick: null, at: null, conn: null, log: new Map(), okayAt: null, loc: null, locSeq: 0 }]));
     const unsubs = ids.map((id) => subscribeTelemetry(
       id,
       (tick, at) => {
@@ -114,10 +115,17 @@ export function useFriendsFeed() {
         for (const r of tick.incidents) a.log.set(r.id, r);
         a.tick = tick;
         a.at = at;
+        const enc = tick.locEnc;
+        if (enc && enc.seq > a.locSeq) {
+          a.locSeq = enc.seq;
+          SafetyNative.decryptLiveLocation(id, enc)
+            .then((l) => { if (l && a.locSeq === enc.seq) a.loc = { lat: l.lat, lng: l.lng }; })
+            .catch(() => {});
+        }
       },
       (s) => { acc.get(id)!.conn = s.state; },
       (atMs) => { acc.get(id)!.okayAt = atMs; },
-      () => { const a = acc.get(id)!; a.tick = null; a.at = null; a.conn = null; a.log.clear(); },
+      () => { const a = acc.get(id)!; a.tick = null; a.at = null; a.conn = null; a.log.clear(); a.loc = null; a.locSeq = 0; },
     ));
 
     const flush = () => {
@@ -126,7 +134,7 @@ export function useFriendsFeed() {
       // Anchor the simulated stories on the first real person with a position (snapped, so devices agree).
       const realFix = rosterRef.current
         .filter((r) => !isSimId(r.id) && !sims.has(r.id))
-        .map((r) => (r.isMe && myFix.current) || acc.get(r.id)?.tick?.loc || null)
+        .map((r) => (r.isMe && myFix.current) || acc.get(r.id)?.loc || null)
         .find(Boolean);
       setSimAnchor(realFix ?? null);
       // Newest first (the store keeps them sorted by opened_at desc), so the first open one per user wins.
@@ -137,7 +145,8 @@ export function useFriendsFeed() {
         const t = a?.tick ?? null;
         const simulated = isSimId(r.id) || sims.has(r.id);
         const records = a ? [...a.log.values()].filter((x) => now - x.tMs < LOG_WINDOW_MS).sort((x, y) => x.tMs - y.tMs || x.id - y.id) : [];
-        const tickLoc = t?.loc ? { lat: t.loc.lat, lng: t.loc.lng } : null;
+        // Real phones send only the encrypted position (decrypted into a.loc); the local simulation sets plain `loc`.
+        const tickLoc = a?.loc ?? (simulated && t?.loc ? { lat: t.loc.lat, lng: t.loc.lng } : null);
         return {
           id: r.id, name: r.name, initial: initialOf(r.name), isMe: r.isMe, simulated, phone: r.phone,
           loc: (r.isMe && !simulated && myFix.current) || tickLoc,

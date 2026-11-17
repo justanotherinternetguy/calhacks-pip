@@ -219,37 +219,6 @@ tile, widget) counts as consent and unlocks at once. A wrong phrase leaves the c
   band tiles with out-of-band flashes and sparklines. It also shows a five-minute mic-listening strip, the
   live incident log (tier, cleared time, answered) with sequence markers, the engine event ticker and a
   check-in countdown. Location is never part of telemetry. It stays on the escrow path.
-- The monitor's right column is an **AI read of the incident log**.
-  - `components/monitor/incidentTimeline.ts` first turns the log into a structured JSON timeline. For each
-    incident it records the kind, tier, family, clock time, how long ago, gap since the previous one, how
-    long it lasted (or has lasted so far), active / answered, episode, and whether it came after a grab.
-    It also records bursts (incidents each within 5 min of the last), pairs open at the same time and a
-    weighted 15-minute trend.
-  - The timeline also lists matched ordered **chains** with their timing windows: impact → scream within
-    2 min, fall → down → missed check-in → snoring, impaired → separated → in a vehicle, and grab → phone
-    moving away. Reassuring chains, such as a recovered fall or a lone drop, are also matched. A part-way
-    chain says which step would come next and how long that window stays open, or that it stalled. No
-    measurements, summaries, sensor state, location or audio go in.
-  - The friend's browser sends that timeline to Claude when `EXPO_PUBLIC_ANTHROPIC_API_KEY` is set. The
-    default is Claude Haiku 5.5 via the official SDK, at medium effort, with structured outputs to enforce
-    the answer shape. Otherwise, or when Claude fails or declines, the timeline goes to a small free
-    OpenRouter model. The default is NVIDIA Nemotron 3.5 Lightning (3B active parameters, low reasoning
-    effort).
-  - The model reasons over order, gaps and durations. It returns a risk level with a 0-100 score (low
-    0-24, elevated 25-49, high 50-74, critical 75-100), a trajectory and a confidence. It also returns the
-    factors that moved the score up or down, how the incidents chain together, the innocent explanation,
-    what would change the read, and short pop-up reminders (`components/monitor/riskAnalysis.ts`). The
-    engine's own escalation sets a floor: heads-up ⇒ at least high, unlocked / snatch ⇒ critical.
-  - The read is advisory. Detection and escalation stay in the Rust engine.
-  - The monitor asks the model only when the picture changes. Changes are a new / cleared / answered
-    record, an escalation step, a check-in or a friend action. Time also counts: an open incident that
-    crosses 1, 2, 5, 10, 20, 40 or 60 min, or a calm period that crosses 10, 30 or 60 min. The monitor debounces the request
-    and asks at most every 45 s unless the escalation rises. It caches the last read per person.
-  - Chain tests: `pnpm --filter mobile test`.
-  - Keys in `apps/mobile/.env`: `EXPO_PUBLIC_ANTHROPIC_API_KEY` and/or `OPENROUTER_API_KEY`. Both end up
-    in the web bundle. Give the Claude key a low monthly spend limit, and use a free-tier OpenRouter key.
-    The monitor deliberately does not read a plain `ANTHROPIC_API_KEY`, so a shell-exported key never goes
-    into the bundle by accident.
 
 ---
 

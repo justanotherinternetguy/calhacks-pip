@@ -12,17 +12,8 @@ import { colors, levelColor } from '@/lib/theme';
 import { SIM_FRIENDS, isSimId } from '@/lib/sim';
 import { isSimulatedUser } from '@/lib/telemetry';
 import { useNow } from '@/components/monitor/useMonitorData';
-import { AnalysisPanel } from '@/components/monitor/AnalysisPanel';
-import { ReminderToasts, toastVisible, type Toast } from '@/components/monitor/ReminderToasts';
 import { EscalationDock } from '@/components/monitor/EscalationDock';
-import { escalationRank, useRiskAnalysis, type Reminder } from '@/components/monitor/useRiskAnalysis';
-import { okAnalysis, riskFloor, type Assessment } from '@/components/monitor/riskAnalysis';
-import { easeRisk, lastChangeMs, withEasing } from '@/components/monitor/riskDecay';
 import { useOkConfirmations } from '@/components/monitor/okConfirmations';
-import { LinkOverlay, LinkProvider } from '@/components/monitor/ReasoningLinks';
-import { reasoningLinks } from '@/components/monitor/AnalysisPanel';
-import { kindLabel } from '@/components/telemetry/labels';
-import { timeBucket } from '@/components/monitor/incidentTimeline';
 import { beep, primeAudio } from '@/components/monitor/beep';
 import { TelemetryHeader, type SubjectOption } from '@/components/telemetry/TelemetryHeader';
 import { WaveformPanel } from '@/components/telemetry/WaveformPanel';
@@ -34,21 +25,15 @@ import { PUBLISHING_MS, useTelemetryFleet } from '@/components/telemetry/useTele
 import { ALERT_EVENTS } from '@/components/telemetry/labels';
 
 const SOUND_KEY = 'safe.monitor.sound';
-const WIDE = 1100; // three columns
-const MID = 760; // two columns: telemetry stacked | incident + rail
-const RIGHT_W = 380;
+const WIDE = 900; // two columns: telemetry | incident log
 const BEEP_RECORD_AGE_MS = 30_000;
-/** An engine event this recent keeps the AI read on, even with an empty incident log. */
-const EVENT_RECENT_MS = 15 * 60_000;
 
 /**
  * /monitor — the friend's desktop telemetry console (laptop browser). The subject's Android phone broadcasts
  * 10 Hz frames on a private Realtime channel (CONTRACTS §7); this page subscribes as a group-mate and draws it:
  *   left   live |a| / |ω| traces + mic listening window (canvas, rAF)
- *   middle metric band tiles, evidence line, the engine's incident log, the engine event ticker
- *   right  the AI read of the subject's incident log via OpenRouter (risk, how the incidents add up, reminders),
- *          plus pop-up reminders for the friends watching
- * Location never travels over telemetry, so it never reaches the AI either.
+ *   right  the engine's incident log, "I'm OK" confirmations, the engine event ticker
+ * Everything shown comes from the phone's Rust engine; this page only draws it.
  */
 export default function MonitorScreen() {
   const router = useRouter();
@@ -57,10 +42,8 @@ export default function MonitorScreen() {
   const members = useStore((s) => s.members);
   const profiles = useStore((s) => s.profiles);
   const incidents = useStore((s) => s.incidents);
-  const storeEvents = useStore((s) => s.events);
   const { width } = useWindowDimensions();
   const wide = width >= WIDE;
-  const mid = !wide && width >= MID;
   const now = useNow(500);
 
   // Everyone is public on the map, simulated friends included; `?subject=` picks who is on screen.
@@ -110,88 +93,11 @@ export default function MonitorScreen() {
   // Newest unresolved escalation, preferring the subject's: colours the left edge.
   const newest = active.find((i) => i.user_id === subjectId) ?? active[0] ?? null;
 
-  // AI read of the subject's incident log. `digest` lists what changes the picture (every engine event included),
-  // so the model re-reads after each logged event but not on every 10 Hz frame; timeBucket adds how long things have
-  // been open (or calm) in coarse steps.
   const records = buffers.incidentList();
   const subjectServer = useMemo(() => active.filter((i) => i.user_id === subjectId), [active, subjectId]);
-  const friendEvents = useMemo(
-    () => subjectServer.flatMap((i) => storeEvents[i.id] ?? []).sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(-12),
-    [subjectServer, storeEvents],
-  );
   const escalation = tick?.escalation ?? null;
-  // The events of the frame that reset the log (log cleared, resolved, a sampling change) are its housekeeping,
-  // not something to analyze: only what comes after them counts.
-  const resetSeq = buffers.events.find((e) => e.name === 'incident_log_cleared')?.seq;
-  const lastEvent = buffers.events.filter((e) => e.seq !== resetSeq).at(-1) ?? null;
-  // "I'm OK" confirmations (answered check-in / tapped I'm okay): logged in the incident list, reset the AI read to 0.
+  // "I'm OK" confirmations (answered check-in / tapped I'm okay), shown in the incident list.
   const { list: confirmations, clear: clearConfirmations } = useOkConfirmations(subjectId, buffers.events);
-  const latestOk = confirmations.at(-1) ?? null;
-  const digest = [
-    subjectId, escalation ?? '-', isCheckPending(tick) ? 'check' : '', lastEvent?.key ?? '-', latestOk?.atMs ?? '-',
-    records.map((r) => `${r.id}:${r.clearedMs > 0 ? 1 : 0}${r.acknowledged ? 1 : 0}${r.watched ? 1 : 0}:${r.sequenceId}`).join(','),
-    subjectServer.map((i) => `${i.id}:${i.level}`).join(','),
-    friendEvents.map((e) => e.id).join(','),
-    timeBucket(records, phoneNow),
-  ].join('|');
-  // A recent engine event is worth a read even with an empty log (a mic window, a dying battery…).
-  const recentEvent = !!lastEvent && phoneNow - lastEvent.t < EVENT_RECENT_MS;
-  const quiet = !records.length && !subjectServer.length && escalationRank(escalation) === 0 && !isCheckPending(tick) && !recentEvent;
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  // Normal walking the phone counted since calm began (the read, or the newest incident change, whichever is later):
-  // its counter minus the value it had then. A page opened mid-calm starts counting from now.
-  const walkNow = tick?.metrics?.calmWalkS ?? null;
-  const [walkBase, setWalkBase] = useState<{ key: string; at: number } | null>(null);
-  const easing = useRef<ReturnType<typeof easeRisk> | null>(null);
-  const ai = useRiskAnalysis({
-    subjectId, digest, quiet, quietConfirmed: quiet && !!tick && tick.incidentCount === 0, escalation,
-    buildInput: () => ({
-      subjectName, phoneNow, tick, records, events: buffers.events, serverIncidents: subjectServer,
-      friendEvents: friendEvents.map((e) => ({ ...e, actorName: name(e.actor_id) })),
-      confirmations,
-      easing: easing.current,
-    }),
-    ok: latestOk,
-    // Reset to 0 only when nothing happened after the OK (an old confirmation on reload must not hide newer incidents).
-    buildOk: (ok) => (records.some((r) => r.tMs > ok.atMs) ? null : okAnalysis(subjectName, ok, records)),
-    onNewReminders: (fresh: Reminder[]) => {
-      setToasts((prev) => [...fresh.map((r) => ({ ...r, subjectName })), ...prev.filter((t) => toastVisible(t, Date.now()))].slice(0, 10));
-      if (Platform.OS === 'web' && soundRef.current && fresh.some((r) => r.urgency === 'urgent')) beep();
-    },
-  });
-  const dismissToast = useCallback((id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)), [setToasts]);
-  // The read eases while things stay calm, faster with normal walking (riskDecay.ts); no model call.
-  const calmKey = `${subjectId}|${ai.atMs}|${lastChangeMs(records)}`;
-  if (walkNow != null && walkBase?.key !== calmKey) setWalkBase({ key: calmKey, at: walkNow });
-  const walkS = walkNow != null && walkBase?.key === calmKey ? (walkNow >= walkBase.at ? walkNow - walkBase.at : walkNow) : 0;
-  const eased = ai.analysis && !ai.analysis.okReset
-    ? easeRisk(ai.analysis, {
-      readAtMs: ai.atMs + (phoneNow - now), nowMs: phoneNow, records, walkS,
-      alertRunning: escalationRank(escalation) > 1, checkPending: escalation === 'check' || isCheckPending(tick),
-      floor: riskFloor(escalation, isCheckPending(tick))?.level ?? null,
-    })
-    : null;
-  useEffect(() => { easing.current = eased; });
-  // memoized on whole minutes so the reasoning arrows are not rebuilt every frame
-  const read = ai.analysis;
-  const eScore = eased?.score ?? null;
-  const eRisk = eased?.risk ?? null;
-  const eCalm = Math.round(eased?.calmMin ?? 0);
-  const eWalk = Math.round(eased?.walkMin ?? 0);
-  const shown = useMemo(
-    () => (read && eScore != null && eRisk ? withEasing(read, { from: read.score, score: eScore, risk: eRisk, calmMin: eCalm, walkMin: eWalk, held: null }) : read),
-    [read, eScore, eRisk, eCalm, eWalk],
-  );
-  // Arrows: incident rows → the AI's reading of each → the steps that combine them → the score.
-  const links = useMemo(() => reasoningLinks(shown), [shown]);
-  const assessments = useMemo(() => new Map<number, Assessment>((shown?.assessments ?? []).map((x) => [x.id, x])), [shown]);
-  const recordOf = useCallback((id: number) => {
-    let best: (typeof records)[number] | null = null;
-    for (const r of records) if (r.id === id && (!best || r.tMs > best.tMs)) best = r;
-    return best;
-  }, [records]);
-  const kindOf = useCallback((id: number) => { const r = recordOf(id); return r ? kindLabel(r.kind) : null; }, [recordOf]);
-  const timeOf = useCallback((id: number) => recordOf(id)?.tMs ?? null, [recordOf]);
 
   // Beep (web only) when a Supabase incident opens after this page loaded — never for one found on refresh.
   const [mountedAt] = useState(() => Date.now());
@@ -243,17 +149,15 @@ export default function MonitorScreen() {
 
   // motion waveforms with the metrics-vs-baseline tiles right underneath
   // Delete all: any group member can wipe the shown member's incidents. It deletes the server rows for good
-  // (purge_incidents), empties the phone's log and resets its sensing, and drops the AI read and its reminders.
+  // (purge_incidents), empties the phone's log and resets its sensing.
   const [clearNote, setClearNote] = useState<string | null>(null);
-  const clearAi = () => { ai.clear(); setToasts([]); };
   const clearIncidents = async () => {
     if (!subjectId) return;
     const ok = Platform.OS !== 'web' || globalThis.confirm?.(
-      `Delete all of ${subjectName}'s incidents and the AI read for good? This removes them from the server, empties the log on their phone and resets its sensing. You can't undo it.`,
+      `Delete all of ${subjectName}'s incidents for good? This removes them from the server, empties the log on their phone and resets its sensing. You can't undo it.`,
     );
     if (!ok) return;
     buffers.clearIncidents();
-    clearAi();
     clearConfirmations();
     setClearNote('Deleting…');
     const why = (e: unknown) => (e instanceof Error ? e.message : 'error');
@@ -289,16 +193,13 @@ export default function MonitorScreen() {
         records={buffers.incidentList()} onPhone={buffers.incidentCountOnPhone} phoneNow={phoneNow}
         onClear={subjectId ? () => void clearIncidents() : undefined}
         clearNote={clearNote ?? undefined}
-        assessments={assessments}
         confirmations={confirmations}
       />
       <EventTicker events={buffers.events} now={phoneNow} />
     </View>
   );
-  const right = <AnalysisPanel state={{ ...ai, analysis: shown }} subjectName={subjectName} now={now} onRefresh={ai.refresh} onClear={clearAi} kindOf={kindOf} timeOf={timeOf} />;
 
   return (
-    <LinkProvider>
     <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
       <TelemetryHeader
         groupName={groupName} now={now} subjects={subjects} subjectId={subjectId} manual={manual} onPick={setPinned}
@@ -309,32 +210,21 @@ export default function MonitorScreen() {
         <View style={styles.columns}>
           <ScrollView style={styles.colLeft} contentContainerStyle={styles.padTight}>{hints}{left}</ScrollView>
           <ScrollView style={styles.colMid} contentContainerStyle={styles.pad}>{middle}</ScrollView>
-          <ScrollView style={styles.colRight} contentContainerStyle={styles.pad}>{right}</ScrollView>
-        </View>
-      ) : mid ? (
-        <View style={styles.columns}>
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.pad}>{hints}{left}{middle}</ScrollView>
-          <ScrollView style={[styles.colRight, { width: 340 }]} contentContainerStyle={styles.pad}>{right}</ScrollView>
         </View>
       ) : (
         <ScrollView contentContainerStyle={[styles.pad, { gap: 16 }]}>
           {hints}
           {left}
           {middle}
-          <View style={styles.divider} />
-          {right}
         </ScrollView>
       )}
-      <ReminderToasts toasts={toasts} now={now} width={wide ? RIGHT_W - 28 : mid ? 312 : Math.min(width - 28, 420)} onDismiss={dismissToast} />
       <EscalationDock
         subjectId={subjectId} subjectName={subjectName} incidents={subjectServer} escalation={escalation} liveRecords={records}
         me={me} profiles={profiles} groups={groups} members={members} now={now}
         onAlert={() => { if (Platform.OS === 'web' && soundRef.current) beep(); }}
       />
       {newest && <View style={[styles.edge, { backgroundColor: levelColor(newest.level) }]} />}
-      <LinkOverlay links={links} />
     </SafeAreaView>
-    </LinkProvider>
   );
 }
 
@@ -351,11 +241,9 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   columns: { flex: 1, flexDirection: 'row' },
   colLeft: { flex: 5, minWidth: 380, borderRightWidth: 1, borderRightColor: colors.border },
-  colMid: { flex: 4, minWidth: 320, borderRightWidth: 1, borderRightColor: colors.border },
-  colRight: { width: RIGHT_W },
+  colMid: { flex: 4, minWidth: 320 },
   pad: { padding: 14, paddingBottom: 40, gap: 12 },
   padTight: { padding: 10, gap: 8 },
-  divider: { height: 1, backgroundColor: colors.border },
   banner: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: 12, borderWidth: 1, backgroundColor: colors.card },
   bannerText: { color: colors.text, fontSize: 13, lineHeight: 18, flex: 1 },
   edge: { position: 'absolute', top: 0, bottom: 0, left: 0, width: 4 },

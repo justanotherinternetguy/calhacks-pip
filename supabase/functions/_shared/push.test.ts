@@ -61,16 +61,28 @@ Deno.test("buildApnsHeaders", () => {
   assertEquals(h["apns-collapse-id"], "inc-1:heads_up");
 });
 
-Deno.test("buildFcmMessage: high priority on alarm channel, data all strings", () => {
+Deno.test("buildFcmMessage: data-only, high priority, data all strings", () => {
   const m = buildFcmMessage("tok", { ...input, critical: true }) as {
-    message: { token: string; android: { priority: string; notification: Record<string, unknown> }; data: Record<string, unknown> };
+    message: { token: string; notification?: unknown; android: { priority: string; notification?: unknown }; data: Record<string, unknown> };
   };
   assertEquals(m.message.token, "tok");
   assertEquals(m.message.android.priority, "HIGH");
-  assertEquals(m.message.android.notification.channel_id, "alarm");
-  assertEquals(m.message.android.notification.notification_priority, "PRIORITY_MAX");
+  assertEquals(m.message.notification, undefined, "no system-drawn notification: the app posts it (sticky)");
+  assertEquals(m.message.android.notification, undefined);
   for (const v of Object.values(m.message.data)) assertEquals(typeof v, "string");
   assertEquals(m.message.data.critical, "true");
+  assertEquals(m.message.data.pip, "1");
+  assertEquals(m.message.data.title, input.title);
+  assertEquals(m.message.data.channel, "alarm");
+});
+
+Deno.test("check-in pushes carry checkInId and route to the check-in screen", () => {
+  const d = stringifyData({ checkInId: "ci-1", kind: "checkin_request", title: "t", body: "b" });
+  assertEquals(d.checkInId, "ci-1");
+  assertEquals(d.route, "/checkin/ci-1");
+  assertEquals("incidentId" in d, false);
+  const h = buildApnsHeaders({ checkInId: "ci-1", kind: "checkin_request", title: "t", body: "b" }, "topic", "JWT");
+  assertEquals(h["apns-collapse-id"], "ci:ci-1:checkin_request");
 });
 
 Deno.test("data carries incidentId, kind and route on both transports (app deep-links on them)", () => {

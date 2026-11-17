@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { IncidentRecord } from '@/modules/safety-native';
-import type { Assessment, OkConfirmation } from '@/components/monitor/riskAnalysis';
-import { useAnchor, useFocusKey } from '@/components/monitor/ReasoningLinks';
+import type { OkConfirmation } from '@/components/monitor/okList';
 import { Button } from '@/components/ui';
 import { colors, radius } from '@/lib/theme';
 import { PLACEMENT_LABEL, fmtClock, fmtSd, kindLabel, sequenceColor, tierColor } from './labels';
@@ -44,13 +43,11 @@ type Block = { seq: number; items: Item[] };
  * watch, grey context); incidents the engine grouped into one episode sit in one box. "Confirmed OK" rows are merged
  * in by time.
  */
-export function LiveIncidentLog({ records, onPhone, phoneNow, onClear, clearNote, assessments, confirmations = [] }: {
+export function LiveIncidentLog({ records, onPhone, phoneNow, onClear, clearNote, confirmations = [] }: {
   records: IncidentRecord[]; onPhone: number; phoneNow: number;
-  /** deletes the subject's incidents for good (server, phone log, AI read); absent = no subject */
+  /** deletes the subject's incidents for good (server, phone log); absent = no subject */
   onClear?: () => void;
   clearNote?: string;
-  /** the AI read's take on each incident (points chip on the row; arrows link the row to it) */
-  assessments?: Map<number, Assessment>;
   /** times the subject confirmed they are OK, shown in the log by time */
   confirmations?: OkConfirmation[];
 }) {
@@ -94,8 +91,8 @@ export function LiveIncidentLog({ records, onPhone, phoneNow, onClear, clearNote
       {clearNote ? <Text style={styles.meta}>{clearNote}</Text> : null}
       {records.length === 0 && <View style={styles.empty}><Text style={styles.emptyText}>Nothing flagged since this console connected.</Text></View>}
       {blocks.map((b, i) => b.seq > 0 && b.items.length > 1
-        ? <EpisodeBlock key={`seq-${b.seq}-${i}`} block={b} phoneNow={phoneNow} assessments={assessments} />
-        : <ItemRow key={keyOf(b.items[0])} it={b.items[0]} phoneNow={phoneNow} assessments={assessments} />)}
+        ? <EpisodeBlock key={`seq-${b.seq}-${i}`} block={b} phoneNow={phoneNow} />
+        : <ItemRow key={keyOf(b.items[0])} it={b.items[0]} phoneNow={phoneNow} />)}
       {(visible.length > MAX_ROWS || hidden > 0) && (
         <Text style={styles.meta}>
           {visible.length > MAX_ROWS ? `${visible.length - MAX_ROWS} older incidents not shown. ` : ''}
@@ -108,12 +105,12 @@ export function LiveIncidentLog({ records, onPhone, phoneNow, onClear, clearNote
 
 const keyOf = (it: Item) => ('ok' in it ? `ok-${it.ok.atMs}` : `${it.r.id}-${it.r.tMs}`);
 
-function ItemRow({ it, phoneNow, assessments }: { it: Item; phoneNow: number; assessments?: Map<number, Assessment> }) {
-  return 'ok' in it ? <OkRow ok={it.ok} phoneNow={phoneNow} /> : <IncidentRow r={it.r} phoneNow={phoneNow} ai={assessments?.get(it.r.id)} />;
+function ItemRow({ it, phoneNow }: { it: Item; phoneNow: number }) {
+  return 'ok' in it ? <OkRow ok={it.ok} phoneNow={phoneNow} /> : <IncidentRow r={it.r} phoneNow={phoneNow} />;
 }
 
 /** Incidents the engine tied together (one episode): a header with how many and over what span, then the rows. */
-function EpisodeBlock({ block, phoneNow, assessments }: { block: Block; phoneNow: number; assessments?: Map<number, Assessment> }) {
+function EpisodeBlock({ block, phoneNow }: { block: Block; phoneNow: number }) {
   const recs = block.items.flatMap((it) => ('r' in it ? [it.r] : []));
   const start = Math.min(...recs.map((r) => r.tMs));
   const end = Math.max(...recs.map((r) => r.tMs));
@@ -123,25 +120,18 @@ function EpisodeBlock({ block, phoneNow, assessments }: { block: Block; phoneNow
       <Text style={[styles.episodeHead, { color: c }]}>
         Episode {block.seq} · {recs.length} incidents{end > start ? ` over ${durationText(end - start)}` : ''} · started {fmtClock(start)}
       </Text>
-      {block.items.map((it) => <ItemRow key={keyOf(it)} it={it} phoneNow={phoneNow} assessments={assessments} />)}
+      {block.items.map((it) => <ItemRow key={keyOf(it)} it={it} phoneNow={phoneNow} />)}
     </View>
   );
 }
 
-const AI_COLOR = { up: colors.danger, down: colors.ok, none: colors.muted } as const;
-
-function IncidentRow({ r, phoneNow, ai }: { r: IncidentRecord; phoneNow: number; ai?: Assessment }) {
-  const ref = useAnchor(`inc-${r.id}`);
-  const f = useFocusKey(`i${r.id}`);
+function IncidentRow({ r, phoneNow }: { r: IncidentRecord; phoneNow: number }) {
   const fresh = phoneNow - r.tMs < FRESH_MS;
   const tint = tierColor(r.tier);
   const st = statusOf(r, phoneNow);
   const sd = Math.abs(r.sdDistance) >= 0.05 ? fmtSd(r.sdDistance) : null;
   return (
-    <Pressable
-      ref={ref as never} {...f.hover}
-      style={[styles.row, { borderLeftColor: tint }, fresh && { borderColor: tint }, f.focused && { borderColor: colors.accent }, f.dimmed && ai && { opacity: 0.6 }, r.tier === 'context' && styles.rowQuiet]}
-    >
+    <View style={[styles.row, { borderLeftColor: tint }, fresh && { borderColor: tint }, r.tier === 'context' && styles.rowQuiet]}>
       <View style={styles.line}>
         <Text style={[styles.kind, r.tier === 'context' && { color: colors.muted }]} numberOfLines={1}>{kindLabel(r.kind)}</Text>
         <View style={{ flex: 1 }} />
@@ -153,22 +143,19 @@ function IncidentRow({ r, phoneNow, ai }: { r: IncidentRecord; phoneNow: number;
         <Text style={[styles.status, { color: st.filled ? '#fff' : st.color, backgroundColor: st.filled ? st.color : 'transparent', borderColor: st.color }]}>{st.text}</Text>
         {r.acknowledged && <Text style={[styles.status, { color: colors.ok, borderColor: colors.ok }]}>Answered</Text>}
         {r.watched && <Text style={[styles.status, { color: colors.warn, borderColor: colors.warn }]}>Being watched</Text>}
-        {ai && <Text style={[styles.status, { color: AI_COLOR[ai.effect], borderColor: AI_COLOR[ai.effect] }]}>AI {ai.points > 0 ? `+${ai.points}` : ai.points < 0 ? `−${-ai.points}` : '0'}</Text>}
         <View style={{ flex: 1 }} />
         <Text style={styles.details} numberOfLines={1}>
           #{r.id} · {PLACEMENT_LABEL[r.placement] ?? r.placement}{sd ? ` · ${sd} from normal` : ''}
         </Text>
       </View>
-    </Pressable>
+    </View>
   );
 }
 
 /** "Confirmed OK" in the log: the owner answered a check-in (fingerprint / face / PIN) or tapped "I'm okay". */
 function OkRow({ ok, phoneNow }: { ok: OkConfirmation; phoneNow: number }) {
-  const ref = useAnchor(`ok-${ok.atMs}`);
-  const f = useFocusKey('ok');
   return (
-    <Pressable ref={ref as never} {...f.hover} style={[styles.row, styles.okRow]}>
+    <View style={[styles.row, styles.okRow]}>
       <View style={styles.line}>
         <Text style={[styles.kind, { color: colors.ok }]}>Confirmed OK</Text>
         <View style={{ flex: 1 }} />
@@ -176,9 +163,9 @@ function OkRow({ ok, phoneNow }: { ok: OkConfirmation; phoneNow: number }) {
         <Text style={styles.clock}>{fmtClock(ok.atMs)}</Text>
       </View>
       <Text style={styles.summary}>
-        {ok.how === 'check_in' ? 'Answered the check-in with fingerprint, face or PIN.' : 'Tapped "I\'m okay" in the app.'} The AI risk went back to 0.
+        {ok.how === 'check_in' ? 'Answered the check-in with fingerprint, face or PIN.' : 'Tapped "I\'m okay" in the app.'}
       </Text>
-    </Pressable>
+    </View>
   );
 }
 
